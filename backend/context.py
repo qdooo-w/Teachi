@@ -42,6 +42,7 @@ class NodeName(StrEnum):
 
 
 class ToolMode(StrEnum):
+    """工具使用情况的枚举"""
     ON = "on"
     OFF = "off"
     AUTO = "auto"
@@ -89,7 +90,6 @@ class NodeOutput:
 @dataclass(frozen=True)#frozen表示不可变
 class ChatDeps:
     """注入 PydanticAI Agent 的依赖对象。
-
     在 CALL_MODEL 节点从 LoopContext 构建，工具函数通过 RunContext.deps 访问。
     """
 
@@ -122,7 +122,6 @@ def register_node(name: NodeName):
     装饰器：将异步函数注册为图节点。
     同一 name 重复注册会覆盖。
     """
-
     def deco(fn: NodeFn) -> NodeFn:
         _registry[name] = fn
         return fn
@@ -140,7 +139,6 @@ class LoopGraph:
     run_loop 引擎在每步查图决定下一跳。
     后期可通过 set_router() 注入路由 Agent 替代默认策略。
     """
-
     def __init__(self):
         self._edges: dict[NodeName, dict[NodeName, ConditionFn | None]] = {}
         self._entry: dict[ActionKind, NodeName] = {}

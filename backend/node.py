@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import datetime
 from typing import Any
-from pathlib import Path
 from pydantic import TypeAdapter
 from pydantic_ai import AgentRunResultEvent
 from pydantic_ai.messages import (
@@ -50,7 +49,6 @@ from backend.context import (
     register_node,
 )
 from backend.db import DatabaseFacade
-from backend.tool import build_tools
 
 
 # ── 辅助函数 ──
@@ -94,7 +92,7 @@ async def validate_node(ctx: LoopContext) -> NodeOutput:
             ctx.error_code = "SESSION_BUSY"
             return NodeOutput(transition=NodeName.STREAM_ERROR)
         await lock.acquire()
-
+    # 重试需要绑定原有的 parent_msg_id，校验其存在性和归属
     if ctx.action == ActionKind.REGENERATE:
         if not ctx.parent_msg_id:
             ctx.error = "Missing parent_msg_id for regenerate"
