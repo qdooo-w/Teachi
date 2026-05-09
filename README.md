@@ -33,3 +33,5 @@ npm install
 npm run dev
 
 ```
+本地开发前端默认是通过Vite Proxy
+后期应该会修正

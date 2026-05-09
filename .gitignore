@@ -25,6 +25,4 @@ users
 docs
 data
 tests
-!tests/
-!tests/test_*.py
 AGENTS.md
