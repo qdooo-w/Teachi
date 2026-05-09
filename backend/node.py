@@ -316,6 +316,13 @@ async def save_node(ctx: LoopContext) -> NodeOutput:
     db.sessions.touch_timestamp(sid=ctx.sid)
     return NodeOutput()
 
+@register_node(NodeName.STREAM_ERROR)
+async def stream_error_node(ctx: LoopContext) -> NodeOutput:
+    return NodeOutput()
+@register_node(NodeName.STREAM_COMPLETE)
+async def stream_complete_node(ctx: LoopContext) -> NodeOutput:
+    return NodeOutput()
+
 
 @register_node(NodeName.RELEASE_LOCK)
 async def release_lock_node(ctx: LoopContext) -> NodeOutput:
