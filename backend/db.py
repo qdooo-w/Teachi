@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
+import logging
 from contextlib import contextmanager
 from datetime import datetime
 from typing import Iterator
@@ -15,6 +16,8 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 from pydantic_core import to_json
+
+logger = logging.getLogger(__name__)
 
 
 class _DataBase:
@@ -746,7 +749,7 @@ class DatabaseFacade:
             """
             cursor.executescript(schema)
 
-        print("Database setup completed.")
+        logger.info("Database setup completed")
 
 
 if __name__ == "__main__":

@@ -23,6 +23,7 @@ SSE 事件类型说明：
 from __future__ import annotations
 
 import datetime
+import logging
 from typing import Any
 from pydantic import TypeAdapter
 from pydantic_ai import AgentRunResultEvent
@@ -37,7 +38,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from backend.config import DATABASE_PATH, GetAgent, BASE_DIR
+from backend.config import DATABASE_PATH, GetAgent, SKILL_STORAGE_DIR
 from pydantic_ai_skills import SkillsCapability
 from backend.context import (
     ActionKind,
@@ -49,6 +50,8 @@ from backend.context import (
     register_node,
 )
 from backend.db import DatabaseFacade
+
+logger = logging.getLogger(__name__)
 
 
 # ── 辅助函数 ──
@@ -128,20 +131,21 @@ async def stop_node(ctx: LoopContext) -> NodeOutput:
     STOP 不需要获取锁 —— 它的职责是取消当前任务。
     """
     import asyncio
-    from backend.loop import _running_tasks, get_user_lock
+    from backend.loop import _running_tasks, get_user_lock, task_key
 
-    task = _running_tasks.pop(ctx.user_uuid, None)
+    task = _running_tasks.pop(task_key(ctx.user_uuid, ctx.sid), None)
     if task and not task.done():
+        logger.info("stop_requested user=%s sid=%s", ctx.user_uuid, ctx.sid)
         task.cancel()
         try:
             await asyncio.shield(task)
         except (asyncio.CancelledError, Exception):
             pass
 
-    # 确保锁被释放（如果任务没有正常释放）
-    lock = get_user_lock(ctx.user_uuid)
-    if lock.locked():
-        lock.release()
+        # 确保锁被释放（如果任务没有正常释放）
+        lock = get_user_lock(ctx.user_uuid)
+        if lock.locked():
+            lock.release()
 
     return NodeOutput()
 
@@ -214,7 +218,7 @@ async def call_model_node(ctx: LoopContext) -> NodeOutput:
     from backend.file import UserFile, ProjectFile
     db = DatabaseFacade(DATABASE_PATH)
 
-    global_skills = BASE_DIR / "skills"  # data/skills
+    global_skills = SKILL_STORAGE_DIR
     user_fs = UserFile(user_uuid=ctx.user_uuid, db_facade=db)
     project_fs = ProjectFile(pid=ctx.pid, user_uuid=ctx.user_uuid, db_facade=db)
 
@@ -285,6 +289,7 @@ async def call_model_node(ctx: LoopContext) -> NodeOutput:
         ctx.error = str(exc)
         ctx.error_code = "MODEL_CALL_FAILED"
         ctx.retries += 1
+        logger.exception("model_call_failed user=%s sid=%s", ctx.user_uuid, ctx.sid)
 
     return NodeOutput()
 
@@ -327,11 +332,11 @@ async def stream_complete_node(ctx: LoopContext) -> NodeOutput:
 @register_node(NodeName.RELEASE_LOCK)
 async def release_lock_node(ctx: LoopContext) -> NodeOutput:
     """释放用户锁。所有路径的最终出口。"""
-    from backend.loop import _running_tasks, get_user_lock
+    from backend.loop import _running_tasks, get_user_lock, task_key
 
     lock = get_user_lock(ctx.user_uuid)
     if lock.locked():
         lock.release()
 
-    _running_tasks.pop(ctx.user_uuid, None)
+    _running_tasks.pop(task_key(ctx.user_uuid, ctx.sid), None)
     return NodeOutput()
