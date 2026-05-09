@@ -12,6 +12,7 @@ from pydantic_ai.messages import (
     ModelResponse,
     ToolCallPart,
     ToolReturnPart,
+    UserPromptPart,
 )
 from pydantic_core import to_json
 
@@ -584,6 +585,15 @@ class MessagesFacade(_DataBase):
                         parent_msg_id=parent_msg_id,
                         version=version,
                     )
+                elif any(isinstance(part, UserPromptPart) for part in message.parts):
+                    self.create_for_user(
+                        sid=sid,
+                        user_uuid=user_uuid,
+                        kind="user",
+                        raw_json=self._serialize_message(message),
+                        parent_msg_id=parent_msg_id,
+                        version=version,
+                    )
 
         return final_msg_id
 
@@ -741,4 +751,3 @@ class DatabaseFacade:
 
 if __name__ == "__main__":
     DatabaseFacade().setup_database()
-
