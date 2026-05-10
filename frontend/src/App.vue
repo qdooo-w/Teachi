@@ -293,6 +293,35 @@ function handleComposerKeydown(event: KeyboardEvent): void {
 }
 
 const composerTextarea = ref<HTMLTextAreaElement | null>(null)
+const copiedId = ref<string | null>(null)
+let copyResetTimer: number | null = null
+
+async function copyMessage(id: string, content: string): Promise<void> {
+  let ok = false
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(content)
+      ok = true
+    } catch { /* fall through */ }
+  }
+  if (!ok) {
+    try {
+      const textarea = document.createElement('textarea')
+      textarea.value = content
+      textarea.setAttribute('readonly', '')
+      textarea.style.cssText = 'position:fixed;opacity:0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      ok = document.execCommand('copy')
+      document.body.removeChild(textarea)
+    } catch { /* ignore */ }
+  }
+  if (ok) {
+    copiedId.value = id
+    if (copyResetTimer) window.clearTimeout(copyResetTimer)
+    copyResetTimer = window.setTimeout(() => { copiedId.value = null }, 1500)
+  }
+}
 
 function autosizeComposer(): void {
   const el = composerTextarea.value
@@ -401,7 +430,7 @@ onBeforeUnmount(() => {
     </section>
 
     <section v-else class="flex h-full flex-col">
-      <header class="flex h-14 flex-shrink-0 items-center justify-between border-b border-[#d1d5db] bg-white px-4">
+      <header class="flex h-14 flex-shrink-0 items-center justify-between bg-white px-4">
         <div class="min-w-0">
           <div class="flex items-center gap-2">
             <span class="font-bold">Teachi</span>
@@ -456,12 +485,12 @@ onBeforeUnmount(() => {
 
           <div v-for="message in messages" :key="message.id" class="flex w-full flex-col">
             <div v-if="message.role === 'user'" class="flex justify-end">
-              <div class="max-w-[85%] rounded-2xl border border-[#d1d5db] bg-[#f9fafb] px-5 py-3 text-[15px] leading-relaxed text-[#1f2937]">
+              <div class="max-w-[85%] rounded-3xl border border-[#d1d5db] bg-[#e5e7eb] px-5 py-3 text-[15px] leading-relaxed text-[#1f2937]">
                 <p class="whitespace-pre-wrap break-words">{{ message.content }}</p>
               </div>
             </div>
-            <div v-else class="flex justify-start">
-              <div class="max-w-[85%] rounded-2xl border border-[#1f2937] bg-white px-5 py-4 text-[15px] leading-relaxed text-[#1f2937]">
+            <div v-else class="group flex max-w-[85%] flex-col items-start">
+              <div class="rounded-3xl bg-white px-5 py-4 text-[15px] leading-relaxed text-[#1f2937]">
                 <MessageContent
                   v-if="message.content"
                   :content="message.content"
@@ -474,6 +503,20 @@ onBeforeUnmount(() => {
                   <span class="h-1.5 w-1.5 animate-bounce rounded-full bg-[#6b7280] [animation-delay:240ms]" />
                 </div>
               </div>
+              <button
+                v-if="message.content && !message.pending"
+                class="ml-2 mt-1 flex h-6 w-6 items-center justify-center rounded text-[#9ca3af] opacity-0 transition-opacity hover:bg-[#e5e7eb] hover:text-[#4b5563] group-hover:opacity-100"
+                :title="copiedId === message.id ? '已复制' : '复制'"
+                type="button"
+                @click="copyMessage(message.id, message.content)"
+              >
+                <svg v-if="copiedId !== message.id" class="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v2m-6 12h8a2 2 0 0 1 2-2v-8a2 2 0 0 1-2-2h-8a2 2 0 0 1-2 2v8a2 2 0 0 1 2 2z" />
+                </svg>
+                <svg v-else class="h-3.5 w-3.5 text-[#1f6f5b]" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                </svg>
+              </button>
             </div>
           </div>
         </div>
@@ -486,7 +529,7 @@ onBeforeUnmount(() => {
           </p>
           <p v-if="toolStatus" class="mb-2 text-xs text-[#4b5563]">{{ toolStatus }}</p>
 
-          <div class="rounded-lg border border-[#1f2937] bg-white p-3 shadow-sm focus-within:ring-2 focus-within:ring-[#1f6f5b]/20">
+          <div class="rounded-3xl bg-white p-3 shadow-sm focus-within:ring-2 focus-within:ring-[#1f6f5b]/20">
             <textarea
               ref="composerTextarea"
               v-model="draft"
@@ -496,11 +539,10 @@ onBeforeUnmount(() => {
               rows="2"
               @keydown="handleComposerKeydown"
             />
-            <div class="mt-2 flex items-center justify-between">
-              <div class="text-[10px] text-[#9ca3af]">Teachi 可能会犯错。请核查重要信息。</div>
+            <div class="mt-2 flex items-center justify-end">
               <button
                 v-if="streaming"
-                class="flex h-9 w-9 items-center justify-center rounded-md bg-[#9a3412] text-white transition hover:bg-[#7c2d12]"
+                class="flex h-9 items-center justify-center gap-1 rounded-2xl bg-[#9a3412] px-5 text-white transition hover:bg-[#7c2d12]"
                 title="停止生成"
                 type="button"
                 @click="stopStreaming"
@@ -511,7 +553,7 @@ onBeforeUnmount(() => {
               </button>
               <button
                 v-else
-                class="flex h-9 w-9 items-center justify-center rounded-md bg-[#1f2937] text-white transition hover:bg-[#111827] disabled:cursor-not-allowed disabled:bg-[#d1d5db] disabled:text-[#6b7280]"
+                class="flex h-9 items-center justify-center gap-1 rounded-2xl bg-[#1f2937] px-5 text-white transition hover:bg-[#111827] disabled:cursor-not-allowed disabled:bg-[#d1d5db] disabled:text-[#6b7280]"
                 :disabled="!canSend"
                 title="发送"
                 type="button"
@@ -523,6 +565,7 @@ onBeforeUnmount(() => {
               </button>
             </div>
           </div>
+          <p class="mt-2 text-center text-[10px] text-[#9ca3af]">Teachi 可能会犯错。请核查重要信息。</p>
         </div>
       </footer>
     </section>
