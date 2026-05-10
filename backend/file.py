@@ -12,6 +12,11 @@ class FileError(Exception):
     """文件操作基本错误类"""
     pass
 
+# 文本文件扩展名白名单，供 HTTP API 使用
+_TEXT_FILE_EXTENSIONS: frozenset[str] = frozenset({
+    ".md", ".txt", ".json", ".yaml", ".yml", ".csv", ".xml"
+})
+
 # 文件操作方法白名单，供 File_Handler 和 Skill_Handler 使用
 _ALLOWED_FS_METHODS: set[str] = {
     "create_file", "delete_file", "create_dir", "delete_dir", "read_file", "search_dir",
@@ -87,7 +92,7 @@ class FileBase:
         except Exception as e:
             raise FileError(f"Failed to read file {path}: {e}")
 
-    def search_dir(self, path: str = ".") -> List[Dict[str, Union[str, bool]]]:
+    def search_dir(self, path: str = ".") -> List[Dict[str, Union[str, bool, int, float]]]:
         """搜索目录下文件和文件夹结构。"""
         try:
             target = self._safe_path(path)
@@ -96,12 +101,17 @@ class FileBase:
 
             results = []
             for item in target.iterdir():
+                stat = item.stat()
                 results.append({
                     "name": item.name,
                     "is_dir": item.is_dir(),
-                    "rel_path": str(item.relative_to(self.base_path))
+                    "rel_path": str(item.relative_to(self.base_path)),
+                    "size": 0 if item.is_dir() else stat.st_size,
+                    "updated_at": stat.st_mtime,
                 })
             return results
+        except FileError:
+            raise
         except Exception as e:
             raise FileError(f"Failed to search directory {path}: {e}")
 

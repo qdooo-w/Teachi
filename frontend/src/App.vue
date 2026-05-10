@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import MessageContent from './components/MessageContent.vue'
+import SkillManagerDialog from './components/SkillManagerDialog.vue'
+import SkillPicker from './components/SkillPicker.vue'
+import SkillChips from './components/SkillChips.vue'
 import {
   createNewChatSession,
   ensureChatWorkspace,
@@ -19,6 +22,7 @@ import {
   type ProjectItem,
   type SessionItem,
 } from './api'
+import { listSkills, type FileSpace, type SkillMeta } from './skills'
 
 const LAST_EMAIL_KEY = 'teachi.last_email'
 
@@ -103,6 +107,7 @@ async function prepareChat(): Promise<void> {
     currentProject.value = workspace.project
     currentSession.value = workspace.session
     await loadMessages()
+    void loadProjectSkills()
   } finally {
     preparing.value = false
   }
@@ -166,6 +171,11 @@ async function handleLogout(): Promise<void> {
   toolStatus.value = ''
   errorMessage.value = ''
   streaming.value = false
+  projectSkills.value = []
+  selectedSkills.value = []
+  showSkillPicker.value = false
+  showUserSkillManager.value = false
+  showProjectSkillManager.value = false
 }
 
 async function startNewSession(): Promise<void> {
@@ -197,12 +207,13 @@ function updateMessage(id: string, patch: Partial<DisplayMessage>): void {
 async function sendMessage(): Promise<void> {
   if (!canSend.value || !currentSession.value || !currentProject.value) return
 
-  const content = draft.value.trim()
+  const rawContent = draft.value.trim()
+  const content = buildPayload(rawContent, selectedSkills.value)
   const now = Date.now() / 1000
   const userMessage: DisplayMessage = {
     id: `local-user-${Date.now()}`,
     role: 'user',
-    content,
+    content: rawContent,
     timestamp: now,
   }
   const assistantId = `stream-assistant-${Date.now()}`
@@ -215,6 +226,7 @@ async function sendMessage(): Promise<void> {
   }
 
   draft.value = ''
+  selectedSkills.value = []
   errorMessage.value = ''
   toolStatus.value = ''
   messages.value.push(userMessage, assistantMessage)
@@ -286,6 +298,10 @@ async function stopStreaming(): Promise<void> {
 }
 
 function handleComposerKeydown(event: KeyboardEvent): void {
+  if (showSkillPicker.value && (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Enter' || event.key === 'Escape')) {
+    // 把方向键/Enter/Esc 转给 SkillPicker
+    return
+  }
   if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
     event.preventDefault()
     void sendMessage()
@@ -295,6 +311,90 @@ function handleComposerKeydown(event: KeyboardEvent): void {
 const composerTextarea = ref<HTMLTextAreaElement | null>(null)
 const copiedId = ref<string | null>(null)
 let copyResetTimer: number | null = null
+
+// ── Skill 管理 ──────────────────────────────────────────────────────────────────
+const showUserSkillManager = ref(false)
+const showProjectSkillManager = ref(false)
+
+// ── Skill 选择器（对话框内 @ / + 触发） ─────────────────────────────────────────
+const projectSkills = ref<SkillMeta[]>([])
+const selectedSkills = ref<SkillMeta[]>([])
+const showSkillPicker = ref(false)
+
+const projectSkillSpace = computed<FileSpace | null>(() => {
+  const pid = currentProject.value?.pid
+  return pid ? { kind: 'project', pid } : null
+})
+
+const userSkillSpace = computed<FileSpace | null>(() => {
+  const userId = getCurrentUserId()
+  return token.value && userId ? { kind: 'user', userId } : null
+})
+
+async function loadProjectSkills(): Promise<void> {
+  const space = projectSkillSpace.value
+  if (!space) return
+  try {
+    projectSkills.value = await listSkills(space)
+  } catch {
+    projectSkills.value = []
+  }
+}
+
+function toggleSkill(name: string): void {
+  const skill = projectSkills.value.find((s) => s.name === name)
+  if (!skill) return
+  const idx = selectedSkills.value.findIndex((s) => s.name === name)
+  if (idx === -1) {
+    selectedSkills.value.push(skill)
+  } else {
+    selectedSkills.value.splice(idx, 1)
+  }
+}
+
+function removeSkill(name: string): void {
+  selectedSkills.value = selectedSkills.value.filter((s) => s.name !== name)
+}
+
+// @ 触发：检测光标前是否有 @ 且前面是行首或空白
+function checkAtTrigger(): void {
+  const el = composerTextarea.value
+  if (!el) return
+  const pos = el.selectionStart ?? 0
+  const before = el.value.slice(0, pos)
+  const match = before.match(/(^|[\s\n])@([a-z0-9-]*)$/)
+  if (match) {
+    showSkillPicker.value = true
+  } else {
+    showSkillPicker.value = false
+  }
+}
+
+function handleComposerInput(): void {
+  checkAtTrigger()
+}
+
+// 选中 skill 后擦掉 @ 触发词（仅 @ 触发时有意义），支持多选，保持 picker 打开
+function handlePickerToggle(name: string): void {
+  toggleSkill(name)
+  const el = composerTextarea.value
+  if (el) {
+    const pos = el.selectionStart ?? 0
+    const before = el.value.slice(0, pos)
+    const cleaned = before.replace(/(^|[\s\n])@([a-z0-9-]*)$/, '$1')
+    if (cleaned !== before) {
+      el.value = cleaned + el.value.slice(pos)
+      draft.value = el.value
+      el.setSelectionRange(cleaned.length, cleaned.length)
+    }
+  }
+}
+
+function buildPayload(text: string, skills: SkillMeta[]): string {
+  if (skills.length === 0) return text
+  const names = skills.map((s) => s.name).join('、')
+  return `[本轮请优先考虑使用技能：${names}]\n\n${text}`
+}
 
 async function copyMessage(id: string, content: string): Promise<void> {
   let ok = false
@@ -339,6 +439,12 @@ onMounted(() => {
   window.addEventListener('teachi-token-change', handleTokenChange)
   void initializeAuth()
   nextTick(autosizeComposer)
+})
+
+// 项目切换时重载 skills
+watch(currentProject, () => {
+  void loadProjectSkills()
+  selectedSkills.value = []
 })
 
 onBeforeUnmount(() => {
@@ -466,6 +572,26 @@ onBeforeUnmount(() => {
           </button>
           <button
             class="flex h-9 w-9 items-center justify-center rounded-md border border-transparent text-[#4b5563] transition hover:border-[#d1d5db] hover:bg-[#f3f4f6]"
+            title="我的技能"
+            type="button"
+            @click="showUserSkillManager = true"
+          >
+            <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0zM12 14a7 7 0 0 0-7 7h14a7 7 0 0 0-7-7z" />
+            </svg>
+          </button>
+          <button
+            class="flex h-9 w-9 items-center justify-center rounded-md border border-transparent text-[#4b5563] transition hover:border-[#d1d5db] hover:bg-[#f3f4f6]"
+            title="项目技能"
+            type="button"
+            @click="showProjectSkillManager = true"
+          >
+            <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
+            </svg>
+          </button>
+          <button
+            class="flex h-9 w-9 items-center justify-center rounded-md border border-transparent text-[#4b5563] transition hover:border-[#d1d5db] hover:bg-[#f3f4f6]"
             title="退出登录"
             type="button"
             @click="handleLogout"
@@ -529,17 +655,49 @@ onBeforeUnmount(() => {
           </p>
           <p v-if="toolStatus" class="mb-2 text-xs text-[#4b5563]">{{ toolStatus }}</p>
 
-          <div class="rounded-3xl bg-white p-3 shadow-sm focus-within:ring-2 focus-within:ring-[#1f6f5b]/20">
+          <Transition name="skill-drawer">
+            <SkillPicker
+              v-if="showSkillPicker"
+              :skills="projectSkills"
+              :selected="selectedSkills.map((s) => s.name)"
+              @toggle="handlePickerToggle"
+              @close="showSkillPicker = false"
+            />
+          </Transition>
+          <div
+            :class="[
+              'relative bg-white p-3 shadow-sm focus-within:ring-2 focus-within:ring-[#1f6f5b]/20',
+              showSkillPicker ? 'rounded-b-3xl' : 'rounded-3xl',
+            ]"
+          >
+            <SkillChips
+              v-if="selectedSkills.length > 0"
+              :skills="selectedSkills"
+              @remove="removeSkill"
+            />
             <textarea
               ref="composerTextarea"
               v-model="draft"
               class="composer-textarea w-full resize-none bg-transparent text-[15px] leading-relaxed outline-none placeholder:text-[#9ca3af]"
               :disabled="streaming || preparing"
-              placeholder="给 Teachi 发送消息... (Enter 换行，Ctrl/⌘ + Enter 发送)"
+              placeholder="给 Teachi 发送消息... (Enter 换行，Ctrl/⌘ + Enter 发送，@ 呼出技能选择)"
               rows="2"
               @keydown="handleComposerKeydown"
+              @input="handleComposerInput"
+              @click="checkAtTrigger"
             />
-            <div class="mt-2 flex items-center justify-end">
+            <div class="mt-2 flex items-center justify-between">
+              <button
+                class="flex h-8 w-8 items-center justify-center rounded-full text-[#6b7280] transition hover:bg-[#f3f4f6] hover:text-[#1f2937] disabled:cursor-not-allowed disabled:opacity-50"
+                :disabled="streaming || preparing"
+                title="添加技能"
+                type="button"
+                @click="showSkillPicker = !showSkillPicker"
+              >
+                <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v14m7-7H5" />
+                </svg>
+              </button>
               <button
                 v-if="streaming"
                 class="flex h-9 items-center justify-center gap-1 rounded-2xl bg-[#9a3412] px-5 text-white transition hover:bg-[#7c2d12]"
@@ -569,5 +727,18 @@ onBeforeUnmount(() => {
         </div>
       </footer>
     </section>
+
+    <SkillManagerDialog
+      v-if="showUserSkillManager && userSkillSpace"
+      :space="userSkillSpace"
+      title="我的技能（用户级）"
+      @close="showUserSkillManager = false"
+    />
+    <SkillManagerDialog
+      v-if="showProjectSkillManager && projectSkillSpace"
+      :space="projectSkillSpace"
+      title="项目技能"
+      @close="showProjectSkillManager = false; loadProjectSkills()"
+    />
   </main>
 </template>

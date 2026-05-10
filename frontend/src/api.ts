@@ -441,6 +441,71 @@ export async function stopChatGeneration(sid: string, pid: string): Promise<void
   await streamLoop(sid, { pid, action: 'stop', message: '' })
 }
 
+// ── 通用文件 API ────────────────────────────────────────────────────────────────
+
+export type FileSpace =
+  | { kind: 'user'; userId: string }
+  | { kind: 'project'; pid: string }
+
+export interface FileEntry {
+  name: string
+  is_dir: boolean
+  rel_path: string
+  size: number
+  updated_at: number
+}
+
+interface FileListResponse {
+  path: string
+  entries: FileEntry[]
+}
+
+interface FileContentResponse {
+  path: string
+  content: string
+  size: number
+  updated_at: number
+}
+
+function fileBasePath(space: FileSpace): string {
+  return space.kind === 'user'
+    ? `/users/${encodeURIComponent(space.userId)}/files`
+    : `/projects/${encodeURIComponent(space.pid)}/files`
+}
+
+export async function listFiles(space: FileSpace, path = '.'): Promise<FileEntry[]> {
+  const base = fileBasePath(space)
+  const res = await request<FileListResponse>(`${base}?path=${encodeURIComponent(path)}`)
+  return res.entries
+}
+
+export async function readFile(
+  space: FileSpace,
+  path: string,
+): Promise<{ path: string; content: string; size: number; updated_at: number }> {
+  const base = fileBasePath(space)
+  return request<FileContentResponse>(`${base}/content?path=${encodeURIComponent(path)}`)
+}
+
+export async function writeFile(
+  space: FileSpace,
+  path: string,
+  content: string,
+): Promise<{ path: string; size: number; updated_at: number }> {
+  const base = fileBasePath(space)
+  return request<FileContentResponse>(base, {
+    method: 'PUT',
+    body: JSON.stringify({ path, content }),
+  })
+}
+
+export async function deleteFile(space: FileSpace, path: string): Promise<void> {
+  const base = fileBasePath(space)
+  return request<void>(`${base}?path=${encodeURIComponent(path)}`, { method: 'DELETE' })
+}
+
+// ── 错误处理 ────────────────────────────────────────────────────────────────────
+
 export function getErrorMessage(error: unknown, fallback = '请求失败，请稍后重试。'): string {
   if (error instanceof ApiError) return error.message
   if (error instanceof Error) return error.message
