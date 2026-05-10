@@ -1,4 +1,6 @@
 @import "tailwindcss";
+@import "katex/dist/katex.min.css";
+@import "highlight.js/styles/github.css";
 
 :root {
   color: #1f2937;
@@ -39,4 +41,265 @@ input {
 .no-scrollbar {
   -ms-overflow-style: none;
   scrollbar-width: none;
+}
+
+/* ---------- 输入框自适应高度动画 ---------- */
+.composer-textarea {
+  min-height: 44px;
+  max-height: 240px;
+  height: 44px;
+  overflow-y: auto;
+  transition: height 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  will-change: height;
+}
+.composer-textarea:disabled {
+  opacity: 0.7;
+}
+
+/* ---------- Markdown 渲染区作用域样式 ---------- */
+.markdown-body {
+  font-size: 15px;
+  line-height: 1.7;
+  color: #1f2937;
+  word-wrap: break-word;
+}
+
+.markdown-body > *:first-child {
+  margin-top: 0;
+}
+.markdown-body > *:last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body p {
+  margin: 0.5em 0;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+  margin: 1em 0 0.5em;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.markdown-body h1 { font-size: 1.5em; }
+.markdown-body h2 { font-size: 1.3em; }
+.markdown-body h3 { font-size: 1.15em; }
+.markdown-body h4 { font-size: 1em; }
+
+.markdown-body ul,
+.markdown-body ol {
+  margin: 0.5em 0;
+  padding-left: 1.5em;
+}
+.markdown-body ul { list-style: disc; }
+.markdown-body ol { list-style: decimal; }
+.markdown-body li { margin: 0.2em 0; }
+.markdown-body li > ul,
+.markdown-body li > ol {
+  margin: 0.2em 0;
+}
+
+.markdown-body blockquote {
+  margin: 0.75em 0;
+  padding: 0.2em 0.9em;
+  border-left: 4px solid #d1d5db;
+  color: #4b5563;
+  background: #f9fafb;
+  border-radius: 0 4px 4px 0;
+}
+.markdown-body blockquote > *:first-child { margin-top: 0; }
+.markdown-body blockquote > *:last-child { margin-bottom: 0; }
+
+.markdown-body hr {
+  margin: 1em 0;
+  border: 0;
+  border-top: 1px solid #e5e7eb;
+}
+
+.markdown-body a {
+  color: #1f6f5b;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.markdown-body a:hover { color: #0f5842; }
+
+.markdown-body code {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.9em;
+}
+
+.markdown-body :not(pre) > code {
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  background: #f3f4f6;
+  color: #111827;
+  border: 1px solid #e5e7eb;
+}
+
+.markdown-body table {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 0.75em 0;
+  font-size: 0.95em;
+}
+.markdown-body th,
+.markdown-body td {
+  padding: 0.4em 0.75em;
+  border: 1px solid #e5e7eb;
+  text-align: left;
+  vertical-align: top;
+}
+.markdown-body thead th {
+  background: #f9fafb;
+  font-weight: 600;
+}
+.markdown-body tbody tr:nth-child(even) td {
+  background: #fafafa;
+}
+
+.markdown-body img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+}
+
+/* 代码块：自定义 fence 渲染产出的容器 */
+.markdown-body .code-block {
+  position: relative;
+  margin: 0.75em 0;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+  background: #f6f8fa;
+  overflow: hidden;
+}
+.markdown-body .code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.35em 0.75em;
+  font-size: 12px;
+  color: #6b7280;
+  background: #f3f4f6;
+  border-bottom: 1px solid #e5e7eb;
+}
+.markdown-body .code-block-lang {
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+}
+.markdown-body .code-copy-btn {
+  appearance: none;
+  border: 1px solid #d1d5db;
+  background: #ffffff;
+  border-radius: 4px;
+  padding: 0.1em 0.6em;
+  font-size: 12px;
+  color: #374151;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.markdown-body .code-copy-btn:hover:not(:disabled) {
+  background: #1f2937;
+  color: #ffffff;
+  border-color: #1f2937;
+}
+.markdown-body .code-copy-btn:disabled {
+  cursor: default;
+  opacity: 0.8;
+}
+.markdown-body .code-block pre {
+  margin: 0;
+  padding: 0.9em 1em;
+  overflow-x: auto;
+  background: transparent;
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+.markdown-body .code-block pre code {
+  background: transparent;
+  padding: 0;
+  border: 0;
+  color: inherit;
+}
+
+/* Mermaid */
+.markdown-body .mermaid-source {
+  position: relative;
+  margin: 0.75em 0;
+  padding: 0.9em 1em;
+  background: #f6f8fa;
+  border: 1px dashed #d1d5db;
+  border-radius: 8px;
+  overflow-x: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  color: #4b5563;
+}
+.markdown-body .mermaid-source::before {
+  content: "Mermaid 图（生成完成后渲染）";
+  display: block;
+  margin-bottom: 0.4em;
+  font-family: Inter, sans-serif;
+  font-size: 12px;
+  color: #9ca3af;
+}
+.markdown-body .mermaid-block {
+  display: flex;
+  justify-content: center;
+  margin: 0.75em 0;
+  padding: 0.5em;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  overflow-x: auto;
+}
+.markdown-body .mermaid-block svg {
+  max-width: 100%;
+  height: auto;
+}
+.markdown-body .mermaid-error {
+  margin: 0.75em 0;
+  padding: 0.6em 0.9em;
+  background: #fff7ed;
+  border: 1px solid #efb3a7;
+  border-radius: 8px;
+  color: #9a3412;
+  font-size: 13px;
+}
+.markdown-body .mermaid-error .mermaid-error-message {
+  margin-bottom: 0.4em;
+  font-weight: 500;
+}
+.markdown-body .mermaid-error pre {
+  margin: 0;
+  padding: 0.5em 0.7em;
+  background: #ffffff;
+  border: 1px solid #fed7aa;
+  border-radius: 4px;
+  color: #4b5563;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12.5px;
+}
+
+/* KaTeX 覆盖 */
+.markdown-body eq {
+  display: inline-block;
+}
+.markdown-body section {
+  margin: 0.75em 0;
+  overflow-x: auto;
+  text-align: center;
+}
+.markdown-body section.eqno {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1em;
 }

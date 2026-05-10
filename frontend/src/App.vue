@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import MessageContent from './components/MessageContent.vue'
 import {
   createNewChatSession,
   ensureChatWorkspace,
@@ -44,6 +45,7 @@ const currentSession = ref<SessionItem | null>(null)
 const messages = ref<DisplayMessage[]>([])
 const chatContainer = ref<HTMLElement | null>(null)
 const currentAbort = ref<AbortController | null>(null)
+const stickToBottom = ref(true)
 
 const isAuthenticated = computed(() => Boolean(token.value))
 const isChatReady = computed(() => Boolean(isAuthenticated.value && currentProject.value && currentSession.value && !preparing.value))
@@ -59,17 +61,31 @@ function handleTokenChange(event: Event): void {
   token.value = (event as CustomEvent<string | null>).detail
 }
 
-function scrollToBottom(): void {
+function scrollToBottom(force = false): void {
+  if (force) stickToBottom.value = true
   nextTick(() => {
     const container = chatContainer.value
-    if (container) container.scrollTop = container.scrollHeight
+    if (!container) return
+    if (!stickToBottom.value) return
+    container.scrollTop = container.scrollHeight
   })
+}
+
+function isChatAtBottom(): boolean {
+  const container = chatContainer.value
+  if (!container) return true
+  const threshold = 32
+  return container.scrollHeight - container.scrollTop - container.clientHeight <= threshold
+}
+
+function handleChatScroll(): void {
+  stickToBottom.value = isChatAtBottom()
 }
 
 async function loadMessages(): Promise<void> {
   if (!currentSession.value) return
   messages.value = await listDisplayMessages(currentSession.value.sid)
-  scrollToBottom()
+  scrollToBottom(true)
 }
 
 async function prepareChat(): Promise<void> {
@@ -161,7 +177,7 @@ async function startNewSession(): Promise<void> {
   try {
     currentSession.value = await createNewChatSession(currentProject.value.pid)
     messages.value = []
-    scrollToBottom()
+    scrollToBottom(true)
   } catch (error) {
     errorMessage.value = getErrorMessage(error)
   } finally {
@@ -206,7 +222,7 @@ async function sendMessage(): Promise<void> {
 
   const abortController = new AbortController()
   currentAbort.value = abortController
-  scrollToBottom()
+  scrollToBottom(true)
 
   try {
     const done = await sendChatMessage(
@@ -270,15 +286,30 @@ async function stopStreaming(): Promise<void> {
 }
 
 function handleComposerKeydown(event: KeyboardEvent): void {
-  if (event.key === 'Enter' && !event.shiftKey) {
+  if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
     event.preventDefault()
     void sendMessage()
   }
 }
 
+const composerTextarea = ref<HTMLTextAreaElement | null>(null)
+
+function autosizeComposer(): void {
+  const el = composerTextarea.value
+  if (!el) return
+  el.style.height = 'auto'
+  const next = Math.min(el.scrollHeight, 240)
+  el.style.height = `${next}px`
+}
+
+watch(draft, () => {
+  nextTick(autosizeComposer)
+})
+
 onMounted(() => {
   window.addEventListener('teachi-token-change', handleTokenChange)
   void initializeAuth()
+  nextTick(autosizeComposer)
 })
 
 onBeforeUnmount(() => {
@@ -417,23 +448,26 @@ onBeforeUnmount(() => {
         </div>
       </header>
 
-      <div ref="chatContainer" class="min-h-0 flex-1 overflow-y-auto px-4 py-5 md:px-6">
+      <div ref="chatContainer" class="min-h-0 flex-1 overflow-y-auto px-4 py-5 md:px-6" @scroll.passive="handleChatScroll">
         <div class="mx-auto flex max-w-3xl flex-col gap-5 pb-4">
           <div v-if="messages.length === 0" class="mt-16 rounded-lg border border-dashed border-[#d1d5db] bg-white px-4 py-8 text-center text-sm text-[#6b7280]">
             还没有消息。
           </div>
 
           <div v-for="message in messages" :key="message.id" class="flex w-full flex-col">
-            <div v-if="message.role === 'user'" class="flex justify-start">
+            <div v-if="message.role === 'user'" class="flex justify-end">
               <div class="max-w-[85%] rounded-2xl border border-[#d1d5db] bg-[#f9fafb] px-5 py-3 text-[15px] leading-relaxed text-[#1f2937]">
                 <p class="whitespace-pre-wrap break-words">{{ message.content }}</p>
               </div>
             </div>
-            <div v-else class="flex justify-end">
+            <div v-else class="flex justify-start">
               <div class="max-w-[85%] rounded-2xl border border-[#1f2937] bg-white px-5 py-4 text-[15px] leading-relaxed text-[#1f2937]">
-                <p class="whitespace-pre-wrap break-words">
-                  {{ message.content || (message.pending ? ' ' : '（空响应）') }}
-                </p>
+                <MessageContent
+                  v-if="message.content"
+                  :content="message.content"
+                  :streaming="message.pending === true"
+                />
+                <p v-else-if="!message.pending" class="whitespace-pre-wrap break-words text-[#6b7280]">（空响应）</p>
                 <div v-if="message.pending" class="mt-3 flex gap-1">
                   <span class="h-1.5 w-1.5 animate-bounce rounded-full bg-[#6b7280]" />
                   <span class="h-1.5 w-1.5 animate-bounce rounded-full bg-[#6b7280] [animation-delay:120ms]" />
@@ -454,10 +488,11 @@ onBeforeUnmount(() => {
 
           <div class="rounded-lg border border-[#1f2937] bg-white p-3 shadow-sm focus-within:ring-2 focus-within:ring-[#1f6f5b]/20">
             <textarea
+              ref="composerTextarea"
               v-model="draft"
-              class="max-h-32 min-h-11 w-full resize-none bg-transparent text-[15px] leading-relaxed outline-none placeholder:text-[#9ca3af]"
+              class="composer-textarea w-full resize-none bg-transparent text-[15px] leading-relaxed outline-none placeholder:text-[#9ca3af]"
               :disabled="streaming || preparing"
-              placeholder="给 Teachi 发送消息..."
+              placeholder="给 Teachi 发送消息... (Enter 换行，Ctrl/⌘ + Enter 发送)"
               rows="2"
               @keydown="handleComposerKeydown"
             />
