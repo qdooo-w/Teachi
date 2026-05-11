@@ -102,7 +102,7 @@ FastAPI 和后端当前可能返回两类错误体：
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `msg_id` | string | 消息 ID |
-| `kind` | string | 已保存消息类型；当前保存逻辑会写入 `tool_call`、`tool_result`、`assistant`、`agent_response` |
+| `kind` | string | 已保存消息类型。当前 `backend.db.MessagesFacade.save_agent_messages` 会写入 `user`、`tool_call`、`tool_result`、`assistant`、`agent_response` 五种 |
 | `raw_json` | string | Pydantic AI `ModelMessage` 序列化后的 JSON 字符串 |
 | `timestamp` | float | 消息时间 |
 | `created_at` | float | 记录创建时间 |
@@ -394,7 +394,7 @@ FastAPI 和后端当前可能返回两类错误体：
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `messages` | `MessageItem[]` | 消息列表，按 `timestamp` 升序排列；当前实现返回该会话所有已保存消息，不按 `is_latest` 过滤 |
+| `messages` | `MessageItem[]` | 消息列表，按 `timestamp` 升序排列；当前实现返回该会话下所有已保存消息（包含历史版本），不按 `is_latest` 过滤，前端需要自行以 `is_latest=1` 过滤 |
 
 错误：
 
@@ -489,7 +489,7 @@ FastAPI 和后端当前可能返回两类错误体：
 | `tools` | `string[]` | 已通过 `@register_tool` 注册的工具名，按字母排序 |
 | `global_allowed_tools` | `string[]` | 当前实现与 `tools` 相同 |
 
-说明：当前代码未定义任何带 `@register_tool` 的具体工具函数，因此默认返回两个空数组。`/loop/{sid}` 当前通过 `SkillsCapability` 加载技能目录，和该注册表不是同一个来源。
+说明：当前 `backend.tool` 中没有任何被 `@register_tool` 装饰的具体工具函数，因此两个字段都会返回空数组。AI 模型在 `/loop/{sid}` 中调用的「技能」由 `SkillsCapability` 从三个 skills 目录加载，和该注册表不是同一个来源（参见下方「聊天循环接口」）。
 
 ## 聊天循环接口
 
@@ -609,3 +609,163 @@ SSE 数据帧格式：每帧为 `data: <JSON>`，以空行分隔。
 | 消息保存 | 生成结束后保存本轮新产生的 Pydantic AI 消息，并更新会话 `timestamp` |
 | 技能目录 | 模型调用时加载全局、项目、用户三个 skills 目录 |
 | 工具限制 | `allowed_tools` 被传入运行上下文；当前代码没有调用 `build_tools` 构建注册表工具 |
+
+## 文件接口
+
+用户级与项目级文件 API 是同一组语义的两条挂载线：
+
+| 挂载点 | 文件实际根目录 | 门面类 |
+|---|---|---|
+| `/users/{user_id}/files` | `<项目根>/data/{user_id}` | `backend.file.UserFile` |
+| `/projects/{pid}/files` | `<项目根>/data/{user_uuid}/{pid}` | `backend.file.ProjectFile` |
+
+两组接口的请求体、响应体、错误行为都相同；差异仅在于：
+
+- 用户级要求 `user_id` 必须等于 access token 里的用户 ID，否则 `403 FORBIDDEN`
+- 项目级通过 `ProjectFile` 构造函数校验 `pid` 归属，不匹配时后端抛 `PermissionError` 并映射为 `404 RESOURCE_NOT_FOUND`（不暴露存在性）
+
+公共行为：
+
+- 所有路径都通过 `FileBase._safe_path` 防止 `..` 穿越；越界时抛 `FileError` → `400 FILE_ERROR`
+- 读 / 写 / 列目录的内容长度受 `WriteFileRequest.content` 限制，上限 262144 字符（`max_length=256 * 1024`，Pydantic 字符数校验，非字节数）
+- 读取 / 写入前会按扩展名白名单过滤：`.md .txt .json .yaml .yml .csv .xml`；其它扩展名直接返回 `415 UNSUPPORTED_FILE_TYPE`（仅对 `GET .../content` 和 `PUT .../files` 生效，`DELETE` 不做扩展名检查）
+
+### 数据结构
+
+#### FileListEntry
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `name` | string | 条目名（相对 base 的最后一段） |
+| `is_dir` | bool | 是否目录 |
+| `rel_path` | string | 相对 base 的完整路径 |
+| `size` | int | 目录条目固定为 0；文件为字节数 |
+| `updated_at` | float | `st_mtime` |
+
+#### FileListResponse
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `path` | string | 请求时传入的 path（原样回写） |
+| `entries` | `FileListEntry[]` | 目录条目，不做排序；路径不存在或非目录时为空数组 |
+
+#### FileContentResponse
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `path` | string | 请求时传入的 path（原样回写） |
+| `content` | string | 文本文件内容，UTF-8 |
+| `size` | int | 写入或读取完成后的字节数 |
+| `updated_at` | float | `st_mtime` |
+
+### GET `/users/{user_id}/files` / `/projects/{pid}/files`
+
+意义：列出指定目录下的文件与子目录条目。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+查询参数：
+
+| 名称 | 类型 | 必填 | 默认值 | 说明 |
+|---|---|---|---|---|
+| `path` | string | 否 | `.` | 相对 base 的目录路径，不存在或非目录时返回空 `entries` |
+
+成功返回：`200 OK`
+
+返回体：`FileListResponse`
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 400 | `{ code: "FILE_ERROR", message: ... }` | 路径越界等文件系统错误 |
+| 403 | `{ code: "FORBIDDEN", message: "Cannot access other user's files" }` | 仅用户级路由，`user_id` 与 token 不匹配 |
+| 403 | `{ code: "FORBIDDEN", message: "Access denied" }` | 仅用户级路由，`UserFile` 校验失败 |
+| 404 | `{ code: "RESOURCE_NOT_FOUND", message: "Project not found" }` | 仅项目级路由，`pid` 不存在或不属于当前用户 |
+
+### GET `/users/{user_id}/files/content` / `/projects/{pid}/files/content`
+
+意义：读取指定文本文件内容。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+查询参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `path` | string | 是 | 相对 base 的文件路径 |
+
+成功返回：`200 OK`
+
+返回体：`FileContentResponse`
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 400 | `{ code: "FILE_ERROR", message: ... }` | 路径越界、读失败 |
+| 403 | `{ code: "FORBIDDEN", ... }` | 用户级：`user_id` 不匹配或权限校验失败 |
+| 404 | `{ code: "RESOURCE_NOT_FOUND", message: "File not found" }` | 路径不存在或不是文件 |
+| 404 | `{ code: "RESOURCE_NOT_FOUND", message: "Project not found" }` | 项目级：项目不存在或不属于当前用户 |
+| 415 | `{ code: "UNSUPPORTED_FILE_TYPE", message: ... }` | 扩展名不在文本白名单内 |
+
+### PUT `/users/{user_id}/files` / `/projects/{pid}/files`
+
+意义：写入或覆盖文本文件，父目录不存在时自动创建。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+请求体：
+
+| 字段 | 类型 | 必填 | 约束 | 说明 |
+|---|---|---|---|---|
+| `path` | string | 是 | 扩展名需在文本白名单内 | 相对 base 的文件路径 |
+| `content` | string | 是 | 最长 262144 字符（`max_length=256 * 1024`）| UTF-8 文本内容 |
+
+成功返回：`200 OK`
+
+返回体：`FileContentResponse`（`content` 原样回写，`size` / `updated_at` 读自写入后的 stat）
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 400 | `{ code: "FILE_ERROR", message: ... }` | 路径越界、写失败 |
+| 403 | `{ code: "FORBIDDEN", ... }` | 用户级：`user_id` 不匹配或权限校验失败 |
+| 404 | `{ code: "RESOURCE_NOT_FOUND", message: "Project not found" }` | 项目级：项目不存在或不属于当前用户 |
+| 415 | `{ code: "UNSUPPORTED_FILE_TYPE", message: ... }` | 扩展名不在文本白名单内 |
+| 422 | 参数校验错误 | `content` 超出 262144 字符等 |
+
+### DELETE `/users/{user_id}/files` / `/projects/{pid}/files`
+
+意义：删除指定文件或目录。目录会递归删除（`shutil.rmtree`）。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+查询参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `path` | string | 是 | 相对 base 的文件或目录路径 |
+
+成功返回：`204 No Content`，无返回体。
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 400 | `{ code: "FILE_ERROR", message: ... }` | 路径越界、删除失败 |
+| 403 | `{ code: "FORBIDDEN", ... }` | 用户级：`user_id` 不匹配或权限校验失败 |
+| 404 | `{ code: "RESOURCE_NOT_FOUND", message: "Path not found" }` | 目标路径不存在 |
+| 404 | `{ code: "RESOURCE_NOT_FOUND", message: "Project not found" }` | 项目级：项目不存在或不属于当前用户 |
+
+### 与前端 Skill 管理的关系
+
+前端 `skills.ts` 把「技能」落地为 `skills/<name>/SKILL.md` 文件，全部通过上述文件接口读写。后端在 `/loop/{sid}` 调用模型时，`SkillsCapability` 会扫描以下三个目录：
+
+- `SKILL_STORAGE_DIR`（全局，默认 `<项目根>/data/skills`）
+- 项目的 `skills` 目录（`data/{user_uuid}/{pid}/skills`）
+- 用户的 `skills` 目录（`data/{user_uuid}/skills`）
+
+因此前端的 Skill 管理只是文件 API 上的一层惯例，不需要独立的 Skill 路由。
+
