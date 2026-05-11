@@ -305,19 +305,89 @@ input {
 }
 
 /* ---------- Skill Picker 抽屉过渡 ---------- */
+/* height 由 JS hooks 在 App.vue 里设置，这里只管 transition 时长与 opacity */
 .skill-drawer-enter-active,
 .skill-drawer-leave-active {
-  transition: opacity 180ms ease, transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
-  transform-origin: bottom center;
+  transition:
+    height 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 180ms ease;
   overflow: hidden;
+  will-change: height, opacity;
 }
 .skill-drawer-enter-from,
 .skill-drawer-leave-to {
   opacity: 0;
-  transform: translateY(12px) scaleY(0.92);
 }
 .skill-drawer-enter-to,
 .skill-drawer-leave-from {
   opacity: 1;
-  transform: translateY(0) scaleY(1);
+}
+
+/* composer 顶部圆角在抽屉展开/收起时随动画过渡 */
+.composer-shell {
+  border-radius: 1.5rem;
+  transition:
+    border-top-left-radius 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    border-top-right-radius 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.composer-shell.drawer-open {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+/* ---------- AI 回复期间 composer 边缘的环绕呼吸光 ---------- */
+/* 用 conic-gradient 画一条"主要透明、局部一小段亮"的弧，配合 mask 只保留边框一圈。
+   旋转通过 @property 动画 --composer-glow-angle 实现（比 transform: rotate 更顺滑，
+   因为整体形状不变，只是渐变起始角转动） */
+@property --composer-glow-angle {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+
+.composer-shell.generating::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: calc(1.5rem + 2px);
+  padding: 2px;
+  background: conic-gradient(
+    from var(--composer-glow-angle),
+    rgba(107, 114, 128, 0) 0deg,
+    rgba(107, 114, 128, 0) 260deg,
+    rgba(107, 114, 128, 0.85) 335deg,
+    rgba(107, 114, 128, 0) 360deg
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+  pointer-events: none;
+  animation:
+    composer-glow-rotate 3s linear infinite,
+    composer-glow-breathe 2.4s ease-in-out infinite;
+  transition:
+    border-top-left-radius 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    border-top-right-radius 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.composer-shell.generating.drawer-open::before {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+@keyframes composer-glow-rotate {
+  to { --composer-glow-angle: 360deg; }
+}
+
+@keyframes composer-glow-breathe {
+  0%, 100% { opacity: 0.55; }
+  50%      { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer-shell.generating::before {
+    animation: composer-glow-breathe 3s ease-in-out infinite;
+  }
 }

@@ -296,6 +296,54 @@ function handleResize(): void {
   sidebarOpen.value = !isMobile.value
 }
 
+// 科目总览横向卡片条：把纵向滚轮转成横向滚动，并用 rAF 缓动贴近原生横滑手感
+const overviewStripEl = ref<HTMLElement | null>(null)
+let overviewScrollTarget = 0
+let overviewScrollRaf = 0
+
+function onOverviewWheel(event: WheelEvent): void {
+  // 触控板横向滑动时 |deltaX| 更大，不干预
+  if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return
+  const el = overviewStripEl.value
+  if (!el) return
+  if (el.scrollWidth <= el.clientWidth) return
+  event.preventDefault()
+
+  // 归一化 deltaMode：0=PX，1=LINE，2=PAGE
+  let delta = event.deltaY
+  if (event.deltaMode === 1) delta *= 16
+  else if (event.deltaMode === 2) delta *= el.clientWidth
+
+  // rAF 未运行时以当前位置为基准启动；运行中则在目标上继续累加
+  if (!overviewScrollRaf) overviewScrollTarget = el.scrollLeft
+  const maxScroll = el.scrollWidth - el.clientWidth
+  overviewScrollTarget = Math.max(0, Math.min(maxScroll, overviewScrollTarget + delta))
+
+  if (!overviewScrollRaf) overviewScrollRaf = requestAnimationFrame(stepOverviewScroll)
+}
+
+function stepOverviewScroll(): void {
+  const el = overviewStripEl.value
+  if (!el) {
+    overviewScrollRaf = 0
+    return
+  }
+  const diff = overviewScrollTarget - el.scrollLeft
+  if (Math.abs(diff) < 0.5) {
+    el.scrollLeft = overviewScrollTarget
+    overviewScrollRaf = 0
+    return
+  }
+  // 缓动因子：每帧吸收约 18%，视觉上接近原生横滑的余波
+  el.scrollLeft += diff * 0.18
+  overviewScrollRaf = requestAnimationFrame(stepOverviewScroll)
+}
+
+watch(overviewStripEl, (el, prev) => {
+  if (prev) prev.removeEventListener('wheel', onOverviewWheel)
+  if (el) el.addEventListener('wheel', onOverviewWheel, { passive: false })
+})
+
 // ── 导航 ──────────────────────────────────────────────────────────────────────
 function goHome(): void {
   currentView.value = 'overview'
@@ -651,6 +699,48 @@ function handleComposerInput(): void {
   checkAtTrigger()
 }
 
+// ── Skill Picker 抽屉高度动画 hooks ──────────────────────────────────────────
+function onDrawerBeforeEnter(el: Element): void {
+  const node = el as HTMLElement
+  node.style.height = '0'
+}
+
+function onDrawerEnter(el: Element, done: () => void): void {
+  const node = el as HTMLElement
+  const target = node.scrollHeight
+  // 强制 reflow，保证从 height:0 过渡到目标高度
+  void node.offsetHeight
+  node.style.height = `${target}px`
+  const handle = (): void => {
+    node.removeEventListener('transitionend', handle)
+    done()
+  }
+  node.addEventListener('transitionend', handle)
+}
+
+function onDrawerAfterEnter(el: Element): void {
+  // 展开后让内容自适应（输入变长、筛选变化都可自由伸展）
+  const node = el as HTMLElement
+  node.style.height = ''
+}
+
+function onDrawerBeforeLeave(el: Element): void {
+  const node = el as HTMLElement
+  node.style.height = `${node.scrollHeight}px`
+}
+
+function onDrawerLeave(el: Element, done: () => void): void {
+  const node = el as HTMLElement
+  // 同样强制 reflow 再降为 0
+  void node.offsetHeight
+  node.style.height = '0'
+  const handle = (): void => {
+    node.removeEventListener('transitionend', handle)
+    done()
+  }
+  node.addEventListener('transitionend', handle)
+}
+
 function handlePickerToggle(name: string): void {
   toggleSkill(name)
   const el = composerTextarea.value
@@ -668,7 +758,10 @@ function handlePickerToggle(name: string): void {
 
 function buildPayload(text: string, skills: SkillMeta[]): string {
   if (skills.length === 0) return text
-  const names = skills.map((s) => s.name).join('、')
+  // 后端会为三层技能名各自加前缀（global- / project- / user-）再喂给模型。
+  // 这里的选择器只展示项目层技能，因此发送时对应拼 project- 前缀，
+  // 保证自然语言提示里的名字和模型 <skill> 列表、load_skill 参数一致。
+  const names = skills.map((s) => `project-${s.name}`).join('、')
   return `[本轮请优先考虑使用技能：${names}]\n\n${text}`
 }
 
@@ -1037,11 +1130,15 @@ onBeforeUnmount(() => {
           <div v-if="currentView === 'overview'" class="absolute inset-0 flex flex-col overflow-y-auto px-4 py-5 md:px-6">
             <div class="mx-auto flex w-full max-w-3xl flex-1 flex-col justify-center">
               <h1 class="mb-10 text-4xl font-bold tracking-tight md:text-5xl">科目总览</h1>
-              <div v-if="projects.length > 0" class="no-scrollbar -mx-4 flex snap-x gap-4 overflow-x-auto px-4 pb-2 md:-mx-6 md:px-6">
+              <div
+                v-if="projects.length > 0"
+                ref="overviewStripEl"
+                class="no-scrollbar -mx-4 flex gap-4 overflow-x-auto px-4 pb-2 md:-mx-6 md:px-6"
+              >
                 <div
                   v-for="project in projects"
                   :key="project.pid"
-                  class="relative flex h-[160px] w-[280px] min-w-[280px] flex-shrink-0 snap-start flex-col"
+                  class="relative flex h-[160px] w-[280px] min-w-[280px] flex-shrink-0 flex-col"
                 >
                   <div
                     v-if="renamingKey === projectKey('card', project.pid)"
@@ -1105,18 +1202,13 @@ onBeforeUnmount(() => {
                 <div class="flex items-center justify-end">
                   <button
                     type="button"
-                    :class="[
-                      '-mr-1 flex items-center justify-center rounded-lg p-2 transition-colors',
-                      newProjectName.trim() && !creatingProject
-                        ? 'bg-[#1f2937] text-white hover:bg-[#374151]'
-                        : 'cursor-not-allowed bg-[#f3f4f6] text-[#9ca3af]',
-                    ]"
+                    class="flex h-9 items-center justify-center gap-1 rounded-2xl border border-transparent bg-[#1f2937] px-5 text-white transition hover:bg-[#111827] disabled:cursor-not-allowed disabled:border-[#d1d5db] disabled:bg-white disabled:text-[#9ca3af]"
                     :disabled="!newProjectName.trim() || creatingProject"
                     title="创建科目"
                     @click="handleCreateProject"
                   >
-                    <svg class="h-5 w-5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3" />
+                    <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14m0 0-6-6m6 6-6 6" />
                     </svg>
                   </button>
                 </div>
@@ -1190,18 +1282,13 @@ onBeforeUnmount(() => {
                   <div class="flex items-center justify-end">
                     <button
                       type="button"
-                      :class="[
-                        '-mr-1 flex items-center justify-center rounded-lg p-2 transition-colors',
-                        newSessionDraft.trim() && !creatingSession && !streaming
-                          ? 'bg-[#1f2937] text-white hover:bg-[#374151]'
-                          : 'cursor-not-allowed bg-[#f3f4f6] text-[#9ca3af]',
-                      ]"
+                      class="flex h-9 items-center justify-center gap-1 rounded-2xl border border-transparent bg-[#1f2937] px-5 text-white transition hover:bg-[#111827] disabled:cursor-not-allowed disabled:border-[#d1d5db] disabled:bg-white disabled:text-[#9ca3af]"
                       :disabled="!newSessionDraft.trim() || creatingSession || streaming"
                       title="创建会话并发送"
                       @click="handleStartNewSessionFromSubject"
                     >
-                      <svg class="h-5 w-5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3" />
+                      <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14m0 0-6-6m6 6-6 6" />
                       </svg>
                     </button>
                   </div>
@@ -1264,7 +1351,14 @@ onBeforeUnmount(() => {
                 </p>
                 <p v-if="toolStatus" class="mb-2 text-xs text-[#4b5563]">{{ toolStatus }}</p>
 
-                <Transition name="skill-drawer">
+                <Transition
+                  name="skill-drawer"
+                  @before-enter="onDrawerBeforeEnter"
+                  @enter="onDrawerEnter"
+                  @after-enter="onDrawerAfterEnter"
+                  @before-leave="onDrawerBeforeLeave"
+                  @leave="onDrawerLeave"
+                >
                   <SkillPicker
                     v-if="showSkillPicker"
                     :skills="projectSkills"
@@ -1275,8 +1369,9 @@ onBeforeUnmount(() => {
                 </Transition>
                 <div
                   :class="[
-                    'relative bg-white p-3 shadow-sm focus-within:ring-2 focus-within:ring-[#1f6f5b]/20',
-                    showSkillPicker ? 'rounded-b-3xl' : 'rounded-3xl',
+                    'composer-shell relative bg-white p-3 shadow-sm focus-within:ring-2 focus-within:ring-[#1f6f5b]/20',
+                    showSkillPicker ? 'drawer-open' : '',
+                    streaming ? 'generating' : '',
                   ]"
                 >
                   <SkillChips
@@ -1309,7 +1404,7 @@ onBeforeUnmount(() => {
                     </button>
                     <button
                       v-if="streaming"
-                      class="flex h-9 items-center justify-center gap-1 rounded-2xl bg-[#9a3412] px-5 text-white transition hover:bg-[#7c2d12]"
+                      class="flex h-9 items-center justify-center gap-1 rounded-2xl border border-[#d1d5db] bg-white px-5 text-[#6b7280] transition hover:border-[#9ca3af] hover:text-[#1f2937]"
                       title="停止生成"
                       type="button"
                       @click="stopStreaming"
@@ -1320,7 +1415,7 @@ onBeforeUnmount(() => {
                     </button>
                     <button
                       v-else
-                      class="flex h-9 items-center justify-center gap-1 rounded-2xl bg-[#1f2937] px-5 text-white transition hover:bg-[#111827] disabled:cursor-not-allowed disabled:bg-[#d1d5db] disabled:text-[#6b7280]"
+                      class="flex h-9 items-center justify-center gap-1 rounded-2xl border border-transparent bg-[#1f2937] px-5 text-white transition hover:bg-[#111827] disabled:cursor-not-allowed disabled:border-[#d1d5db] disabled:bg-white disabled:text-[#9ca3af]"
                       :disabled="!canSend"
                       title="发送"
                       type="button"

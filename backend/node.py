@@ -214,20 +214,30 @@ async def call_model_node(ctx: LoopContext) -> NodeOutput:
         tool_mode=ToolMode.ON,
     )
 
-    # 构建技能目录列表：全局 + 项目 + 用户，复用 File 门面的鉴权与路径计算
+    # 构建技能列表：三个目录分别加载，给每个 Skill 的 name 打 scope 前缀，
+    # 让模型在 <skill>/load_skill 层面就能区分归属（否则 pydantic-ai-skills
+    # 只会把三个目录平铺展示，模型无法分辨同名技能属于哪一层）。
     from backend.file import UserFile, ProjectFile
+    from dataclasses import replace
+    from pydantic_ai_skills import discover_skills
     db = DatabaseFacade(DATABASE_PATH)
 
     global_skills = SKILL_STORAGE_DIR
     user_fs = UserFile(user_uuid=ctx.user_uuid, db_facade=db)
     project_fs = ProjectFile(pid=ctx.pid, user_uuid=ctx.user_uuid, db_facade=db)
 
-    skill_dirs = [
-        str(global_skills),
-        str(project_fs.base_path / "skills"),
-        str(user_fs.base_path / "skills"),
+    scoped_sources: list[tuple[str, str]] = [
+        ("global-", str(global_skills)),
+        ("project-", str(project_fs.base_path / "skills")),
+        ("user-", str(user_fs.base_path / "skills")),
     ]
-    skills_capability = SkillsCapability(directories=skill_dirs, validate=True, max_depth=3)
+
+    scoped_skills = []
+    for prefix, path in scoped_sources:
+        for skill in discover_skills(path, validate=True, max_depth=3):
+            scoped_skills.append(replace(skill, name=f"{prefix}{skill.name}"))
+
+    skills_capability = SkillsCapability(skills=scoped_skills, validate=True)
 
     agent = GetAgent(capabilities=[skills_capability])
     ctx.response_text = ""
