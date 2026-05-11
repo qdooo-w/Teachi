@@ -10,6 +10,7 @@ data.py - 数据传输与查询路由模块
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -18,6 +19,7 @@ from pydantic import BaseModel, Field
 from backend.auth import get_current_user
 from backend.config import APP_NAME, DATABASE_PATH
 from backend.db import DatabaseFacade
+from backend.file import FileBase, ProjectFile, UserFile, FileError, _TEXT_FILE_EXTENSIONS
 from backend.tool import get_registered_tool_names
 
 
@@ -58,6 +60,12 @@ class CreateProjectRequest(BaseModel):
     projectname: str = Field(..., min_length=1, max_length=100, description="项目名称")
 
 
+class UpdateProjectRequest(BaseModel):
+    """重命名项目请求"""
+
+    projectname: str = Field(..., min_length=1, max_length=100, description="项目新名称")
+
+
 class SessionItem(BaseModel):
     """会话信息"""
 
@@ -77,6 +85,12 @@ class CreateSessionRequest(BaseModel):
     """创建会话请求"""
 
     sessionname: str = Field(..., min_length=1, max_length=100, description="会话名称")
+
+
+class UpdateSessionRequest(BaseModel):
+    """重命名会话请求"""
+
+    sessionname: str = Field(..., min_length=1, max_length=100, description="会话新名称")
 
 
 class MessageItem(BaseModel):
@@ -154,6 +168,58 @@ def create_user_project(
     )
 
 
+@router.patch("/projects/{pid}", response_model=ProjectItem)
+def rename_project(
+    pid: str,
+    payload: UpdateProjectRequest,
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> ProjectItem:
+    """重命名项目。项目不存在或不属于当前用户返回 404。"""
+    user_uuid = current_user.get("uuid")
+    if not isinstance(user_uuid, str):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "AUTH_TOKEN_INVALID", "message": "Invalid token"},
+        )
+
+    project = db.projects.update_name_for_user(
+        pid=pid,
+        user_uuid=user_uuid,
+        projectname=payload.projectname,
+    )
+    if project is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "RESOURCE_NOT_FOUND", "message": "Project not found"},
+        )
+    return ProjectItem(
+        pid=project["pid"],
+        projectname=project["projectname"],
+        timestamp=float(project["timestamp"]),
+        created_at=float(project["created_at"]),
+    )
+
+
+@router.delete("/projects/{pid}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_project(
+    pid: str,
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> None:
+    """删除项目。外键 ON DELETE CASCADE 会级联删除该项目下所有会话与消息。"""
+    user_uuid = current_user.get("uuid")
+    if not isinstance(user_uuid, str):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "AUTH_TOKEN_INVALID", "message": "Invalid token"},
+        )
+
+    if not db.projects.delete_for_user(pid=pid, user_uuid=user_uuid):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "RESOURCE_NOT_FOUND", "message": "Project not found"},
+        )
+
+
 @router.get("/projects/{pid}/sessions", response_model=SessionListResponse)
 def list_project_sessions(
     pid: str,
@@ -223,6 +289,58 @@ def create_project_session(
         timestamp=float(session["timestamp"]),
         created_at=float(session["created_at"]),
     )
+
+
+@router.patch("/sessions/{sid}", response_model=SessionItem)
+def rename_session(
+    sid: str,
+    payload: UpdateSessionRequest,
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> SessionItem:
+    """重命名会话。会话不存在或不属于当前用户返回 404。"""
+    user_uuid = current_user.get("uuid")
+    if not isinstance(user_uuid, str):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "AUTH_TOKEN_INVALID", "message": "Invalid token"},
+        )
+
+    session = db.sessions.update_name_for_user(
+        sid=sid,
+        user_uuid=user_uuid,
+        sessionname=payload.sessionname,
+    )
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "RESOURCE_NOT_FOUND", "message": "Session not found"},
+        )
+    return SessionItem(
+        sid=session["sid"],
+        sessionname=session["sessionname"],
+        timestamp=float(session["timestamp"]),
+        created_at=float(session["created_at"]),
+    )
+
+
+@router.delete("/sessions/{sid}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_session(
+    sid: str,
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> None:
+    """删除会话。外键 ON DELETE CASCADE 会级联删除该会话下所有消息。"""
+    user_uuid = current_user.get("uuid")
+    if not isinstance(user_uuid, str):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "AUTH_TOKEN_INVALID", "message": "Invalid token"},
+        )
+
+    if not db.sessions.delete_for_user(sid=sid, user_uuid=user_uuid):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "RESOURCE_NOT_FOUND", "message": "Session not found"},
+        )
 
 
 @router.get("/sessions/{sid}/messages", response_model=MessageListResponse)
@@ -371,3 +489,338 @@ def switch_to_message_version(
         success=True,
         switched_msg_id=payload.target_version_msg_id,
     )
+
+
+# ── 文件 API 模型 ───────────────────────────────────────────────────────────────
+
+class FileListEntry(BaseModel):
+    """目录条目信息"""
+
+    name: str
+    is_dir: bool
+    rel_path: str
+    size: int
+    updated_at: float
+
+
+class FileListResponse(BaseModel):
+    """目录列表响应"""
+
+    path: str
+    entries: list[FileListEntry]
+
+
+class FileContentResponse(BaseModel):
+    """文件内容响应"""
+
+    path: str
+    content: str
+    size: int
+    updated_at: float
+
+
+class WriteFileRequest(BaseModel):
+    """写文件请求"""
+
+    path: str
+    content: str = Field(..., max_length=256 * 1024)
+
+
+# ── 辅助函数 ────────────────────────────────────────────────────────────────────
+
+def _check_text_extension(path: str) -> None:
+    """检查文件扩展名是否在文本白名单内，否则抛 415。"""
+    ext = Path(path).suffix.lower()
+    if ext not in _TEXT_FILE_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail={"code": "UNSUPPORTED_FILE_TYPE", "message": f"File type {ext!r} is not supported"},
+        )
+
+
+# ── 用户级文件路由 ──────────────────────────────────────────────────────────────
+
+@router.get("/users/{user_id}/files", response_model=FileListResponse)
+def list_user_files(
+    user_id: str,
+    path: str = ".",
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> FileListResponse:
+    """列出用户文件目录。"""
+    if user_id != current_user.get("uuid"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "FORBIDDEN", "message": "Cannot access other user's files"},
+        )
+    try:
+        fs = UserFile(user_uuid=user_id, db_facade=db)
+        entries = fs.search_dir(path) if (fs._safe_path(path)).is_dir() else []
+    except PermissionError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "FORBIDDEN", "message": "Access denied"},
+        )
+    except FileError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "FILE_ERROR", "message": str(e)},
+        )
+    return FileListResponse(
+        path=path,
+        entries=[FileListEntry(**e) for e in entries],
+    )
+
+
+@router.get("/users/{user_id}/files/content", response_model=FileContentResponse)
+def read_user_file(
+    user_id: str,
+    path: str,
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> FileContentResponse:
+    """读取用户文件内容。"""
+    if user_id != current_user.get("uuid"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "FORBIDDEN", "message": "Cannot access other user's files"},
+        )
+    _check_text_extension(path)
+    try:
+        fs = UserFile(user_uuid=user_id, db_facade=db)
+        safe = fs._safe_path(path)
+        if not safe.is_file():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "RESOURCE_NOT_FOUND", "message": "File not found"},
+            )
+        content = fs.read_file(path)
+        stat = safe.stat()
+        return FileContentResponse(path=path, content=content, size=stat.st_size, updated_at=stat.st_mtime)
+    except HTTPException:
+        raise
+    except PermissionError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "FORBIDDEN", "message": "Access denied"},
+        )
+    except FileError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "FILE_ERROR", "message": str(e)},
+        )
+
+
+@router.put("/users/{user_id}/files", response_model=FileContentResponse)
+def write_user_file(
+    user_id: str,
+    payload: WriteFileRequest,
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> FileContentResponse:
+    """写入或覆盖用户文件。"""
+    if user_id != current_user.get("uuid"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "FORBIDDEN", "message": "Cannot access other user's files"},
+        )
+    _check_text_extension(payload.path)
+    try:
+        fs = UserFile(user_uuid=user_id, db_facade=db)
+        fs.create_file(payload.path, payload.content)
+        safe = fs._safe_path(payload.path)
+        stat = safe.stat()
+        return FileContentResponse(
+            path=payload.path, content=payload.content, size=stat.st_size, updated_at=stat.st_mtime
+        )
+    except PermissionError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "FORBIDDEN", "message": "Access denied"},
+        )
+    except FileError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "FILE_ERROR", "message": str(e)},
+        )
+
+
+@router.delete("/users/{user_id}/files", status_code=status.HTTP_204_NO_CONTENT)
+def delete_user_file(
+    user_id: str,
+    path: str,
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> None:
+    """删除用户文件或目录。"""
+    if user_id != current_user.get("uuid"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "FORBIDDEN", "message": "Cannot access other user's files"},
+        )
+    try:
+        fs = UserFile(user_uuid=user_id, db_facade=db)
+        safe = fs._safe_path(path)
+        if not safe.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "RESOURCE_NOT_FOUND", "message": "Path not found"},
+            )
+        if safe.is_dir():
+            fs.delete_dir(path)
+        else:
+            fs.delete_file(path)
+    except HTTPException:
+        raise
+    except PermissionError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "FORBIDDEN", "message": "Access denied"},
+        )
+    except FileError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "FILE_ERROR", "message": str(e)},
+        )
+
+
+# ── 项目级文件路由 ──────────────────────────────────────────────────────────────
+
+@router.get("/projects/{pid}/files", response_model=FileListResponse)
+def list_project_files(
+    pid: str,
+    path: str = ".",
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> FileListResponse:
+    """列出项目文件目录。"""
+    user_uuid = current_user.get("uuid")
+    if not isinstance(user_uuid, str):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "AUTH_TOKEN_INVALID", "message": "Invalid token"},
+        )
+    try:
+        fs = ProjectFile(pid=pid, user_uuid=user_uuid, db_facade=db)
+        entries = fs.search_dir(path) if (fs._safe_path(path)).is_dir() else []
+    except PermissionError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "RESOURCE_NOT_FOUND", "message": "Project not found"},
+        )
+    except FileError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "FILE_ERROR", "message": str(e)},
+        )
+    return FileListResponse(
+        path=path,
+        entries=[FileListEntry(**e) for e in entries],
+    )
+
+
+@router.get("/projects/{pid}/files/content", response_model=FileContentResponse)
+def read_project_file(
+    pid: str,
+    path: str,
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> FileContentResponse:
+    """读取项目文件内容。"""
+    user_uuid = current_user.get("uuid")
+    if not isinstance(user_uuid, str):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "AUTH_TOKEN_INVALID", "message": "Invalid token"},
+        )
+    _check_text_extension(path)
+    try:
+        fs = ProjectFile(pid=pid, user_uuid=user_uuid, db_facade=db)
+        safe = fs._safe_path(path)
+        if not safe.is_file():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "RESOURCE_NOT_FOUND", "message": "File not found"},
+            )
+        content = fs.read_file(path)
+        stat = safe.stat()
+        return FileContentResponse(path=path, content=content, size=stat.st_size, updated_at=stat.st_mtime)
+    except HTTPException:
+        raise
+    except PermissionError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "RESOURCE_NOT_FOUND", "message": "Project not found"},
+        )
+    except FileError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "FILE_ERROR", "message": str(e)},
+        )
+
+
+@router.put("/projects/{pid}/files", response_model=FileContentResponse)
+def write_project_file(
+    pid: str,
+    payload: WriteFileRequest,
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> FileContentResponse:
+    """写入或覆盖项目文件。"""
+    user_uuid = current_user.get("uuid")
+    if not isinstance(user_uuid, str):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "AUTH_TOKEN_INVALID", "message": "Invalid token"},
+        )
+    _check_text_extension(payload.path)
+    try:
+        fs = ProjectFile(pid=pid, user_uuid=user_uuid, db_facade=db)
+        fs.create_file(payload.path, payload.content)
+        safe = fs._safe_path(payload.path)
+        stat = safe.stat()
+        return FileContentResponse(
+            path=payload.path, content=payload.content, size=stat.st_size, updated_at=stat.st_mtime
+        )
+    except PermissionError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "RESOURCE_NOT_FOUND", "message": "Project not found"},
+        )
+    except FileError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "FILE_ERROR", "message": str(e)},
+        )
+
+
+@router.delete("/projects/{pid}/files", status_code=status.HTTP_204_NO_CONTENT)
+def delete_project_file(
+    pid: str,
+    path: str,
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> None:
+    """删除项目文件或目录。"""
+    user_uuid = current_user.get("uuid")
+    if not isinstance(user_uuid, str):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "AUTH_TOKEN_INVALID", "message": "Invalid token"},
+        )
+    try:
+        fs = ProjectFile(pid=pid, user_uuid=user_uuid, db_facade=db)
+        safe = fs._safe_path(path)
+        if not safe.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "RESOURCE_NOT_FOUND", "message": "Path not found"},
+            )
+        if safe.is_dir():
+            fs.delete_dir(path)
+        else:
+            fs.delete_file(path)
+    except HTTPException:
+        raise
+    except PermissionError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "RESOURCE_NOT_FOUND", "message": "Project not found"},
+        )
+    except FileError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "FILE_ERROR", "message": str(e)},
+        )

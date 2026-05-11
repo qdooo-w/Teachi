@@ -1,11 +1,21 @@
+import logging
 import shutil
 from pathlib import Path
 from typing import Union, List, Dict, Optional
+
+from backend.config import BASE_DIR
+
+logger = logging.getLogger(__name__)
 
 
 class FileError(Exception):
     """文件操作基本错误类"""
     pass
+
+# 文本文件扩展名白名单，供 HTTP API 使用
+_TEXT_FILE_EXTENSIONS: frozenset[str] = frozenset({
+    ".md", ".txt", ".json", ".yaml", ".yml", ".csv", ".xml"
+})
 
 # 文件操作方法白名单，供 File_Handler 和 Skill_Handler 使用
 _ALLOWED_FS_METHODS: set[str] = {
@@ -27,7 +37,7 @@ class FileBase:
         clean_rel = relative_path.lstrip("/\\")
         target_path = (self.base_path / clean_rel).resolve()
 
-        if not str(target_path).startswith(str(self.base_path)):
+        if target_path != self.base_path and self.base_path not in target_path.parents:
             raise FileError(f"Access denied: Path {relative_path} is outside base directory.")
         return target_path
 
@@ -82,7 +92,7 @@ class FileBase:
         except Exception as e:
             raise FileError(f"Failed to read file {path}: {e}")
 
-    def search_dir(self, path: str = ".") -> List[Dict[str, Union[str, bool]]]:
+    def search_dir(self, path: str = ".") -> List[Dict[str, Union[str, bool, int, float]]]:
         """搜索目录下文件和文件夹结构。"""
         try:
             target = self._safe_path(path)
@@ -91,39 +101,42 @@ class FileBase:
 
             results = []
             for item in target.iterdir():
+                stat = item.stat()
                 results.append({
                     "name": item.name,
                     "is_dir": item.is_dir(),
-                    "rel_path": str(item.relative_to(self.base_path))
+                    "rel_path": str(item.relative_to(self.base_path)),
+                    "size": 0 if item.is_dir() else stat.st_size,
+                    "updated_at": stat.st_mtime,
                 })
             return results
+        except FileError:
+            raise
         except Exception as e:
             raise FileError(f"Failed to search directory {path}: {e}")
 
 class ProjectFile(FileBase):
     """
-    项目文件子类，限制在 /projects/{pid}。
+    项目文件子类，限制在 data/{user_uuid}/{pid}。
     """
     def __init__(self, pid: str, user_uuid: str, db_facade):
         project = db_facade.projects.get_for_user(pid=pid, user_uuid=user_uuid)
         if not project:
             raise PermissionError(f"Access Denied: Project {pid} does not belong to user {user_uuid}")
 
-        root_dir = Path(__file__).parent.resolve()
-        project_path = root_dir / "projects" / pid
+        project_path = BASE_DIR / "data" / user_uuid / pid
         super().__init__(project_path)
 
 class UserFile(FileBase):
     """
-    用户文件子类，限制在 /users/{user_uuid}。
+    用户文件子类，限制在 data/{user_uuid}。
     """
     def __init__(self, user_uuid: str, db_facade):
         user = db_facade.users.get_by_uuid(user_uuid)
         if not user:
             raise PermissionError(f"Access Denied: User {user_uuid} not found")
 
-        root_dir = Path(__file__).parent.resolve()
-        user_path = root_dir / "users" / user_uuid
+        user_path = BASE_DIR / "data" / user_uuid
         super().__init__(user_path)
 
 
@@ -161,8 +174,11 @@ def File_Handler(
         return {"status": "success", "result": result}
 
     except PermissionError as e:
+        logger.warning("file_permission_denied method=%s pid=%s user=%s", method, pid, user_uuid)
         return {"status": "error", "error": "permission_denied", "message": str(e)}
     except FileError as e:
+        logger.warning("file_operation_failed method=%s pid=%s user=%s", method, pid, user_uuid)
         return {"status": "error", "error": "file_operation_failed", "message": str(e)}
     except Exception as e:
+        logger.exception("file_internal_error method=%s pid=%s user=%s", method, pid, user_uuid)
         return {"status": "error", "error": "internal_error", "message": str(e)}

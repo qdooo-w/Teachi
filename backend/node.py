@@ -23,6 +23,7 @@ SSE 事件类型说明：
 from __future__ import annotations
 
 import datetime
+import logging
 from typing import Any
 from pydantic import TypeAdapter
 from pydantic_ai import AgentRunResultEvent
@@ -37,7 +38,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from backend.config import DATABASE_PATH, GetAgent, BASE_DIR
+from backend.config import DATABASE_PATH, GetAgent, SKILL_STORAGE_DIR
 from pydantic_ai_skills import SkillsCapability
 from backend.context import (
     ActionKind,
@@ -49,6 +50,8 @@ from backend.context import (
     register_node,
 )
 from backend.db import DatabaseFacade
+
+logger = logging.getLogger(__name__)
 
 
 # ── 辅助函数 ──
@@ -128,20 +131,21 @@ async def stop_node(ctx: LoopContext) -> NodeOutput:
     STOP 不需要获取锁 —— 它的职责是取消当前任务。
     """
     import asyncio
-    from backend.loop import _running_tasks, get_user_lock
+    from backend.loop import _running_tasks, get_user_lock, task_key
 
-    task = _running_tasks.pop(ctx.user_uuid, None)
+    task = _running_tasks.pop(task_key(ctx.user_uuid, ctx.sid), None)
     if task and not task.done():
+        logger.info("stop_requested user=%s sid=%s", ctx.user_uuid, ctx.sid)
         task.cancel()
         try:
             await asyncio.shield(task)
         except (asyncio.CancelledError, Exception):
             pass
 
-    # 确保锁被释放（如果任务没有正常释放）
-    lock = get_user_lock(ctx.user_uuid)
-    if lock.locked():
-        lock.release()
+        # 确保锁被释放（如果任务没有正常释放）
+        lock = get_user_lock(ctx.user_uuid)
+        if lock.locked():
+            lock.release()
 
     return NodeOutput()
 
@@ -210,20 +214,30 @@ async def call_model_node(ctx: LoopContext) -> NodeOutput:
         tool_mode=ToolMode.ON,
     )
 
-    # 构建技能目录列表：全局 + 项目 + 用户，复用 File 门面的鉴权与路径计算
+    # 构建技能列表：三个目录分别加载，给每个 Skill 的 name 打 scope 前缀，
+    # 让模型在 <skill>/load_skill 层面就能区分归属（否则 pydantic-ai-skills
+    # 只会把三个目录平铺展示，模型无法分辨同名技能属于哪一层）。
     from backend.file import UserFile, ProjectFile
+    from dataclasses import replace
+    from pydantic_ai_skills import discover_skills
     db = DatabaseFacade(DATABASE_PATH)
 
-    global_skills = BASE_DIR / "skills"  # data/skills
+    global_skills = SKILL_STORAGE_DIR
     user_fs = UserFile(user_uuid=ctx.user_uuid, db_facade=db)
     project_fs = ProjectFile(pid=ctx.pid, user_uuid=ctx.user_uuid, db_facade=db)
 
-    skill_dirs = [
-        str(global_skills),
-        str(project_fs.base_path / "skills"),
-        str(user_fs.base_path / "skills"),
+    scoped_sources: list[tuple[str, str]] = [
+        ("global-", str(global_skills)),
+        ("project-", str(project_fs.base_path / "skills")),
+        ("user-", str(user_fs.base_path / "skills")),
     ]
-    skills_capability = SkillsCapability(directories=skill_dirs, validate=True, max_depth=3)
+
+    scoped_skills = []
+    for prefix, path in scoped_sources:
+        for skill in discover_skills(path, validate=True, max_depth=3):
+            scoped_skills.append(replace(skill, name=f"{prefix}{skill.name}"))
+
+    skills_capability = SkillsCapability(skills=scoped_skills, validate=True)
 
     agent = GetAgent(capabilities=[skills_capability])
     ctx.response_text = ""
@@ -285,6 +299,7 @@ async def call_model_node(ctx: LoopContext) -> NodeOutput:
         ctx.error = str(exc)
         ctx.error_code = "MODEL_CALL_FAILED"
         ctx.retries += 1
+        logger.exception("model_call_failed user=%s sid=%s", ctx.user_uuid, ctx.sid)
 
     return NodeOutput()
 
@@ -316,15 +331,22 @@ async def save_node(ctx: LoopContext) -> NodeOutput:
     db.sessions.touch_timestamp(sid=ctx.sid)
     return NodeOutput()
 
+@register_node(NodeName.STREAM_ERROR)
+async def stream_error_node(ctx: LoopContext) -> NodeOutput:
+    return NodeOutput()
+@register_node(NodeName.STREAM_COMPLETE)
+async def stream_complete_node(ctx: LoopContext) -> NodeOutput:
+    return NodeOutput()
+
 
 @register_node(NodeName.RELEASE_LOCK)
 async def release_lock_node(ctx: LoopContext) -> NodeOutput:
     """释放用户锁。所有路径的最终出口。"""
-    from backend.loop import _running_tasks, get_user_lock
+    from backend.loop import _running_tasks, get_user_lock, task_key
 
     lock = get_user_lock(ctx.user_uuid)
     if lock.locked():
         lock.release()
 
-    _running_tasks.pop(ctx.user_uuid, None)
+    _running_tasks.pop(task_key(ctx.user_uuid, ctx.sid), None)
     return NodeOutput()

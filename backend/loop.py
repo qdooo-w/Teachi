@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import AsyncGenerator
 from typing import Any
 
@@ -29,6 +30,8 @@ from backend.context import (
 # 导入 node 会触发所有 @register_node 装饰器，填充 _registry
 import backend.node as node  # noqa: F401
 
+logger = logging.getLogger(__name__)
+
 # ── 常量 ──
 
 MAX_RETRIES = 3
@@ -36,7 +39,13 @@ MAX_RETRIES = 3
 # ── 用户锁 & 运行中任务 ──
 
 _user_locks: dict[str, asyncio.Lock] = {}
-_running_tasks: dict[str, asyncio.Task] = {}
+TaskKey = tuple[str, str]
+
+_running_tasks: dict[TaskKey, asyncio.Task] = {}
+
+
+def task_key(user_uuid: str, sid: str) -> TaskKey:
+    return (user_uuid, sid)
 
 
 def get_user_lock(user_uuid: str) -> asyncio.Lock:
@@ -111,18 +120,17 @@ async def run_loop(ctx: LoopContext, entry: NodeName) -> None:
     """状态机引擎核心。
 
     循环: 取当前节点函数 → 执行 → NodeOutput 带主动跳转则跳 → 查图决定下一跳。
-    遇到终态 (STREAM_COMPLETE / STREAM_ERROR / STOP / 无出边) 退出。
+    节点无出边时退出；终态节点也会先执行自身逻辑。
     """
     current = entry
+    logger.info("loop_start action=%s user=%s sid=%s", ctx.action.value, ctx.user_uuid, ctx.sid)
 
     while True:
-        if _graph.is_terminal(current):
-            break
-
         node_fn = _registry.get(current)#获取当前节点的执行函数实例
         if node_fn is None:
             ctx.error = f"Node not registered: {current}"
             ctx.error_code = "LOOP_CONFIG_ERROR"
+            logger.error("loop_config_error node=%s user=%s sid=%s", current, ctx.user_uuid, ctx.sid)
             current = NodeName.STREAM_ERROR
             continue
 
@@ -131,6 +139,7 @@ async def run_loop(ctx: LoopContext, entry: NodeName) -> None:
         except Exception as exc:
             ctx.error = str(exc)
             ctx.error_code = "LOOP_EXECUTION_ERROR"
+            logger.exception("loop_execution_error node=%s user=%s sid=%s", current, ctx.user_uuid, ctx.sid)
             current = NodeName.STREAM_ERROR
             continue
 
@@ -142,6 +151,13 @@ async def run_loop(ctx: LoopContext, entry: NodeName) -> None:
         # 查图: 取满足条件的候选边
         candidates = _graph.next_nodes(current, ctx)
         if not candidates:
+            logger.info(
+                "loop_end action=%s user=%s sid=%s error_code=%s",
+                ctx.action.value,
+                ctx.user_uuid,
+                ctx.sid,
+                ctx.error_code,
+            )
             break  # 无候选，自然终止
 
         # 路由: 当前取第一条候选（后期替换为路由 Agent）
@@ -161,23 +177,32 @@ async def stream_response(ctx: LoopContext) -> AsyncGenerator[str, None]:
 
     # 存储运行中任务（用于 STOP 取消），STOP 请求自身不存储
     if ctx.action != ActionKind.STOP:
-        _running_tasks[ctx.user_uuid] = run_task
+        _running_tasks[task_key(ctx.user_uuid, ctx.sid)] = run_task
 
     try:
         while True:
-            try:
-                event = await asyncio.wait_for(queue.get(), timeout=15)
+            queue_task = asyncio.create_task(queue.get())
+            done, pending = await asyncio.wait(
+                {queue_task, run_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            if queue_task in done:
+                event = queue_task.result()
                 yield f"data: {json.dumps(event, default=str)}\n\n"
-            except asyncio.TimeoutError:
-                if run_task.done():
-                    break
+                continue
+
+            if run_task in done:
+                if queue_task in pending:
+                    queue_task.cancel()
+                break
 
         # 传播引擎异常（如有）
         await run_task
     except asyncio.CancelledError:
         pass
     finally:
-        _running_tasks.pop(ctx.user_uuid, None)
+        _running_tasks.pop(task_key(ctx.user_uuid, ctx.sid), None)
 
     # 发送结束帧
     done_event: dict[str, Any] = {"type": "done"}
@@ -198,7 +223,7 @@ class ChatRequest(BaseModel):
     """POST /loop/{sid} 请求体。action 字段驱动状态机入口选择。"""
 
     pid: str = Field(..., description="项目 ID")
-    action: str = Field(default="send", description="send | regenerate | stop")
+    action: ActionKind = Field(default=ActionKind.SEND, description="send | regenerate | stop")
     message: str = Field(default="", description="用户输入文本 (action=stop 时可为空)")
     parent_msg_id: str | None = Field(default=None, description="regenerate 时指定的父消息 ID")
     allowed_tools: list[str] | None = Field(default=None, description="前端请求允许的工具列表")
@@ -221,7 +246,7 @@ async def chat_loop(
         user_uuid=user_uuid,
         pid=payload.pid,
         sid=sid,
-        action=ActionKind(payload.action),
+        action=payload.action,
         user_input=payload.message,
         parent_msg_id=payload.parent_msg_id,
         allowed_tools=payload.allowed_tools,

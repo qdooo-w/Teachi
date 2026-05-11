@@ -11,7 +11,7 @@ from backend.context import ChatDeps
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # 后端基础配置（后续文件直接 import 使用）。
-APP_NAME = os.getenv("APP_NAME", "Agentist")
+APP_NAME = os.getenv("APP_NAME", "Teachi Backend")
 DATABASE_PATH = os.getenv("DATABASE_PATH", str(BASE_DIR /"data" / "project.db"))
 SKILL_STORAGE_DIR = os.getenv("SKILL_STORAGE_DIR", str(BASE_DIR / "data" / "skills"))
 
@@ -26,10 +26,14 @@ MODEL_PROVIDER_API_KEY = os.getenv("MODEL_PROVIDER_API_KEY", "")
 MODEL_BASE_URL = os.getenv("MODEL_BASE_URL", "")
 MODEL_NAME = os.getenv("MODEL_NAME", "")
 
+# 日志配置：轻量控制台日志。
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+LOG_REQUESTS = os.getenv("LOG_REQUESTS", "true").lower() == "true"
+
 # CORS 配置，允许前端跨域访问
 CORS_ALLOW_ORIGINS = os.getenv(
     "CORS_ALLOW_ORIGINS",
-    ""
+    "https://localhost:5173,http://localhost:5173"
 ).split(",")
 
 

@@ -8,6 +8,7 @@ wheels/
 
 # Virtual environments
 .venv
+node_modules/
 # VS Code settings
 .vscode/
 # apitest
@@ -23,3 +24,5 @@ users
 .claude
 docs
 data
+tests
+AGENTS.md
