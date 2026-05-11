@@ -4,9 +4,14 @@ import MessageContent from './components/MessageContent.vue'
 import SkillManagerDialog from './components/SkillManagerDialog.vue'
 import SkillPicker from './components/SkillPicker.vue'
 import SkillChips from './components/SkillChips.vue'
+import RowMenu from './components/RowMenu.vue'
+import RenameInline from './components/RenameInline.vue'
+import ConfirmDialog from './components/ConfirmDialog.vue'
 import {
   createProject,
   createSession,
+  deleteProject,
+  deleteSession,
   getCurrentUserId,
   getErrorMessage,
   getStoredToken,
@@ -17,6 +22,8 @@ import {
   logout,
   refreshAccessToken,
   register as registerAccount,
+  renameProject,
+  renameSession,
   sendChatMessage,
   setStoredToken,
   stopChatGeneration,
@@ -86,6 +93,143 @@ const displayUser = computed(() => {
   return savedEmail || (userId ? `${userId.slice(0, 8)}...` : '已登录')
 })
 const avatarLetter = computed(() => (displayUser.value.slice(0, 1) || 'U').toUpperCase())
+
+// ── 科目 / 会话管理（重命名 / 删除） ─────────────────────────────────────────
+// openMenuKey / renamingKey 使用 'project:{pid}' / 'session:{sid}' 命名空间以区分同 id 冲突
+const openMenuKey = ref<string | null>(null)
+const renamingKey = ref<string | null>(null)
+const renameSubmitting = ref(false)
+
+type DeleteTarget =
+  | { kind: 'project'; id: string; name: string }
+  | { kind: 'session'; id: string; name: string }
+
+const confirmDelete = ref<DeleteTarget | null>(null)
+const deleteSubmitting = ref(false)
+const deleteError = ref('')
+
+function projectKey(scope: 'sidebar' | 'card', pid: string): string {
+  return `${scope}:project:${pid}`
+}
+
+function sessionKey(sid: string): string {
+  return `session:${sid}`
+}
+
+function toggleMenu(key: string): void {
+  openMenuKey.value = openMenuKey.value === key ? null : key
+}
+
+function closeMenu(): void {
+  openMenuKey.value = null
+}
+
+function startRename(key: string): void {
+  renamingKey.value = key
+  openMenuKey.value = null
+}
+
+function cancelRename(): void {
+  renamingKey.value = null
+}
+
+async function submitProjectRename(project: ProjectItem, nextName: string): Promise<void> {
+  renameSubmitting.value = true
+  errorMessage.value = ''
+  try {
+    const updated = await renameProject(project.pid, nextName)
+    projects.value = projects.value.map((item) => (item.pid === updated.pid ? updated : item))
+    if (currentProject.value?.pid === updated.pid) currentProject.value = updated
+    renamingKey.value = null
+  } catch (error) {
+    errorMessage.value = getErrorMessage(error)
+  } finally {
+    renameSubmitting.value = false
+  }
+}
+
+async function submitSessionRename(session: SessionItem, nextName: string): Promise<void> {
+  renameSubmitting.value = true
+  errorMessage.value = ''
+  try {
+    const updated = await renameSession(session.sid, nextName)
+    sessions.value = sessions.value.map((item) => (item.sid === updated.sid ? updated : item))
+    if (currentSession.value?.sid === updated.sid) currentSession.value = updated
+    renamingKey.value = null
+  } catch (error) {
+    errorMessage.value = getErrorMessage(error)
+  } finally {
+    renameSubmitting.value = false
+  }
+}
+
+function askDeleteProject(project: ProjectItem): void {
+  openMenuKey.value = null
+  deleteError.value = ''
+  confirmDelete.value = { kind: 'project', id: project.pid, name: project.projectname }
+}
+
+function askDeleteSession(session: SessionItem): void {
+  openMenuKey.value = null
+  deleteError.value = ''
+  confirmDelete.value = { kind: 'session', id: session.sid, name: session.sessionname }
+}
+
+function cancelDelete(): void {
+  if (deleteSubmitting.value) return
+  confirmDelete.value = null
+  deleteError.value = ''
+}
+
+async function performDelete(): Promise<void> {
+  const target = confirmDelete.value
+  if (!target || deleteSubmitting.value) return
+
+  deleteSubmitting.value = true
+  deleteError.value = ''
+  try {
+    if (target.kind === 'project') {
+      await deleteProject(target.id)
+      projects.value = projects.value.filter((item) => item.pid !== target.id)
+      if (currentProject.value?.pid === target.id) {
+        currentAbort.value?.abort()
+        currentProject.value = null
+        currentSession.value = null
+        messages.value = []
+        sessions.value = []
+        currentView.value = 'overview'
+      }
+    } else {
+      await deleteSession(target.id)
+      sessions.value = sessions.value.filter((item) => item.sid !== target.id)
+      if (currentSession.value?.sid === target.id) {
+        currentSession.value = null
+        messages.value = []
+        currentView.value = 'subject'
+      }
+    }
+    confirmDelete.value = null
+  } catch (error) {
+    deleteError.value = getErrorMessage(error)
+  } finally {
+    deleteSubmitting.value = false
+  }
+}
+
+const deleteDialogContent = computed(() => {
+  const target = confirmDelete.value
+  if (!target) return null
+  if (target.kind === 'project') {
+    return {
+      title: '删除科目',
+      message: `确定删除「${target.name}」？该科目下的所有会话和消息也会被一并删除，操作不可恢复。`,
+    }
+  }
+  return {
+    title: '删除会话',
+    message: `确定删除「${target.name}」？会话内的消息会被一并删除，操作不可恢复。`,
+  }
+})
 
 // ── Skill ────────────────────────────────────────────────────────────────────
 const showUserSkillManager = ref(false)
@@ -297,6 +441,10 @@ async function handleLogout(): Promise<void> {
   showSkillPicker.value = false
   showUserSkillManager.value = false
   showProjectSkillManager.value = false
+  openMenuKey.value = null
+  renamingKey.value = null
+  confirmDelete.value = null
+  deleteError.value = ''
   currentView.value = 'overview'
 }
 
@@ -701,23 +849,47 @@ onBeforeUnmount(() => {
           <div class="no-scrollbar flex-1 overflow-y-auto">
             <div class="mb-2 px-2 text-xs font-medium text-[#6b7280]">我的科目</div>
             <div class="flex flex-col gap-1">
-              <button
+              <div
                 v-for="project in previewProjects"
                 :key="project.pid"
-                type="button"
-                :class="[
-                  'flex min-h-[40px] w-full items-center justify-start gap-2 rounded-lg border px-3 py-2.5 text-left text-sm transition-colors',
-                  currentProject?.pid === project.pid
-                    ? 'border-[#d1d5db] bg-[#e5e7eb] font-medium'
-                    : 'border-transparent hover:border-[#d1d5db] hover:bg-[#e5e7eb]',
-                ]"
-                @click="goToProject(project)"
+                class="group relative"
               >
-                <svg class="h-4 w-4 flex-shrink-0 text-[#6b7280]" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
-                </svg>
-                <span class="truncate text-sm">{{ project.projectname }}</span>
-              </button>
+                <RenameInline
+                  v-if="renamingKey === projectKey('sidebar', project.pid)"
+                  :initial="project.projectname"
+                  :submitting="renameSubmitting"
+                  placeholder="新科目名称"
+                  @submit="(name) => submitProjectRename(project, name)"
+                  @cancel="cancelRename"
+                />
+                <div
+                  v-else
+                  role="button"
+                  tabindex="0"
+                  :class="[
+                    'flex min-h-[40px] w-full cursor-pointer items-center justify-start gap-2 rounded-lg border px-3 py-2.5 text-left text-sm transition-colors',
+                    currentProject?.pid === project.pid
+                      ? 'border-[#d1d5db] bg-[#e5e7eb] font-medium'
+                      : 'border-transparent hover:border-[#d1d5db] hover:bg-[#e5e7eb]',
+                  ]"
+                  @click="goToProject(project)"
+                  @keydown.enter.prevent="goToProject(project)"
+                >
+                  <svg class="h-4 w-4 flex-shrink-0 text-[#6b7280]" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+                  </svg>
+                  <span class="flex-1 truncate text-sm">{{ project.projectname }}</span>
+                  <RowMenu
+                    :open="openMenuKey === projectKey('sidebar', project.pid)"
+                    class="opacity-0 transition-opacity group-hover:opacity-100"
+                    :class="{ '!opacity-100': openMenuKey === projectKey('sidebar', project.pid) }"
+                    @toggle="toggleMenu(projectKey('sidebar', project.pid))"
+                    @close="closeMenu"
+                    @rename="startRename(projectKey('sidebar', project.pid))"
+                    @delete="askDeleteProject(project)"
+                  />
+                </div>
+              </div>
               <button
                 type="button"
                 class="flex min-h-[40px] w-full items-center justify-start gap-2 rounded-lg border border-dashed border-[#d1d5db] px-3 py-2.5 text-left text-sm text-[#6b7280] transition-colors hover:border-solid hover:bg-[#e5e7eb]"
@@ -866,22 +1038,52 @@ onBeforeUnmount(() => {
             <div class="mx-auto flex w-full max-w-3xl flex-1 flex-col justify-center">
               <h1 class="mb-10 text-4xl font-bold tracking-tight md:text-5xl">科目总览</h1>
               <div v-if="projects.length > 0" class="no-scrollbar -mx-4 flex snap-x gap-4 overflow-x-auto px-4 pb-2 md:-mx-6 md:px-6">
-                <button
+                <div
                   v-for="project in projects"
                   :key="project.pid"
-                  class="flex h-[160px] w-[280px] min-w-[280px] flex-shrink-0 snap-start flex-col justify-between rounded-2xl bg-white p-4 text-left shadow-sm transition-colors hover:bg-[#f9fafb]"
-                  type="button"
-                  @click="goToProject(project)"
+                  class="relative flex h-[160px] w-[280px] min-w-[280px] flex-shrink-0 snap-start flex-col"
                 >
-                  <div>
-                    <h3 class="mb-2 truncate text-lg font-bold">{{ project.projectname }}</h3>
-                    <p class="line-clamp-2 text-sm text-[#6b7280]">创建于 {{ formatDate(project.created_at) }}</p>
+                  <div
+                    v-if="renamingKey === projectKey('card', project.pid)"
+                    class="flex h-full flex-col justify-center rounded-2xl bg-white p-4 shadow-sm"
+                  >
+                    <div class="mb-3 text-xs text-[#6b7280]">重命名科目</div>
+                    <RenameInline
+                      :initial="project.projectname"
+                      :submitting="renameSubmitting"
+                      placeholder="新科目名称"
+                      @submit="(name) => submitProjectRename(project, name)"
+                      @cancel="cancelRename"
+                    />
                   </div>
-                  <div class="flex justify-between border-t border-[#d1d5db] pt-3 text-xs text-[#9ca3af]">
-                    <span>进入查看会话</span>
-                    <span>{{ formatDate(project.timestamp) }}</span>
+                  <button
+                    v-else
+                    class="flex h-full w-full flex-col justify-between rounded-2xl bg-white p-4 text-left shadow-sm transition-colors hover:bg-[#f9fafb]"
+                    type="button"
+                    @click="goToProject(project)"
+                  >
+                    <div>
+                      <h3 class="mb-2 truncate pr-8 text-lg font-bold">{{ project.projectname }}</h3>
+                      <p class="line-clamp-2 text-sm text-[#6b7280]">创建于 {{ formatDate(project.created_at) }}</p>
+                    </div>
+                    <div class="flex justify-between border-t border-[#d1d5db] pt-3 text-xs text-[#9ca3af]">
+                      <span>进入查看会话</span>
+                      <span>{{ formatDate(project.timestamp) }}</span>
+                    </div>
+                  </button>
+                  <div
+                    v-if="renamingKey !== projectKey('card', project.pid)"
+                    class="absolute right-2 top-2"
+                  >
+                    <RowMenu
+                      :open="openMenuKey === projectKey('card', project.pid)"
+                      @toggle="toggleMenu(projectKey('card', project.pid))"
+                      @close="closeMenu"
+                      @rename="startRename(projectKey('card', project.pid))"
+                      @delete="askDeleteProject(project)"
+                    />
                   </div>
-                </button>
+                </div>
               </div>
               <div v-else class="rounded-2xl bg-white px-6 py-10 text-center text-sm text-[#6b7280] shadow-sm">
                 还没有科目，在下方输入以新建。
@@ -931,23 +1133,43 @@ onBeforeUnmount(() => {
               </div>
               <div class="mb-4 border-b border-[#d1d5db] pb-2 text-sm font-medium text-[#6b7280]">历史会话</div>
               <div class="no-scrollbar mb-6 flex-1 space-y-3 overflow-y-auto">
-                <button
-                  v-for="session in sessions"
-                  :key="session.sid"
-                  class="group flex w-full items-center justify-between rounded-2xl bg-white p-4 text-left shadow-sm transition-colors hover:bg-[#f9fafb]"
-                  type="button"
-                  @click="goToSession(session)"
-                >
-                  <div class="min-w-0 flex-1 pr-4">
-                    <div class="truncate font-medium text-[#1f2937]">{{ session.sessionname }}</div>
-                    <div class="mt-1 truncate text-xs text-[#9ca3af]">更新于 {{ formatDateTime(session.timestamp) }}</div>
+                <div v-for="session in sessions" :key="session.sid">
+                  <div
+                    v-if="renamingKey === sessionKey(session.sid)"
+                    class="rounded-2xl bg-white p-4 shadow-sm"
+                  >
+                    <div class="mb-2 text-xs text-[#6b7280]">重命名会话</div>
+                    <RenameInline
+                      :initial="session.sessionname"
+                      :submitting="renameSubmitting"
+                      placeholder="新会话名称"
+                      @submit="(name) => submitSessionRename(session, name)"
+                      @cancel="cancelRename"
+                    />
                   </div>
-                  <div class="text-[#d1d5db] transition-colors group-hover:text-[#1f2937]">
-                    <svg class="h-5 w-5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-                    </svg>
+                  <div
+                    v-else
+                    role="button"
+                    tabindex="0"
+                    class="group flex w-full cursor-pointer items-center justify-between rounded-2xl bg-white p-4 text-left shadow-sm transition-colors hover:bg-[#f9fafb]"
+                    @click="goToSession(session)"
+                    @keydown.enter.prevent="goToSession(session)"
+                  >
+                    <div class="min-w-0 flex-1 pr-4">
+                      <div class="truncate font-medium text-[#1f2937]">{{ session.sessionname }}</div>
+                      <div class="mt-1 truncate text-xs text-[#9ca3af]">更新于 {{ formatDateTime(session.timestamp) }}</div>
+                    </div>
+                    <RowMenu
+                      :open="openMenuKey === sessionKey(session.sid)"
+                      :disable-delete="streaming && currentSession?.sid === session.sid"
+                      delete-disabled-reason="生成中不能删除"
+                      @toggle="toggleMenu(sessionKey(session.sid))"
+                      @close="closeMenu"
+                      @rename="startRename(sessionKey(session.sid))"
+                      @delete="askDeleteSession(session)"
+                    />
                   </div>
-                </button>
+                </div>
                 <div v-if="sessions.length === 0" class="rounded-2xl bg-white py-10 text-center text-[#9ca3af] shadow-sm">
                   暂无会话，在下方输入以开始。
                 </div>
@@ -1129,6 +1351,17 @@ onBeforeUnmount(() => {
       :space="projectSkillSpace"
       title="项目技能"
       @close="showProjectSkillManager = false; loadProjectSkills()"
+    />
+    <ConfirmDialog
+      v-if="confirmDelete && deleteDialogContent"
+      :title="deleteDialogContent.title"
+      :message="deleteDialogContent.message"
+      confirm-text="删除"
+      danger
+      :submitting="deleteSubmitting"
+      :error="deleteError"
+      @confirm="performDelete"
+      @cancel="cancelDelete"
     />
   </main>
 </template>

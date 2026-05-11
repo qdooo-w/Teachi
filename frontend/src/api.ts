@@ -242,6 +242,17 @@ export async function createProject(userId: string, projectname: string): Promis
   })
 }
 
+export async function renameProject(pid: string, projectname: string): Promise<ProjectItem> {
+  return request<ProjectItem>(`/projects/${encodeURIComponent(pid)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ projectname }),
+  })
+}
+
+export async function deleteProject(pid: string): Promise<void> {
+  await request<void>(`/projects/${encodeURIComponent(pid)}`, { method: 'DELETE' })
+}
+
 export async function listSessions(pid: string): Promise<SessionItem[]> {
   const response = await request<SessionListResponse>(`/projects/${encodeURIComponent(pid)}/sessions`)
   return response.sessions
@@ -252,6 +263,17 @@ export async function createSession(pid: string, sessionname: string): Promise<S
     method: 'POST',
     body: JSON.stringify({ sessionname }),
   })
+}
+
+export async function renameSession(sid: string, sessionname: string): Promise<SessionItem> {
+  return request<SessionItem>(`/sessions/${encodeURIComponent(sid)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ sessionname }),
+  })
+}
+
+export async function deleteSession(sid: string): Promise<void> {
+  await request<void>(`/sessions/${encodeURIComponent(sid)}`, { method: 'DELETE' })
 }
 
 export async function ensureChatWorkspace(userId: string): Promise<ChatWorkspace> {

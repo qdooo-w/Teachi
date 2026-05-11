@@ -142,6 +142,22 @@ class ProjectsFacade(_DataBase):
             affected = cursor.rowcount
         return affected > 0
 
+    def update_name_for_user(self, pid: str, user_uuid: str, projectname: str) -> dict | None:
+        """改名成功返回最新记录，项目不存在或不属于该用户则返回 None。"""
+        now_ts = self._now_timestamp()
+        with self._cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE projects
+                SET projectname = ?, timestamp = ?
+                WHERE pid = ? AND user_uuid = ?
+                """,
+                (projectname, now_ts, pid, user_uuid),
+            )
+            if cursor.rowcount == 0:
+                return None
+        return self.get_for_user(pid=pid, user_uuid=user_uuid)
+
 
 class SessionsFacade(_DataBase):
     def create(self, pid: str, sessionname: str) -> dict:
@@ -240,6 +256,23 @@ class SessionsFacade(_DataBase):
             )
             affected = cursor.rowcount
         return affected > 0
+
+    def update_name_for_user(self, sid: str, user_uuid: str, sessionname: str) -> dict | None:
+        """改名成功返回最新记录，会话不存在或不属于该用户则返回 None。"""
+        now_ts = self._now_timestamp()
+        with self._cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE sessions
+                SET sessionname = ?, timestamp = ?
+                WHERE sid = ?
+                  AND pid IN (SELECT pid FROM projects WHERE user_uuid = ?)
+                """,
+                (sessionname, now_ts, sid, user_uuid),
+            )
+            if cursor.rowcount == 0:
+                return None
+        return self.get_for_user(sid=sid, user_uuid=user_uuid)
 
 
 class MessagesFacade(_DataBase):

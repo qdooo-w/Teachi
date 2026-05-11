@@ -60,6 +60,12 @@ class CreateProjectRequest(BaseModel):
     projectname: str = Field(..., min_length=1, max_length=100, description="项目名称")
 
 
+class UpdateProjectRequest(BaseModel):
+    """重命名项目请求"""
+
+    projectname: str = Field(..., min_length=1, max_length=100, description="项目新名称")
+
+
 class SessionItem(BaseModel):
     """会话信息"""
 
@@ -79,6 +85,12 @@ class CreateSessionRequest(BaseModel):
     """创建会话请求"""
 
     sessionname: str = Field(..., min_length=1, max_length=100, description="会话名称")
+
+
+class UpdateSessionRequest(BaseModel):
+    """重命名会话请求"""
+
+    sessionname: str = Field(..., min_length=1, max_length=100, description="会话新名称")
 
 
 class MessageItem(BaseModel):
@@ -156,6 +168,58 @@ def create_user_project(
     )
 
 
+@router.patch("/projects/{pid}", response_model=ProjectItem)
+def rename_project(
+    pid: str,
+    payload: UpdateProjectRequest,
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> ProjectItem:
+    """重命名项目。项目不存在或不属于当前用户返回 404。"""
+    user_uuid = current_user.get("uuid")
+    if not isinstance(user_uuid, str):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "AUTH_TOKEN_INVALID", "message": "Invalid token"},
+        )
+
+    project = db.projects.update_name_for_user(
+        pid=pid,
+        user_uuid=user_uuid,
+        projectname=payload.projectname,
+    )
+    if project is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "RESOURCE_NOT_FOUND", "message": "Project not found"},
+        )
+    return ProjectItem(
+        pid=project["pid"],
+        projectname=project["projectname"],
+        timestamp=float(project["timestamp"]),
+        created_at=float(project["created_at"]),
+    )
+
+
+@router.delete("/projects/{pid}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_project(
+    pid: str,
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> None:
+    """删除项目。外键 ON DELETE CASCADE 会级联删除该项目下所有会话与消息。"""
+    user_uuid = current_user.get("uuid")
+    if not isinstance(user_uuid, str):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "AUTH_TOKEN_INVALID", "message": "Invalid token"},
+        )
+
+    if not db.projects.delete_for_user(pid=pid, user_uuid=user_uuid):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "RESOURCE_NOT_FOUND", "message": "Project not found"},
+        )
+
+
 @router.get("/projects/{pid}/sessions", response_model=SessionListResponse)
 def list_project_sessions(
     pid: str,
@@ -225,6 +289,58 @@ def create_project_session(
         timestamp=float(session["timestamp"]),
         created_at=float(session["created_at"]),
     )
+
+
+@router.patch("/sessions/{sid}", response_model=SessionItem)
+def rename_session(
+    sid: str,
+    payload: UpdateSessionRequest,
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> SessionItem:
+    """重命名会话。会话不存在或不属于当前用户返回 404。"""
+    user_uuid = current_user.get("uuid")
+    if not isinstance(user_uuid, str):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "AUTH_TOKEN_INVALID", "message": "Invalid token"},
+        )
+
+    session = db.sessions.update_name_for_user(
+        sid=sid,
+        user_uuid=user_uuid,
+        sessionname=payload.sessionname,
+    )
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "RESOURCE_NOT_FOUND", "message": "Session not found"},
+        )
+    return SessionItem(
+        sid=session["sid"],
+        sessionname=session["sessionname"],
+        timestamp=float(session["timestamp"]),
+        created_at=float(session["created_at"]),
+    )
+
+
+@router.delete("/sessions/{sid}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_session(
+    sid: str,
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> None:
+    """删除会话。外键 ON DELETE CASCADE 会级联删除该会话下所有消息。"""
+    user_uuid = current_user.get("uuid")
+    if not isinstance(user_uuid, str):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "AUTH_TOKEN_INVALID", "message": "Invalid token"},
+        )
+
+    if not db.sessions.delete_for_user(sid=sid, user_uuid=user_uuid):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "RESOURCE_NOT_FOUND", "message": "Session not found"},
+        )
 
 
 @router.get("/sessions/{sid}/messages", response_model=MessageListResponse)

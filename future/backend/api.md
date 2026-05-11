@@ -313,6 +313,57 @@ FastAPI 和后端当前可能返回两类错误体：
 | 403 | `{ code: "FORBIDDEN", message: "Cannot create project for other user" }` | 为其他用户创建项目 |
 | 422 | 参数校验错误 | 请求体字段不符合约束 |
 
+### PATCH `/projects/{pid}`
+
+意义：重命名项目。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `pid` | string | 是 | 项目 ID |
+
+请求体：
+
+| 字段 | 类型 | 必填 | 约束 | 说明 |
+|---|---|---|---|---|
+| `projectname` | string | 是 | 1-100 字符 | 项目新名称 |
+
+成功返回：`200 OK`
+
+返回体：`ProjectItem`（`timestamp` 会被更新为改名时刻）
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 404 | `{ code: "RESOURCE_NOT_FOUND", message: "Project not found" }` | 项目不存在或不属于当前用户 |
+| 422 | 参数校验错误 | 请求体字段不符合约束 |
+
+### DELETE `/projects/{pid}`
+
+意义：删除项目。外键 `ON DELETE CASCADE` 会级联删除该项目下的所有会话与消息，同时通过文件系统门面保留的 `data/{user_uuid}/{pid}` 目录不会被删除（当前实现不清理文件系统）。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `pid` | string | 是 | 项目 ID |
+
+请求体：无。
+
+成功返回：`204 No Content`，无返回体。
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 404 | `{ code: "RESOURCE_NOT_FOUND", message: "Project not found" }` | 项目不存在或不属于当前用户 |
+
 ## 会话接口
 
 ### GET `/projects/{pid}/sessions`
@@ -371,6 +422,59 @@ FastAPI 和后端当前可能返回两类错误体：
 |---|---|---|
 | 404 | `{ code: "RESOURCE_NOT_FOUND", message: "Project not found" }` | 项目不存在或不属于当前用户 |
 | 422 | 参数校验错误 | 请求体字段不符合约束 |
+
+### PATCH `/sessions/{sid}`
+
+意义：重命名会话。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `sid` | string | 是 | 会话 ID |
+
+请求体：
+
+| 字段 | 类型 | 必填 | 约束 | 说明 |
+|---|---|---|---|---|
+| `sessionname` | string | 是 | 1-100 字符 | 会话新名称 |
+
+成功返回：`200 OK`
+
+返回体：`SessionItem`（`timestamp` 会被更新为改名时刻）
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 404 | `{ code: "RESOURCE_NOT_FOUND", message: "Session not found" }` | 会话不存在或不属于当前用户 |
+| 422 | 参数校验错误 | 请求体字段不符合约束 |
+
+### DELETE `/sessions/{sid}`
+
+意义：删除会话。外键 `ON DELETE CASCADE` 会级联删除该会话下的所有消息。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `sid` | string | 是 | 会话 ID |
+
+请求体：无。
+
+成功返回：`204 No Content`，无返回体。
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 404 | `{ code: "RESOURCE_NOT_FOUND", message: "Session not found" }` | 会话不存在或不属于当前用户 |
+
+说明：当前实现不检查会话是否正在生成；如果该会话正在运行 `send` / `regenerate`，删除会让 `save_node` 在外键约束下写入失败，但用户锁仍会通过 `RELEASE_LOCK` 释放。前端 UI 建议在会话生成过程中隐藏 / 禁用删除入口。
 
 ## 消息接口
 
