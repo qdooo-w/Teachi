@@ -25,6 +25,7 @@ uv sync之后 uv run --env-file .env uvicorn backend.main:app --reload --host 12
 - 前端
 
 先自建了.env文件。需要输入的环境变量有：
+```
 VITE_API_BASE_URL=
 VITE_DEV_API_PROXY_TARGET=http://localhost:8000(默认值，如果后端地址不同需要修改)
 
