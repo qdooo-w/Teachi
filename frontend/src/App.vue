@@ -7,20 +7,18 @@ import SkillChips from './components/SkillChips.vue'
 import RowMenu from './components/RowMenu.vue'
 import RenameInline from './components/RenameInline.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
+import { useRouter } from 'vue-router'
 import {
-  createProject,
   createSession,
   deleteProject,
   deleteSession,
   getCurrentUserId,
   getErrorMessage,
   listDisplayMessages,
-  listProjects,
   listSessions,
   renameProject,
   renameSession,
   sendChatMessage,
-  setStoredToken,
   stopChatGeneration,
   type DisplayMessage,
   type ProjectItem,
@@ -28,6 +26,8 @@ import {
 } from './api'
 import { listSkills, type FileSpace, type SkillMeta } from './skills'
 import { useAuth } from './composables/useAuth'
+import { useProjects } from './composables/useProjects'
+import { useLayout } from './composables/useLayout'
 
 // ── 认证（状态 / 行为均来自 composable，模板继续使用同名 ref） ───────────────
 const {
@@ -51,20 +51,17 @@ const {
 type View = 'overview' | 'subject' | 'chat'
 const currentView = ref<View>('overview')
 
-const projects = ref<ProjectItem[]>([])
+const router = useRouter()
+
+const { projects, loadProjects, resetProjects, upsertProject, removeProject } = useProjects()
+const { sidebarOpen, isMobile, handleResize, closeSidebarOnMobile } = useLayout()
 const sessions = ref<SessionItem[]>([])
 const currentProject = ref<ProjectItem | null>(null)
 const currentSession = ref<SessionItem | null>(null)
 
-const newProjectName = ref('')
 const newSessionDraft = ref('')
-const creatingProject = ref(false)
 const creatingSession = ref(false)
 
-// 侧边栏
-const sidebarOpen = ref(true)
-const windowWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1024)
-const isMobile = computed(() => windowWidth.value < 768)
 const previewProjects = computed(() => projects.value.slice(0, 10))
 
 // ── 聊天状态 ─────────────────────────────────────────────────────────────────
@@ -131,7 +128,7 @@ async function submitProjectRename(project: ProjectItem, nextName: string): Prom
   errorMessage.value = ''
   try {
     const updated = await renameProject(project.pid, nextName)
-    projects.value = projects.value.map((item) => (item.pid === updated.pid ? updated : item))
+    upsertProject(updated)
     if (currentProject.value?.pid === updated.pid) currentProject.value = updated
     renamingKey.value = null
   } catch (error) {
@@ -183,7 +180,7 @@ async function performDelete(): Promise<void> {
   try {
     if (target.kind === 'project') {
       await deleteProject(target.id)
-      projects.value = projects.value.filter((item) => item.pid !== target.id)
+      removeProject(target.id)
       if (currentProject.value?.pid === target.id) {
         currentAbort.value?.abort()
         currentProject.value = null
@@ -280,11 +277,6 @@ function handleChatScroll(): void {
   stickToBottom.value = isChatAtBottom()
 }
 
-function handleResize(): void {
-  windowWidth.value = window.innerWidth
-  sidebarOpen.value = !isMobile.value
-}
-
 // 科目总览横向卡片条：把纵向滚轮转成横向滚动，并用 rAF 缓动贴近原生横滑手感
 const overviewStripEl = ref<HTMLElement | null>(null)
 let overviewScrollTarget = 0
@@ -334,27 +326,6 @@ watch(overviewStripEl, (el, prev) => {
 })
 
 // ── 导航 ──────────────────────────────────────────────────────────────────────
-function goHome(): void {
-  currentView.value = 'overview'
-  currentProject.value = null
-  currentSession.value = null
-  messages.value = []
-  if (isMobile.value) sidebarOpen.value = false
-}
-
-async function goToProject(project: ProjectItem): Promise<void> {
-  currentProject.value = project
-  currentSession.value = null
-  messages.value = []
-  currentView.value = 'subject'
-  if (isMobile.value) sidebarOpen.value = false
-  try {
-    await loadSessions(project.pid)
-  } catch (error) {
-    errorMessage.value = getErrorMessage(error)
-  }
-}
-
 function goToProjectDetail(): void {
   if (!currentProject.value) return
   currentSession.value = null
@@ -375,12 +346,6 @@ async function goToSession(session: SessionItem): Promise<void> {
 }
 
 // ── 数据加载 ─────────────────────────────────────────────────────────────────
-async function loadProjects(): Promise<void> {
-  const userId = getCurrentUserId()
-  if (!userId) return
-  projects.value = await listProjects(userId)
-}
-
 async function loadSessions(pid: string): Promise<void> {
   sessions.value = await listSessions(pid)
 }
@@ -391,36 +356,15 @@ async function loadMessages(): Promise<void> {
   scrollToBottom(true)
 }
 
-async function prepareAfterAuth(): Promise<void> {
-  const userId = getCurrentUserId()
-  if (!userId) {
-    setStoredToken(null)
-    throw new Error('无法从 access token 读取用户 ID。')
-  }
-
-  preparing.value = true
-  errorMessage.value = ''
-
-  try {
-    await loadProjects()
-    currentView.value = 'overview'
-    currentProject.value = null
-    currentSession.value = null
-  } finally {
-    preparing.value = false
-  }
-}
-
 async function handleLogout(): Promise<void> {
   await authLogout()
   currentAbort.value?.abort()
   currentProject.value = null
   currentSession.value = null
-  projects.value = []
+  resetProjects()
   sessions.value = []
   messages.value = []
   draft.value = ''
-  newProjectName.value = ''
   newSessionDraft.value = ''
   toolStatus.value = ''
   errorMessage.value = ''
@@ -437,27 +381,7 @@ async function handleLogout(): Promise<void> {
   currentView.value = 'overview'
 }
 
-// ── 创建科目 / 会话 ──────────────────────────────────────────────────────────
-async function handleCreateProject(): Promise<void> {
-  const name = newProjectName.value.trim()
-  if (!name || creatingProject.value) return
-  const userId = getCurrentUserId()
-  if (!userId) return
-
-  creatingProject.value = true
-  errorMessage.value = ''
-  try {
-    const project = await createProject(userId, name)
-    newProjectName.value = ''
-    projects.value = [project, ...projects.value]
-    await goToProject(project)
-  } catch (error) {
-    errorMessage.value = getErrorMessage(error)
-  } finally {
-    creatingProject.value = false
-  }
-}
-
+// ── 创建会话 ─────────────────────────────────────────────────────────────────
 // 从 subject 视图"输入首条消息 + 回车"创建新会话并立即发送
 async function handleStartNewSessionFromSubject(): Promise<void> {
   const text = newSessionDraft.value.trim()
@@ -757,7 +681,15 @@ watch(currentProject, () => {
 })
 
 onMounted(() => {
-  setOnTokenReady(prepareAfterAuth)
+  setOnTokenReady(async () => {
+    preparing.value = true
+    errorMessage.value = ''
+    try {
+      await loadProjects()
+    } finally {
+      preparing.value = false
+    }
+  })
   window.addEventListener('teachi-token-change', handleTokenChange)
   window.addEventListener('resize', handleResize)
   handleResize()
@@ -876,7 +808,7 @@ onBeforeUnmount(() => {
           <button
             class="mb-6 mt-2 flex items-center gap-2 px-2 text-left"
             type="button"
-            @click="goHome"
+            @click="closeSidebarOnMobile(); router.push({ name: 'overview' })"
           >
             <span class="text-xl font-bold tracking-tight">Teachi</span>
           </button>
@@ -907,8 +839,8 @@ onBeforeUnmount(() => {
                       ? 'border-[#d1d5db] bg-[#e5e7eb] font-medium'
                       : 'border-transparent hover:border-[#d1d5db] hover:bg-[#e5e7eb]',
                   ]"
-                  @click="goToProject(project)"
-                  @keydown.enter.prevent="goToProject(project)"
+                  @click="closeSidebarOnMobile(); router.push({ name: 'subject', params: { pid: project.pid } })"
+                  @keydown.enter.prevent="closeSidebarOnMobile(); router.push({ name: 'subject', params: { pid: project.pid } })"
                 >
                   <svg class="h-4 w-4 flex-shrink-0 text-[#6b7280]" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
@@ -928,7 +860,7 @@ onBeforeUnmount(() => {
               <button
                 type="button"
                 class="flex min-h-[40px] w-full items-center justify-start gap-2 rounded-lg border border-dashed border-[#d1d5db] px-3 py-2.5 text-left text-sm text-[#6b7280] transition-colors hover:border-solid hover:bg-[#e5e7eb]"
-                @click="goHome"
+                @click="closeSidebarOnMobile(); router.push({ name: 'overview' })"
               >
                 查看全部科目
               </button>
@@ -1007,7 +939,7 @@ onBeforeUnmount(() => {
                 <span v-if="preparing" class="text-xs text-[#9ca3af]">准备中</span>
               </template>
               <template v-else-if="currentView === 'subject' && currentProject">
-                <span class="cursor-pointer text-[#9ca3af] hover:text-[#1f2937]" @click="goHome">科目</span>
+                <span class="cursor-pointer text-[#9ca3af] hover:text-[#1f2937]" @click="router.push({ name: 'overview' })">科目</span>
                 <span class="text-[#9ca3af]">/</span>
                 <span class="text-[#1f2937]">{{ truncateText(currentProject.projectname, 20) }}</span>
               </template>
@@ -1069,94 +1001,9 @@ onBeforeUnmount(() => {
 
         <div class="relative flex-1 overflow-hidden">
           <!-- 1. 科目总览 -->
-          <div v-if="currentView === 'overview'" class="absolute inset-0 flex flex-col overflow-y-auto px-4 py-5 md:px-6">
-            <div class="mx-auto flex w-full max-w-3xl flex-1 flex-col justify-center">
-              <h1 class="mb-10 text-4xl font-bold tracking-tight md:text-5xl">科目总览</h1>
-              <div
-                v-if="projects.length > 0"
-                ref="overviewStripEl"
-                class="no-scrollbar -mx-4 flex gap-4 overflow-x-auto px-4 pb-2 md:-mx-6 md:px-6"
-              >
-                <div
-                  v-for="project in projects"
-                  :key="project.pid"
-                  class="relative flex h-[160px] w-[280px] min-w-[280px] flex-shrink-0 flex-col"
-                >
-                  <div
-                    v-if="renamingKey === projectKey('card', project.pid)"
-                    class="flex h-full flex-col justify-center rounded-2xl bg-white p-4 shadow-sm"
-                  >
-                    <div class="mb-3 text-xs text-[#6b7280]">重命名科目</div>
-                    <RenameInline
-                      :initial="project.projectname"
-                      :submitting="renameSubmitting"
-                      placeholder="新科目名称"
-                      @submit="(name) => submitProjectRename(project, name)"
-                      @cancel="cancelRename"
-                    />
-                  </div>
-                  <button
-                    v-else
-                    class="flex h-full w-full flex-col justify-between rounded-2xl bg-white p-4 text-left shadow-sm transition-colors hover:bg-[#f9fafb]"
-                    type="button"
-                    @click="goToProject(project)"
-                  >
-                    <div>
-                      <h3 class="mb-2 truncate pr-8 text-lg font-bold">{{ project.projectname }}</h3>
-                      <p class="line-clamp-2 text-sm text-[#6b7280]">创建于 {{ formatDate(project.created_at) }}</p>
-                    </div>
-                    <div class="flex justify-between border-t border-[#d1d5db] pt-3 text-xs text-[#9ca3af]">
-                      <span>进入查看会话</span>
-                      <span>{{ formatDate(project.timestamp) }}</span>
-                    </div>
-                  </button>
-                  <div
-                    v-if="renamingKey !== projectKey('card', project.pid)"
-                    class="absolute right-2 top-2"
-                  >
-                    <RowMenu
-                      :open="openMenuKey === projectKey('card', project.pid)"
-                      @toggle="toggleMenu(projectKey('card', project.pid))"
-                      @close="closeMenu"
-                      @rename="startRename(projectKey('card', project.pid))"
-                      @delete="askDeleteProject(project)"
-                    />
-                  </div>
-                </div>
-              </div>
-              <div v-else class="rounded-2xl bg-white px-6 py-10 text-center text-sm text-[#6b7280] shadow-sm">
-                还没有科目，在下方输入以新建。
-              </div>
-            </div>
-            <div class="mx-auto w-full max-w-3xl pb-2">
-              <p v-if="errorMessage" class="mb-2 rounded-md border border-[#efb3a7] bg-[#fff7ed] px-3 py-2 text-sm text-[#9a3412]">
-                {{ errorMessage }}
-              </p>
-              <div class="relative flex flex-col gap-3 rounded-3xl bg-white p-4 shadow-sm transition-shadow focus-within:ring-2 focus-within:ring-[#1f6f5b]/20">
-                <textarea
-                  v-model="newProjectName"
-                  class="min-h-[24px] w-full resize-none overflow-y-auto border-none bg-transparent leading-normal text-[#1f2937] outline-none placeholder:text-[#9ca3af]"
-                  placeholder="新建科目：输入科目名称..."
-                  rows="1"
-                  :disabled="creatingProject"
-                  @keydown.enter.prevent="handleCreateProject"
-                />
-                <div class="flex items-center justify-end">
-                  <button
-                    type="button"
-                    class="flex h-9 items-center justify-center gap-1 rounded-2xl border border-transparent bg-[#1f2937] px-5 text-white transition hover:bg-[#111827] disabled:cursor-not-allowed disabled:border-[#d1d5db] disabled:bg-white disabled:text-[#9ca3af]"
-                    :disabled="!newProjectName.trim() || creatingProject"
-                    title="创建科目"
-                    @click="handleCreateProject"
-                  >
-                    <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14m0 0-6-6m6 6-6 6" />
-                    </svg>
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
+          <RouterView v-slot="{ Component }">
+            <component :is="Component" v-if="$route.name === 'overview'" />
+          </RouterView>
 
           <!-- 2. 科目概览（会话列表） -->
           <div v-if="currentView === 'subject' && currentProject" class="absolute inset-0 flex flex-col overflow-y-auto px-4 py-5 md:px-6">
