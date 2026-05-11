@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import MessageContent from './components/MessageContent.vue'
 import SkillManagerDialog from './components/SkillManagerDialog.vue'
 import SkillPicker from './components/SkillPicker.vue'
@@ -14,14 +14,9 @@ import {
   deleteSession,
   getCurrentUserId,
   getErrorMessage,
-  getStoredToken,
   listDisplayMessages,
   listProjects,
   listSessions,
-  login,
-  logout,
-  refreshAccessToken,
-  register as registerAccount,
   renameProject,
   renameSession,
   sendChatMessage,
@@ -32,23 +27,25 @@ import {
   type SessionItem,
 } from './api'
 import { listSkills, type FileSpace, type SkillMeta } from './skills'
+import { useAuth } from './composables/useAuth'
 
-const LAST_EMAIL_KEY = 'teachi.last_email'
-
-// ── 认证 ──────────────────────────────────────────────────────────────────────
-const authMode = ref<'login' | 'register'>('login')
-const authForm = reactive({
-  username: '',
-  email: localStorage.getItem(LAST_EMAIL_KEY) || '',
-  password: '',
-})
-
-const token = ref<string | null>(getStoredToken())
-const bootstrapping = ref(true)
-const preparing = ref(false)
-const authSubmitting = ref(false)
-const authError = ref('')
-const errorMessage = ref('')
+// ── 认证（状态 / 行为均来自 composable，模板继续使用同名 ref） ───────────────
+const {
+  token,
+  bootstrapping,
+  preparing,
+  authSubmitting,
+  authError,
+  errorMessage,
+  authMode,
+  authForm,
+  initializeAuth,
+  submitAuth,
+  handleLogout: authLogout,
+  handleTokenChange,
+  setOnTokenReady,
+  displayUser: displayUserFn,
+} = useAuth()
 
 // ── 视图与导航 ────────────────────────────────────────────────────────────────
 type View = 'overview' | 'subject' | 'chat'
@@ -87,11 +84,7 @@ const isChatReady = computed(
   () => Boolean(isAuthenticated.value && currentProject.value && currentSession.value && !preparing.value),
 )
 const canSend = computed(() => Boolean(draft.value.trim() && isChatReady.value && !streaming.value))
-const displayUser = computed(() => {
-  const savedEmail = localStorage.getItem(LAST_EMAIL_KEY)
-  const userId = token.value ? getCurrentUserId() : null
-  return savedEmail || (userId ? `${userId.slice(0, 8)}...` : '已登录')
-})
+const displayUser = computed(() => displayUserFn())
 const avatarLetter = computed(() => (displayUser.value.slice(0, 1) || 'U').toUpperCase())
 
 // ── 科目 / 会话管理（重命名 / 删除） ─────────────────────────────────────────
@@ -266,10 +259,6 @@ function formatDateTime(ts: number): string {
   })
 }
 
-function handleTokenChange(event: Event): void {
-  token.value = (event as CustomEvent<string | null>).detail
-}
-
 function scrollToBottom(force = false): void {
   if (force) stickToBottom.value = true
   nextTick(() => {
@@ -422,56 +411,8 @@ async function prepareAfterAuth(): Promise<void> {
   }
 }
 
-async function initializeAuth(): Promise<void> {
-  try {
-    if (!getStoredToken() || !getCurrentUserId()) {
-      await refreshAccessToken().catch(() => undefined)
-    }
-
-    token.value = getStoredToken()
-    if (token.value) await prepareAfterAuth()
-  } catch (error) {
-    const message = getErrorMessage(error)
-    errorMessage.value = message
-    authError.value = message
-    setStoredToken(null)
-  } finally {
-    bootstrapping.value = false
-  }
-}
-
-async function submitAuth(): Promise<void> {
-  authError.value = ''
-  errorMessage.value = ''
-
-  if (!authForm.email.trim() || !authForm.password.trim()) {
-    authError.value = '请输入邮箱和密码。'
-    return
-  }
-
-  if (authMode.value === 'register' && !authForm.username.trim()) {
-    authError.value = '请输入用户名。'
-    return
-  }
-
-  authSubmitting.value = true
-  try {
-    if (authMode.value === 'register') {
-      await registerAccount(authForm.username.trim(), authForm.email.trim(), authForm.password)
-    }
-
-    await login(authForm.email.trim(), authForm.password)
-    localStorage.setItem(LAST_EMAIL_KEY, authForm.email.trim())
-    await prepareAfterAuth()
-  } catch (error) {
-    authError.value = getErrorMessage(error)
-  } finally {
-    authSubmitting.value = false
-  }
-}
-
 async function handleLogout(): Promise<void> {
-  await logout()
+  await authLogout()
   currentAbort.value?.abort()
   currentProject.value = null
   currentSession.value = null
@@ -816,6 +757,7 @@ watch(currentProject, () => {
 })
 
 onMounted(() => {
+  setOnTokenReady(prepareAfterAuth)
   window.addEventListener('teachi-token-change', handleTokenChange)
   window.addEventListener('resize', handleResize)
   handleResize()
