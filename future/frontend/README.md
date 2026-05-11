@@ -7,19 +7,32 @@
 ```
 frontend/
 ├─ index.html              Vite 入口 HTML，仅挂载 <div id="app">
-├─ package.json            依赖与脚本（vite / vue / tailwind / katex / mermaid / markdown-it 等）
+├─ package.json            依赖与脚本（vite / vue / vue-router / tailwind / katex / mermaid / markdown-it 等）
 ├─ vite.config.ts          开发代理：把 /auth /loop /users /projects /sessions /messages /tools /health 转发到后端
 ├─ tsconfig.json
 ├─ postcss.config.js       Tailwind v4 PostCSS 插件配置
 └─ src/
-   ├─ main.ts              createApp(App).mount('#app')，仅引入 style.css
+   ├─ main.ts              createApp(App).use(router).mount('#app')
    ├─ style.css            全局样式：Tailwind + KaTeX + highlight.js 主题 + 自定义 .markdown-body 作用域
    ├─ vite-env.d.ts        Vite 环境类型声明
-   ├─ App.vue              单页应用根组件，承载全部视图、路由、聊天与技能状态
+   ├─ App.vue              应用外壳：登录条件渲染 + 侧边栏 + header + <RouterView>
    ├─ api.ts               后端 HTTP 客户端：鉴权、资源 CRUD、SSE、文件 API
    ├─ skills.ts            Skill 领域逻辑：frontmatter 校验、结构化读写、SKILL.md 模板
+   ├─ router/
+   │  └─ index.ts          路由表 + afterEach 设 document.title（静态 title）
+   ├─ composables/
+   │  ├─ useAuth.ts        token / bootstrapping / preparing / 登录 / 登出 / onTokenReady 钩子
+   │  ├─ useProjects.ts    模块级 projects 单例 + load/upsert/remove/prepend/reset
+   │  └─ useLayout.ts      sidebarOpen / isMobile / handleResize / closeSidebarOnMobile
+   ├─ views/
+   │  ├─ OverviewView.vue  `/`：科目卡片总览 + 新建科目
+   │  ├─ SubjectView.vue   `/projects/:pid`：该科目会话列表 + 首条消息创建会话
+   │  └─ ChatView.vue      `/projects/:pid/sessions/:sid`：消息流 + composer + SSE 主循环 + skill picker
    ├─ components/
    │  ├─ MessageContent.vue       Markdown 消息渲染与代码块复制、Mermaid 延迟渲染
+   │  ├─ RenameInline.vue         行内重命名输入（回车提交 / Esc 取消）
+   │  ├─ RowMenu.vue              列表项右上三点菜单（重命名 / 删除）
+   │  ├─ ConfirmDialog.vue        二次确认对话框（危险操作）
    │  ├─ SkillChips.vue           已选技能的 chip 行（发送时随消息带走）
    │  ├─ SkillPicker.vue          @ 触发的技能下拉选择器，支持搜索与键盘导航
    │  └─ SkillManagerDialog.vue   用户级 / 项目级技能管理对话框（结构化表单 + 原始兜底）
@@ -33,22 +46,39 @@ frontend/
 
 ```
 main.ts
- └─ App.vue ───┬─ api.ts              所有后端调用的统一出口
-               ├─ skills.ts           ── 依赖 api.ts 的通用文件 API
-               ├─ components/MessageContent.vue
-               │     └─ markdown/renderer.ts
-               │           ├─ markdown/highlight.ts
-               │           └─ markdown/mermaid.ts
-               ├─ components/SkillChips.vue
-               ├─ components/SkillPicker.vue
-               └─ components/SkillManagerDialog.vue
-                     └─ skills.ts
+ └─ App.vue (外壳)
+     ├─ composables/useAuth         ── token / bootstrapping / preparing / onTokenReady
+     ├─ composables/useProjects     ── projects 列表单例（跨视图共享）
+     ├─ composables/useLayout       ── sidebarOpen / isMobile
+     ├─ router/index.ts             ── 路由表 + document.title 默认值
+     ├─ api.ts                      所有后端调用的统一出口
+     ├─ skills.ts                   ── 依赖 api.ts 的通用文件 API
+     └─ <RouterView>
+         ├─ views/OverviewView.vue  ── useProjects / useLayout + Row/Rename/Confirm
+         ├─ views/SubjectView.vue   ── useProjects / useLayout + listSessions/createSession/...
+         └─ views/ChatView.vue      ── useAuth(preparing) + useProjects + listSessions
+                                        + sendChatMessage/stopChatGeneration + SkillPicker/Chips
 ```
 
 - `api.ts` 是所有后端通信的唯一出口，封装 `fetch` + 401 自动刷新、JWT 本地存储、SSE 帧解析、通用文件 API
 - `skills.ts` 把 Skill 视为「`skills/<name>/SKILL.md` 文件」，业务层全部走 `api.ts` 的通用文件 API
 - `markdown/` 三个文件是纯渲染层，不依赖后端
-- `App.vue` 是唯一的状态容器：不引入 Vuex / Pinia，状态靠 `ref` / `reactive` + `computed` 组织
+- 不引入 Pinia：跨视图共享状态走 composable 单例（模块级 `ref`），视图独占状态（messages/draft/streaming 等）在各自视图的 `<script setup>` 里
+- 登录态是条件渲染，不进路由：`App.vue` 顶层 `v-if="bootstrapping || !isAuthenticated"` 先渲染登录卡片，`v-else` 里才挂 `<RouterView>`，因此未登录访问任何 URL 都会看到登录表单，登录后原 URL 继续生效
+
+## 路由
+
+| 路径 | View | meta.title | 状态边界 |
+|---|---|---|---|
+| `/` | `OverviewView` | `科目总览` | 科目列表共享（`useProjects`） |
+| `/projects/:pid` | `SubjectView` | 动态（科目名） | 该项目会话列表；视图独占 |
+| `/projects/:pid/sessions/:sid` | `ChatView` | 动态（科目 / 会话） | 消息 / 草稿 / SSE 全部随视图卸载释放 |
+| `/:pathMatch(.*)*` | — | — | 404 重定向到 `/` |
+
+- `ChatView` 用 `:key="${pid}:${sid}"` 强制按会话重建，避免切换 sid 时状态串联
+- SubjectView 创建首条消息时跳转到 `/projects/:pid/sessions/:sid?initial=<text>`，ChatView 挂载后消费 `initial`、调 `router.replace` 去掉 query 再发送
+- `document.title` 由 `router.afterEach`（静态）+ SubjectView / ChatView 的 watcher（动态）合力设置
+- `App.vue` 的面包屑和 header 按钮按 `$route.name` 分支显示；项目技能按钮在 `route.params.pid` 存在时显示（subject 与 chat 两个视图都可用）
 
 ## 已完成的功能
 
@@ -60,19 +90,22 @@ main.ts
 - 401 自动刷新：`api.ts` 里任意请求命中 401 会静默调用 `/auth/refresh` 重试一次
 - 登出清空所有本地状态并请求 `/auth/logout`
 
-### 2. 科目与会话（导航三态）
+### 2. 科目与会话（路由三态）
 
-`currentView` 在三个视图间切换：
+三条路由驱动三个视图（详见上文「路由」一节）：
 
-| 视图 | 说明 |
+| 路径 / View | 说明 |
 |---|---|
-| `overview` | 科目总览：卡片列表 + 底部「输入科目名直接新建」 |
-| `subject` | 某科目下的历史会话列表 + 底部「输入首条消息 → 自动新建会话并发送」 |
-| `chat` | 具体会话的消息流 + 输入框 |
+| `/` → `OverviewView` | 科目总览：卡片列表 + 底部「输入科目名直接新建」。每张卡片支持右上三点菜单改名 / 删除 |
+| `/projects/:pid` → `SubjectView` | 该科目下的历史会话列表 + 底部「输入首条消息 → 自动新建会话并跳到 chat 发送」。每条会话支持改名 / 删除 |
+| `/projects/:pid/sessions/:sid` → `ChatView` | 具体会话的消息流 + 输入框 + 流式生成 |
 
-- 侧边栏显示最近 10 个科目，含「查看全部」跳回 `overview`
-- 顶栏是面包屑（科目 / 会话名）
-- 响应式：宽度 < 768px 切换到移动端布局，侧边栏变浮层 + 遮罩
+- 侧边栏显示最近 10 个科目，点击即 `router.push({ name: 'subject', params: { pid } })`，底部「查看全部科目」跳回 `/`
+- 顶栏面包屑按 `$route.name` 分支：`科目总览` / `科目 / <名>` / `<科目> / <会话>`
+- 侧边栏项目按钮的 active 态由 `$route.params.pid === project.pid` 判断
+- 响应式：宽度 < 768px 切换到移动端布局，侧边栏变浮层 + 遮罩，`useLayout().closeSidebarOnMobile()` 在跳转前自动关闭
+- 归属校验降级：URL 手改到不存在或不属于当前用户的 pid/sid，SubjectView / ChatView 的 `onMounted` 会 `router.replace` 到上一层（chat → subject → overview）
+- 浏览器前进 / 后退、F5 刷新、URL 分享三件事由路由天然支持
 
 ### 3. 聊天主循环（SSE）
 
@@ -153,10 +186,10 @@ Mermaid 渲染失败降级为可见的 error 卡片而不是白屏。
 
 - 消息级 regenerate、版本切换（后端已支持 `/messages/{msg_id}/versions`、`/messages/{msg_id}/switch-version`，UI 未接）
 - 附件、图片、语音输入
-- 会话重命名 / 删除；项目重命名 / 删除
 - 多客户端会话广播、通知
 - 侧边栏「文档 / 仪表盘 / 设置」按钮仅占位、禁用点击
 - 通用文件浏览器 UI（目前文件 API 仅被 Skill 管理使用）
+- 项目技能在对话框中增删后通过 `window` 自定义事件 `teachi-project-skills-changed` 通知 ChatView 刷新；后续可上移到 `useProjectSkills` composable 去掉事件总线
 
 ## 开发与运行
 
@@ -184,6 +217,9 @@ npm run preview
 ## 关键约定
 
 - 所有后端调用必须经 `api.ts`，不要在组件里裸写 `fetch`
+- 跨视图共享状态走 `composables/*` 单例（模块级 `ref`），新增共享状态优先落在 composable 里；视图独占状态（messages / draft / streaming 等）留在视图组件 `<script setup>` 内，组件卸载即释放
+- 新增路由：在 `router/index.ts` 的 `routes` 里加记录；静态 title 通过 `meta.title` 提供，动态 title 在视图内 `watch` 直接写 `document.title`
+- 登录态保持条件渲染在 `App.vue` 顶层，不用路由守卫劫持；未登录访问受限路由时 URL 不变、登录后原地激活
 - 技能名的正则和长度限制在 `skills.ts` 顶部，后端改约束时两边同步
 - 新增 SSE 事件类型：在 `api.ts#streamLoop` 的 `parseSseFrame` 分支里处理，并把类型加入 `StreamEvent`
 - Markdown 里新的自定义 fence 语言：改 `markdown/renderer.ts#md.renderer.rules.fence`，并在 `DOMPurify` 的 `ADD_TAGS` / `ADD_ATTR` 白名单里补齐
