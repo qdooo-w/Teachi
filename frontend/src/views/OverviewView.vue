@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+
 import { useRouter } from 'vue-router'
 import RowMenu from '../components/RowMenu.vue'
 import RenameInline from '../components/RenameInline.vue'
@@ -18,6 +19,13 @@ import { useLayout } from '../composables/useLayout'
 const router = useRouter()
 const { projects, loadProjects, prependProject, upsertProject, removeProject } = useProjects()
 const { closeSidebarOnMobile } = useLayout()
+
+const cardScroller = ref<HTMLElement | null>(null)
+
+function onCardWheel(e: WheelEvent): void {
+  if (!cardScroller.value) return
+  cardScroller.value.scrollLeft += e.deltaY
+}
 
 const newProjectName = ref('')
 const creatingProject = ref(false)
@@ -117,7 +125,9 @@ onMounted(() => {
       <h1 class="mb-10 text-4xl font-bold tracking-tight md:text-5xl">科目总览</h1>
       <div
         v-if="projects.length > 0"
+        ref="cardScroller"
         class="no-scrollbar -mx-4 flex gap-4 overflow-x-auto px-4 pb-2 md:-mx-6 md:px-6"
+        @wheel.prevent="onCardWheel"
       >
         <div
           v-for="project in projects"
