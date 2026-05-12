@@ -1,4 +1,6 @@
 本项目是一个使用Pydantic AI python库简单构建的一个具有鉴权数据调取的AI聊天库。
+前端使用Vue+Vite构建，后端使用FastAPI配置路由，使用Pydantic AI作为模型循环的核心。
+
 
 使用` uv sync `进行项目依赖项的配置
 
