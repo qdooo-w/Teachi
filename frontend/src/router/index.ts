@@ -26,7 +26,8 @@ export const router = createRouter({
 })
 
 router.afterEach((to) => {
-  const base = 'Teachi'
-  const title = (to.meta?.title as string | undefined) ?? ''
-  document.title = title ? `${title} · ${base}` : base
+  // 仅在路由提供静态 title 时覆盖，否则保留当前（通常是上一个视图设置的动态）title
+  // 等视图内的 watch 补上动态 title。避免 subject/chat 进入时闪烁为裸 "Teachi"。
+  const title = to.meta?.title as string | undefined
+  if (title) document.title = `${title} · Teachi`
 })

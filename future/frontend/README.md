@@ -22,7 +22,8 @@ frontend/
    │  └─ index.ts          路由表 + afterEach 设 document.title（静态 title）
    ├─ composables/
    │  ├─ useAuth.ts        token / bootstrapping / preparing / 登录 / 登出 / onTokenReady 钩子
-   │  ├─ useProjects.ts    模块级 projects 单例 + load/upsert/remove/prepend/reset
+   │  ├─ useProjects.ts    模块级 projects 单例 + load/upsert/remove/prepend/reset，loadProjects 去重并发
+   │  ├─ useProjectSkills.ts 每个 pid 的技能列表缓存 + refresh，跨 App.vue / ChatView 共享
    │  └─ useLayout.ts      sidebarOpen / isMobile / handleResize / closeSidebarOnMobile
    ├─ views/
    │  ├─ OverviewView.vue  `/`：科目卡片总览 + 新建科目
@@ -189,7 +190,7 @@ Mermaid 渲染失败降级为可见的 error 卡片而不是白屏。
 - 多客户端会话广播、通知
 - 侧边栏「文档 / 仪表盘 / 设置」按钮仅占位、禁用点击
 - 通用文件浏览器 UI（目前文件 API 仅被 Skill 管理使用）
-- 项目技能在对话框中增删后通过 `window` 自定义事件 `teachi-project-skills-changed` 通知 ChatView 刷新；后续可上移到 `useProjectSkills` composable 去掉事件总线
+- 项目技能在对话框中增删后由 `useProjectSkills(pidRef)` composable 统一管理：ChatView 订阅 skills ref，App.vue 在对话框关闭时调 `refresh()`，无需额外事件总线
 
 ## 开发与运行
 

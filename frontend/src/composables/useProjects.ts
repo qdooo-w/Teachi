@@ -8,10 +8,22 @@ import {
 
 const projects = ref<ProjectItem[]>([])
 
+// 多个视图（Subject / Chat / App.vue 的 setOnTokenReady）可能同时触发 loadProjects。
+// 缓存 in-flight Promise，确保并发调用只走一次网络。
+let inflight: Promise<void> | null = null
+
 async function loadProjects(): Promise<void> {
+  if (inflight) return inflight
   const userId = getCurrentUserId()
   if (!userId) return
-  projects.value = await listProjects(userId)
+  inflight = (async () => {
+    try {
+      projects.value = await listProjects(userId)
+    } finally {
+      inflight = null
+    }
+  })()
+  return inflight
 }
 
 function upsertProject(project: ProjectItem): void {

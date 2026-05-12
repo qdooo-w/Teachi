@@ -14,9 +14,10 @@ import {
   type ProjectItem,
   type SessionItem,
 } from '../api'
-import { listSkills, type FileSpace, type SkillMeta } from '../skills'
+import { type SkillMeta } from '../skills'
 import { useAuth } from '../composables/useAuth'
 import { useProjects } from '../composables/useProjects'
+import { useProjectSkills } from '../composables/useProjectSkills'
 
 const route = useRoute()
 const router = useRouter()
@@ -50,14 +51,11 @@ const isChatReady = computed(
 const canSend = computed(() => Boolean(draft.value.trim() && isChatReady.value && !streaming.value))
 
 // ── Skill 状态 ──────────────────────────────────────────────────────────────
-const projectSkills = ref<SkillMeta[]>([])
+// projectSkills 由共享 composable 提供，pid 变化或 App.vue 的对话框刷新时自动更新
+const pidOrNull = computed(() => pid.value || null)
+const { skills: projectSkills } = useProjectSkills(pidOrNull)
 const selectedSkills = ref<SkillMeta[]>([])
 const showSkillPicker = ref(false)
-
-const projectSkillSpace = computed<FileSpace | null>(() => {
-  const p = pid.value
-  return p ? { kind: 'project', pid: p } : null
-})
 
 // ── 工具函数 ──────────────────────────────────────────────────────────────────
 function scrollToBottom(force = false): void {
@@ -202,19 +200,6 @@ function handleComposerKeydown(event: KeyboardEvent): void {
   }
 }
 
-async function loadProjectSkills(): Promise<void> {
-  const space = projectSkillSpace.value
-  if (!space) {
-    projectSkills.value = []
-    return
-  }
-  try {
-    projectSkills.value = await listSkills(space)
-  } catch {
-    projectSkills.value = []
-  }
-}
-
 function toggleSkill(name: string): void {
   const skill = projectSkills.value.find((s) => s.name === name)
   if (!skill) return
@@ -346,21 +331,44 @@ function onDrawerLeave(el: Element, done: () => void): void {
 
 // ── 挂载 / 销毁 ──────────────────────────────────────────────────────────────
 async function validateAndLoad(): Promise<void> {
-  if (projects.value.length === 0) await loadProjects()
+  // 阶段 1：确保项目列表可用，校验 pid 归属（失败 → 退回总览）
+  try {
+    if (projects.value.length === 0) await loadProjects()
+  } catch (error) {
+    errorMessage.value = getErrorMessage(error)
+    await router.replace({ name: 'overview' })
+    return
+  }
   if (!currentProject.value) {
     await router.replace({ name: 'overview' })
     return
   }
-  const allSessions = await listSessions(pid.value)
-  const match = allSessions.find((s) => s.sid === sid.value)
+
+  // 阶段 2：拉会话列表校验 sid（失败 → 退回科目页，附带错误信息）
+  let match: SessionItem | undefined
+  try {
+    const allSessions = await listSessions(pid.value)
+    match = allSessions.find((s) => s.sid === sid.value)
+  } catch (error) {
+    errorMessage.value = getErrorMessage(error)
+    await router.replace({ name: 'subject', params: { pid: pid.value } })
+    return
+  }
   if (!match) {
     await router.replace({ name: 'subject', params: { pid: pid.value } })
     return
   }
   currentSession.value = match
-  await loadMessages()
-  await loadProjectSkills()
 
+  // 阶段 3：加载消息与项目技能。失败不离开视图，只在顶部显示错误，用户可手动重试。
+  try {
+    await loadMessages()
+  } catch (error) {
+    errorMessage.value = getErrorMessage(error)
+  }
+  // 项目技能由 useProjectSkills(pidOrNull) 的 watch 自动加载，这里不需要显式调用
+
+  // 阶段 4：消费 SubjectView 传入的初始草稿并自动发送
   const initial = route.query.initial
   if (typeof initial === 'string' && initial.trim()) {
     draft.value = initial
@@ -373,13 +381,11 @@ async function validateAndLoad(): Promise<void> {
 onMounted(() => {
   void validateAndLoad()
   nextTick(autosizeComposer)
-  window.addEventListener('teachi-project-skills-changed', loadProjectSkills)
 })
 
 onBeforeUnmount(() => {
   currentAbort.value?.abort()
   if (copyResetTimer) window.clearTimeout(copyResetTimer)
-  window.removeEventListener('teachi-project-skills-changed', loadProjectSkills)
 })
 
 watch(draft, () => { nextTick(autosizeComposer) })

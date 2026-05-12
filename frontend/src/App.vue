@@ -18,6 +18,7 @@ import { type FileSpace } from './skills'
 import { useAuth } from './composables/useAuth'
 import { useProjects } from './composables/useProjects'
 import { useLayout } from './composables/useLayout'
+import { useProjectSkills } from './composables/useProjectSkills'
 
 // ── 认证（状态 / 行为均来自 composable，模板继续使用同名 ref） ───────────────
 const {
@@ -171,19 +172,24 @@ const deleteDialogContent = computed(() => {
 const showUserSkillManager = ref(false)
 const showProjectSkillManager = ref(false)
 
+const currentPid = computed(() => (route.params.pid as string | undefined) ?? null)
+
 const projectSkillSpace = computed<FileSpace | null>(() => {
-  const pid = route.params.pid as string | undefined
-  return pid ? { kind: 'project', pid } : null
+  return currentPid.value ? { kind: 'project', pid: currentPid.value } : null
 })
 const userSkillSpace = computed<FileSpace | null>(() => {
   const userId = getCurrentUserId()
   return token.value && userId ? { kind: 'user', userId } : null
 })
 
-function closeProjectSkillManager(): void {
+// 项目技能列表共享单例：ChatView 也通过它订阅；对话框关闭后 refresh() 一次
+// 所有订阅者都会更新，不再需要 window 事件总线。
+const { refresh: refreshProjectSkills } = useProjectSkills(currentPid)
+
+async function closeProjectSkillManager(): Promise<void> {
   showProjectSkillManager.value = false
-  // 通知聊天视图刷新项目技能列表（技能可能在对话框中被新增/修改/删除）
-  window.dispatchEvent(new CustomEvent('teachi-project-skills-changed'))
+  // 对话框里可能有增删改，刷新缓存让所有订阅方同步
+  await refreshProjectSkills()
 }
 
 // ── 工具函数 ──────────────────────────────────────────────────────────────────
@@ -513,6 +519,25 @@ onBeforeUnmount(() => {
             </button>
           </div>
         </header>
+
+        <!-- 全局错误提示（sidebar 改名 / 删除 / token 恢复失败等会写入 errorMessage） -->
+        <div
+          v-if="errorMessage"
+          class="mx-4 mt-2 flex items-center justify-between rounded-md border border-[#efb3a7] bg-[#fff7ed] px-3 py-2 text-sm text-[#9a3412]"
+          role="alert"
+        >
+          <span class="truncate">{{ errorMessage }}</span>
+          <button
+            class="ml-3 flex-shrink-0 text-[#9a3412] hover:text-[#7c2d12]"
+            type="button"
+            title="关闭"
+            @click="errorMessage = ''"
+          >
+            <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
 
         <div class="relative flex-1 overflow-hidden">
           <RouterView v-slot="{ Component, route: rv }">
