@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import RowMenu from '../components/RowMenu.vue'
 import RenameInline from '../components/RenameInline.vue'
@@ -15,6 +15,7 @@ import {
 } from '../api'
 import { useProjects } from '../composables/useProjects'
 import { useLayout } from '../composables/useLayout'
+import { readSkill, PROJECT_DESC_SKILL, parseSkillFile } from '../skills'
 
 const route = useRoute()
 const router = useRouter()
@@ -28,8 +29,53 @@ const currentProject = computed<ProjectItem | null>(() =>
 
 const sessions = ref<SessionItem[]>([])
 const newSessionDraft = ref('')
+const newSessionName = ref('')
+const showCreatePanel = ref(false)
+const sessionNameInput = ref<HTMLInputElement | null>(null)
+const messageInput = ref<HTMLTextAreaElement | null>(null)
 const creatingSession = ref(false)
 const errorMessage = ref('')
+
+async function openCreatePanel(): Promise<void> {
+  showCreatePanel.value = true
+  await nextTick()
+  sessionNameInput.value?.focus()
+}
+
+function closeCreatePanel(): void {
+  if (creatingSession.value) return
+  showCreatePanel.value = false
+  newSessionName.value = ''
+  newSessionDraft.value = ''
+  errorMessage.value = ''
+}
+
+// ── 项目简介 ──────────────────────────────────────────────────────────────────
+const DESC_COLLAPSE_LIMIT = 150
+const projectDesc = ref('')
+const descExpanded = ref(false)
+
+const descTruncated = computed(() =>
+  projectDesc.value.length > DESC_COLLAPSE_LIMIT && !descExpanded.value
+    ? projectDesc.value.slice(0, DESC_COLLAPSE_LIMIT).trimEnd() + '…'
+    : projectDesc.value,
+)
+const needsCollapse = computed(() => projectDesc.value.length > DESC_COLLAPSE_LIMIT)
+
+async function loadProjectDesc(currentPid: string): Promise<void> {
+  projectDesc.value = ''
+  descExpanded.value = false
+  try {
+    const space = { kind: 'project' as const, pid: currentPid }
+    const { content } = await readSkill(space, PROJECT_DESC_SKILL)
+    const parsed = parseSkillFile(content)
+    if (parsed.ok && parsed.fields) {
+      projectDesc.value = parsed.fields.body.trim()
+    }
+  } catch {
+    // 简介不存在时静默忽略
+  }
+}
 
 const openMenuKey = ref<string | null>(null)
 const renamingKey = ref<string | null>(null)
@@ -69,16 +115,16 @@ async function goToSession(session: SessionItem): Promise<void> {
 }
 
 async function handleStartNewSessionFromSubject(): Promise<void> {
+  const name = newSessionName.value.trim()
   const text = newSessionDraft.value.trim()
-  if (!text || creatingSession.value) return
+  if (!name || !text || creatingSession.value) return
 
   creatingSession.value = true
   errorMessage.value = ''
   try {
-    const title = text.length > 15 ? text.slice(0, 15) + '...' : text
-    const session = await createSession(pid.value, title)
+    const session = await createSession(pid.value, name)
     sessions.value = [session, ...sessions.value]
-    newSessionDraft.value = ''
+    closeCreatePanel()
     await router.push({
       name: 'chat',
       params: { pid: pid.value, sid: session.sid },
@@ -146,7 +192,7 @@ onMounted(async () => {
     await router.replace({ name: 'overview' })
     return
   }
-  await loadSessionsFor(pid.value)
+  await Promise.all([loadSessionsFor(pid.value), loadProjectDesc(pid.value)])
 })
 
 watch(
@@ -158,7 +204,7 @@ watch(
       await router.replace({ name: 'overview' })
       return
     }
-    await loadSessionsFor(nextPid)
+    await Promise.all([loadSessionsFor(nextPid), loadProjectDesc(nextPid)])
   },
 )
 
@@ -172,12 +218,29 @@ watch(
 </script>
 
 <template>
-  <div class="absolute inset-0 flex flex-col overflow-y-auto px-4 py-5 md:px-6">
+  <div class="absolute inset-0 flex flex-col overflow-y-auto px-4 pt-5 md:px-6">
     <div v-if="currentProject" class="mx-auto flex w-full max-w-3xl flex-1 flex-col">
       <div class="mb-8">
         <h2 class="mb-2 text-3xl font-bold">{{ currentProject.projectname }}</h2>
         <p class="text-sm text-[#6b7280]">创建于 {{ formatDate(currentProject.created_at) }}</p>
       </div>
+
+      <!-- 项目简介块：blockquote 风格 -->
+      <div v-if="projectDesc" class="mb-5 flex items-start gap-3">
+        <div class="mt-0.5 w-0.5 flex-shrink-0 self-stretch rounded-full bg-[#d1d5db]"></div>
+        <div class="min-w-0 flex-1">
+          <p class="whitespace-pre-wrap text-sm leading-snug text-[#4b5563]">{{ descTruncated }}</p>
+          <button
+            v-if="needsCollapse"
+            type="button"
+            class="mt-1 text-xs text-[#9ca3af] hover:text-[#6b7280]"
+            @click="descExpanded = !descExpanded"
+          >
+            {{ descExpanded ? '收起' : '展开' }}
+          </button>
+        </div>
+      </div>
+
       <div class="mb-4 border-b border-[#d1d5db] pb-2 text-sm font-medium text-[#6b7280]">历史会话</div>
       <div class="no-scrollbar mb-6 flex-1 space-y-3 overflow-y-auto">
         <div v-for="session in sessions" :key="session.sid">
@@ -220,33 +283,64 @@ watch(
         </div>
       </div>
 
-      <div class="mt-auto w-full pb-2">
+      <div class="mt-auto w-full pb-4">
         <p v-if="errorMessage" class="mb-2 rounded-md border border-[#efb3a7] bg-[#fff7ed] px-3 py-2 text-sm text-[#9a3412]">
           {{ errorMessage }}
         </p>
-        <div class="relative flex flex-col gap-2 rounded-3xl bg-white p-3 shadow-sm transition-shadow focus-within:ring-2 focus-within:ring-[#1f6f5b]/20">
-          <textarea
-            v-model="newSessionDraft"
-            class="max-h-32 w-full resize-none overflow-y-auto border-none bg-transparent leading-normal text-[#1f2937] outline-none placeholder:text-[#9ca3af]"
-            placeholder="在这个科目中新建会话... (Enter 发送)"
-            rows="1"
+
+        <!-- 创建面板 -->
+        <div v-if="showCreatePanel" class="rounded-3xl bg-white p-4 shadow-sm">
+          <input
+            ref="sessionNameInput"
+            v-model="newSessionName"
+            type="text"
+            class="mb-3 w-full border-none bg-transparent text-base font-medium text-[#1f2937] outline-none placeholder:text-[#9ca3af]"
+            placeholder="会话名称"
             :disabled="creatingSession"
-            @keydown.enter.prevent="handleStartNewSessionFromSubject"
+            @keydown.enter.prevent="messageInput?.focus()"
+            @keydown.esc.prevent="closeCreatePanel"
           />
-          <div class="flex items-center justify-end">
+          <div class="mb-3 border-t border-[#f3f4f6]" />
+          <textarea
+            ref="messageInput"
+            v-model="newSessionDraft"
+            class="max-h-32 w-full resize-none border-none bg-transparent text-sm leading-normal text-[#1f2937] outline-none placeholder:text-[#9ca3af]"
+            placeholder="输入第一条消息..."
+            rows="2"
+            :disabled="creatingSession"
+            @keydown.ctrl.enter.prevent="handleStartNewSessionFromSubject"
+            @keydown.meta.enter.prevent="handleStartNewSessionFromSubject"
+            @keydown.esc.prevent="closeCreatePanel"
+          />
+          <div class="mt-3 flex items-center justify-end gap-2">
             <button
               type="button"
-              class="flex h-9 items-center justify-center gap-1 rounded-2xl border border-transparent bg-[#1f2937] px-5 text-white transition hover:bg-[#111827] disabled:cursor-not-allowed disabled:border-[#d1d5db] disabled:bg-white disabled:text-[#9ca3af]"
-              :disabled="!newSessionDraft.trim() || creatingSession"
-              title="创建会话并发送"
+              class="rounded-2xl px-4 py-2 text-sm text-[#6b7280] transition hover:bg-[#f3f4f6]"
+              :disabled="creatingSession"
+              @click="closeCreatePanel"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              class="flex h-9 items-center justify-center gap-1 rounded-2xl border border-transparent bg-[#1f2937] px-5 text-sm text-white transition hover:bg-[#111827] disabled:cursor-not-allowed disabled:border-[#d1d5db] disabled:bg-white disabled:text-[#9ca3af]"
+              :disabled="!newSessionName.trim() || !newSessionDraft.trim() || creatingSession"
               @click="handleStartNewSessionFromSubject"
             >
-              <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14m0 0-6-6m6 6-6 6" />
-              </svg>
+              发送
             </button>
           </div>
         </div>
+
+        <!-- 触发区 -->
+        <button
+          v-else
+          type="button"
+          class="w-full rounded-3xl bg-white px-4 py-4 text-left text-[#9ca3af] shadow-sm transition hover:bg-[#f9fafb]"
+          @click="openCreatePanel"
+        >
+          在这个科目中新建会话...
+        </button>
       </div>
     </div>
   </div>

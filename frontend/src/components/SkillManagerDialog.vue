@@ -17,6 +17,7 @@ import { getErrorMessage } from '../api'
 const props = defineProps<{
   space: FileSpace
   title: string
+  initialSkill?: string
 }>()
 
 const emit = defineEmits<{
@@ -246,7 +247,10 @@ function handleClose() {
   emit('close')
 }
 
-onMounted(loadSkills)
+onMounted(async () => {
+  await loadSkills()
+  if (props.initialSkill) await selectSkill(props.initialSkill)
+})
 </script>
 
 <template>
@@ -316,135 +320,137 @@ onMounted(loadSkills)
             <div class="min-h-0 flex-1 overflow-y-auto px-5 pt-5">
               <!-- 结构化表单 -->
               <template v-if="!rawMode">
-              <!-- 名称 -->
-              <div class="mb-4">
-                <label class="mb-1 block text-xs font-medium text-[#6b7280]">技能名称</label>
-                <input
-                  v-if="isNew"
-                  v-model="form.name"
-                  class="h-9 w-full rounded-md border border-[#d1d5db] px-3 text-sm outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
-                  placeholder="my-skill-name（小写字母、数字、连字符）"
-                  type="text"
-                />
-                <div v-else class="flex h-9 items-center rounded-md bg-[#f9fafb] px-3 text-sm text-[#374151]">
-                  {{ form.name }}
+                <!-- 名称 -->
+                <div class="mb-4">
+                  <label class="mb-1 block text-xs font-medium text-[#6b7280]">技能名称</label>
+                  <input
+                    v-if="isNew"
+                    v-model="form.name"
+                    class="h-9 w-full rounded-md border border-[#d1d5db] px-3 text-sm outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
+                    placeholder="my-skill-name（小写字母、数字、连字符）"
+                    type="text"
+                  />
+                  <div v-else class="flex h-9 items-center rounded-md bg-[#f9fafb] px-3 text-sm text-[#374151]">
+                    {{ form.name }}
+                  </div>
+                  <p v-if="nameError" class="mt-1 text-xs text-[#9a3412]">{{ nameError }}</p>
                 </div>
-                <p v-if="nameError" class="mt-1 text-xs text-[#9a3412]">{{ nameError }}</p>
-              </div>
 
-              <!-- 描述 -->
-              <div class="mb-4">
-                <div class="mb-1 flex items-baseline justify-between">
-                  <label class="block text-xs font-medium text-[#6b7280]">
-                    描述 <span class="text-[#9a3412]">*</span>
-                  </label>
-                  <span
-                    :class="[
-                      'text-[10px] tabular-nums',
-                      form.description.length > DESCRIPTION_MAX ? 'text-[#9a3412]' : 'text-[#9ca3af]',
-                    ]"
+                <!-- 描述 -->
+                <div class="mb-4">
+                  <div class="mb-1 flex items-baseline justify-between">
+                    <label class="block text-xs font-medium text-[#6b7280]">
+                      描述 <span class="text-[#9a3412]">*</span>
+                    </label>
+                    <span
+                      :class="[
+                        'text-[10px] tabular-nums',
+                        form.description.length > DESCRIPTION_MAX ? 'text-[#9a3412]' : 'text-[#9ca3af]',
+                      ]"
+                    >
+                      {{ form.description.length }} / {{ DESCRIPTION_MAX }}
+                    </span>
+                  </div>
+                  <textarea
+                    v-model="form.description"
+                    :maxlength="DESCRIPTION_MAX"
+                    class="w-full resize-y rounded-md border border-[#d1d5db] p-2.5 text-sm outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
+                    placeholder="模型会看到这段描述来判断何时使用该技能。写清楚触发场景和能力边界。"
+                    rows="2"
+                  />
+                  <p v-if="descriptionError" class="mt-1 text-xs text-[#9a3412]">{{ descriptionError }}</p>
+                </div>
+
+                <!-- 高级字段（可折叠） -->
+                <div class="mb-4">
+                  <button
+                    class="flex items-center gap-1 text-xs font-medium text-[#6b7280] hover:text-[#1f2937]"
+                    type="button"
+                    @click="showAdvanced = !showAdvanced"
                   >
-                    {{ form.description.length }} / {{ DESCRIPTION_MAX }}
-                  </span>
+                    <svg
+                      :class="['h-3 w-3 transition-transform', showAdvanced ? 'rotate-90' : '']"
+                      aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                    >
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7" />
+                    </svg>
+                    高级字段（可选）
+                  </button>
+                  <div v-if="showAdvanced" class="mt-2 grid grid-cols-2 gap-3">
+                    <label class="block">
+                      <span class="mb-1 block text-xs text-[#6b7280]">license</span>
+                      <input
+                        v-model="form.license"
+                        class="h-9 w-full rounded-md border border-[#d1d5db] px-3 text-sm outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
+                        placeholder="例如 MIT"
+                        type="text"
+                      />
+                    </label>
+                    <label class="block">
+                      <div class="mb-1 flex items-baseline justify-between">
+                        <span class="block text-xs text-[#6b7280]">compatibility</span>
+                        <span
+                          :class="[
+                            'text-[10px] tabular-nums',
+                            (form.compatibility ?? '').length > COMPATIBILITY_MAX ? 'text-[#9a3412]' : 'text-[#9ca3af]',
+                          ]"
+                        >
+                          {{ (form.compatibility ?? '').length }} / {{ COMPATIBILITY_MAX }}
+                        </span>
+                      </div>
+                      <input
+                        v-model="form.compatibility"
+                        :maxlength="COMPATIBILITY_MAX"
+                        class="h-9 w-full rounded-md border border-[#d1d5db] px-3 text-sm outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
+                        placeholder="兼容性说明"
+                        type="text"
+                      />
+                      <p v-if="compatibilityError" class="mt-1 text-xs text-[#9a3412]">{{ compatibilityError }}</p>
+                    </label>
+                  </div>
                 </div>
-                <textarea
-                  v-model="form.description"
-                  :maxlength="DESCRIPTION_MAX"
-                  class="w-full resize-y rounded-md border border-[#d1d5db] p-2.5 text-sm outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
-                  placeholder="模型会看到这段描述来判断何时使用该技能。写清楚触发场景和能力边界。"
-                  rows="2"
-                />
-                <p v-if="descriptionError" class="mt-1 text-xs text-[#9a3412]">{{ descriptionError }}</p>
-              </div>
 
-              <!-- 高级字段（可折叠） -->
-              <div class="mb-4">
-                <button
-                  class="flex items-center gap-1 text-xs font-medium text-[#6b7280] hover:text-[#1f2937]"
-                  type="button"
-                  @click="showAdvanced = !showAdvanced"
-                >
-                  <svg
-                    :class="['h-3 w-3 transition-transform', showAdvanced ? 'rotate-90' : '']"
-                    aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                <!-- 技能正文 -->
+                <div class="mb-5">
+                  <div class="mb-1 flex items-baseline justify-between">
+                    <label class="block text-xs font-medium text-[#6b7280]">技能内容（Markdown）</label>
+                    <span class="text-[10px] tabular-nums text-[#9ca3af]">
+                      {{ bodyCharCount.toLocaleString() }} 字符 · {{ bodyLineCount }} 行
+                    </span>
+                  </div>
+                  <textarea
+                    v-model="form.body"
+                    class="w-full resize-y rounded-md border border-[#d1d5db] p-3 font-mono text-sm outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
+                    style="min-height: 220px"
+                    placeholder="# 技能说明&#10;&#10;详细说明技能的功能、用法、示例..."
+                    spellcheck="false"
+                  />
+                  <p class="mt-1 text-[10px] text-[#9ca3af]">前端会自动生成合法的 frontmatter（name/description 等），你无需手动写 `---` 分隔块。</p>
+                </div>
+              </template>
+
+              <!-- 原始编辑模式（当文件无法被结构化解析时的兜底） -->
+              <template v-else>
+                <div class="mb-3 flex items-center justify-between">
+                  <span class="text-xs font-medium text-[#6b7280]">原始 SKILL.md 编辑</span>
+                  <button
+                    class="text-xs text-[#1f6f5b] hover:underline"
+                    type="button"
+                    @click="switchToStructured"
                   >
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7" />
-                  </svg>
-                  高级字段（可选）
-                </button>
-                <div v-if="showAdvanced" class="mt-2 grid grid-cols-2 gap-3">
-                  <label class="block">
-                    <span class="mb-1 block text-xs text-[#6b7280]">license</span>
-                    <input
-                      v-model="form.license"
-                      class="h-9 w-full rounded-md border border-[#d1d5db] px-3 text-sm outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
-                      placeholder="例如 MIT"
-                      type="text"
-                    />
-                  </label>
-                  <label class="block">
-                    <div class="mb-1 flex items-baseline justify-between">
-                      <span class="block text-xs text-[#6b7280]">compatibility</span>
-                      <span
-                        :class="[
-                          'text-[10px] tabular-nums',
-                          (form.compatibility ?? '').length > COMPATIBILITY_MAX ? 'text-[#9a3412]' : 'text-[#9ca3af]',
-                        ]"
-                      >
-                        {{ (form.compatibility ?? '').length }} / {{ COMPATIBILITY_MAX }}
-                      </span>
-                    </div>
-                    <input
-                      v-model="form.compatibility"
-                      :maxlength="COMPATIBILITY_MAX"
-                      class="h-9 w-full rounded-md border border-[#d1d5db] px-3 text-sm outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
-                      placeholder="兼容性说明"
-                      type="text"
-                    />
-                    <p v-if="compatibilityError" class="mt-1 text-xs text-[#9a3412]">{{ compatibilityError }}</p>
-                  </label>
+                    尝试切换到结构化表单
+                  </button>
                 </div>
-              </div>
-
-              <!-- 技能正文 -->
-              <div class="mb-3 flex min-h-0 flex-1 flex-col">
-                <div class="mb-1 flex items-baseline justify-between">
-                  <label class="block text-xs font-medium text-[#6b7280]">技能内容（Markdown）</label>
-                  <span class="text-[10px] tabular-nums text-[#9ca3af]">
-                    {{ bodyCharCount.toLocaleString() }} 字符 · {{ bodyLineCount }} 行
-                  </span>
-                </div>
+                <p class="mb-3 rounded-md border border-[#fcd34d] bg-[#fffbeb] px-3 py-2 text-xs text-[#92400e]">
+                  {{ parseWarning }}
+                </p>
                 <textarea
-                  v-model="form.body"
-                  class="min-h-[220px] flex-1 resize-none rounded-md border border-[#d1d5db] p-3 font-mono text-sm outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
-                  placeholder="# 技能说明&#10;&#10;详细说明技能的功能、用法、示例..."
+                  v-model="rawContent"
+                  class="w-full resize-y rounded-md border border-[#d1d5db] p-3 font-mono text-sm outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
+                  style="min-height: 320px"
                   spellcheck="false"
                 />
-                <p class="mt-1 text-[10px] text-[#9ca3af]">前端会自动生成合法的 frontmatter（name/description 等），你无需手动写 `---` 分隔块。</p>
-              </div>
-            </template>
-
-            <!-- 原始编辑模式（当文件无法被结构化解析时的兜底） -->
-            <template v-else>
-              <div class="mb-3 flex items-center justify-between">
-                <span class="text-xs font-medium text-[#6b7280]">原始 SKILL.md 编辑</span>
-                <button
-                  class="text-xs text-[#1f6f5b] hover:underline"
-                  type="button"
-                  @click="switchToStructured"
-                >
-                  尝试切换到结构化表单
-                </button>
-              </div>
-              <p class="mb-3 rounded-md border border-[#fcd34d] bg-[#fffbeb] px-3 py-2 text-xs text-[#92400e]">
-                {{ parseWarning }}
-              </p>
-              <textarea
-                v-model="rawContent"
-                class="min-h-[320px] flex-1 resize-none rounded-md border border-[#d1d5db] p-3 font-mono text-sm outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
-                spellcheck="false"
-              />
-            </template>
+              </template>
             </div>
 
             <!-- 固定底部操作栏 -->

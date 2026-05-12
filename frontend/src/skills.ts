@@ -135,6 +135,22 @@ export function buildSkillTemplate(name: string): string {
   return `---\nname: ${name}\ndescription: \n---\n\n# 技能说明\n\n`
 }
 
+// ── 项目简介 skill ────────────────────────────────────────────────────────────
+
+export const PROJECT_DESC_SKILL = 'project-description'
+
+/**
+ * 生成项目简介 skill 文件内容。
+ * @param summary  frontmatter description 的可变部分（可为空）
+ * @param body     正文简介（可为空）
+ */
+export function buildProjectDescSkill(summary: string, body: string): string {
+  const description = summary.trim()
+    ? `项目简介：${summary.trim()}`
+    : '项目简介'
+  return buildSkillFile({ name: PROJECT_DESC_SKILL, description, body: body.trim() })
+}
+
 // ── 结构化 skill 文件 ─────────────────────────────────────────────────────────
 
 export interface SkillFields {

@@ -448,7 +448,7 @@ watch(
       </div>
     </div>
 
-    <footer class="flex-shrink-0 bg-[#f3f4f6] px-4 pb-3 pt-2">
+    <footer class="flex-shrink-0 bg-[#f3f4f6] px-4 pb-4 pt-2">
       <div class="mx-auto max-w-3xl">
         <p v-if="errorMessage" class="mb-2 rounded-md border border-[#efb3a7] bg-[#fff7ed] px-3 py-2 text-sm text-[#9a3412]">
           {{ errorMessage }}
@@ -531,7 +531,6 @@ watch(
             </button>
           </div>
         </div>
-        <p class="mt-2 text-center text-[10px] text-[#9ca3af]">Teachi 可能会犯错。请核查重要信息。</p>
       </div>
     </footer>
   </div>
