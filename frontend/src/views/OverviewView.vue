@@ -28,6 +28,11 @@ const expanded = ref(false)
 const titleVisible = ref(true)
 const contentPaddingTop = ref(0)
 
+// 过量滚动检测：滚动到底后继续滚动触发展开
+const overscrollX = ref(0)
+const EXPAND_THRESHOLD = 150
+let overscrollResetTimer: ReturnType<typeof setTimeout> | null = null
+
 function recalcPadding(): void {
   if (!scrollArea.value || !contentBox.value) return
   const areaH = scrollArea.value.clientHeight
@@ -43,7 +48,25 @@ function recalcPadding(): void {
 
 function onCardWheel(e: WheelEvent): void {
   if (!cardScroller.value) return
-  cardScroller.value.scrollLeft += e.deltaY
+  e.preventDefault()
+  const el = cardScroller.value
+  const atEnd = el.scrollLeft + el.clientWidth >= el.scrollWidth - 2
+
+  // 右滑过量：滚动到底后继续向右
+  if (atEnd && e.deltaY > 0) {
+    overscrollX.value = Math.min(overscrollX.value + e.deltaY * 0.4, EXPAND_THRESHOLD + 40)
+    clearTimeout(overscrollResetTimer!)
+    overscrollResetTimer = setTimeout(() => { overscrollX.value = 0 }, 180)
+    if (overscrollX.value >= EXPAND_THRESHOLD) {
+      overscrollX.value = 0
+      expand()
+    }
+    return
+  }
+
+  // 正常滚动：重置过量并滚动卡片
+  overscrollX.value = 0
+  el.scrollLeft += e.deltaY
 }
 
 // 展开：标题先淡出，然后切换视图，列表进场完毕后标题以小字淡入
@@ -202,9 +225,22 @@ async function performDelete(): Promise<void> {
   }
 }
 
-onMounted(() => {
-  if (projects.value.length === 0) void loadProjects()
-  nextTick(recalcPadding)
+function scrollToMiddleCard(): void {
+  if (!cardScroller.value || projects.value.length === 0) return
+  const cards = cardScroller.value.children
+  const mid = Math.floor(cards.length / 2)
+  const target = cards[mid] as HTMLElement | undefined
+  if (!target) return
+  const offset = target.offsetLeft - (cardScroller.value.clientWidth - target.clientWidth) / 2
+  cardScroller.value.scrollTo({ left: offset, behavior: 'smooth' })
+}
+
+onMounted(async () => {
+  if (projects.value.length === 0) await loadProjects()
+  nextTick(() => {
+    recalcPadding()
+    scrollToMiddleCard()
+  })
 })
 </script>
 
@@ -240,8 +276,12 @@ onMounted(() => {
               <div
                 v-if="projects.length > 0"
                 ref="cardScroller"
-                class="no-scrollbar -mx-4 flex gap-4 overflow-x-auto px-4 pb-2 md:-mx-6 md:px-6"
-                @wheel.prevent="onCardWheel"
+                class="card-scroller no-scrollbar -mx-10 flex gap-4 overflow-x-auto px-10 pb-2 md:-mx-14 md:px-14"
+                :style="{
+                  transform: overscrollX > 0 ? `translateX(${-overscrollX * 0.3}px)` : '',
+                  transition: overscrollX > 0 ? 'none' : 'transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1)',
+                }"
+                @wheel="onCardWheel"
               >
                 <div
                   v-for="project in projects"
@@ -269,9 +309,9 @@ onMounted(() => {
                   >
                     <div>
                       <h3 class="mb-2 truncate pr-8 text-lg font-bold">{{ project.projectname }}</h3>
-                      <p class="line-clamp-2 text-sm text-[#6b7280]">创建于 {{ formatDate(project.created_at) }}</p>
+                      <p class="font-hans line-clamp-2 text-sm text-[#6b7280]">创建于 {{ formatDate(project.created_at) }}</p>
                     </div>
-                    <div class="flex justify-between border-t border-[#d1d5db] pt-3 text-xs text-[#9ca3af]">
+                    <div class="font-hans flex justify-between border-t border-[#d1d5db] pt-3 text-xs text-[#9ca3af]">
                       <span>进入查看会话</span>
                       <span>{{ formatDate(project.timestamp) }}</span>
                     </div>
@@ -322,8 +362,8 @@ onMounted(() => {
                       @keydown.enter.prevent="goToProject(project)"
                     >
                       <div class="min-w-0 flex-1 pr-4">
-                        <div class="truncate font-medium text-[#1f2937]">{{ project.projectname }}</div>
-                        <div class="mt-1 truncate text-xs text-[#9ca3af]">创建于 {{ formatDate(project.created_at) }}</div>
+                        <div class="font-hans truncate font-medium text-[#1f2937]">{{ project.projectname }}</div>
+                        <div class="font-hans mt-1 truncate text-xs text-[#9ca3af]">创建于 {{ formatDate(project.created_at) }}</div>
                       </div>
                       <RowMenu
                         :open="openMenuKey === cardKey(project.pid)"
@@ -361,66 +401,65 @@ onMounted(() => {
     <!-- 底部面板：绝对定位，不影响上方内容布局 -->
     <div class="absolute bottom-0 left-0 right-0 px-4 pb-4 md:px-6">
       <div class="mx-auto w-full max-w-3xl">
-        <!-- 创建弹出面板 -->
+        <!-- 创建面板：同一元素的展开/收起变换 -->
         <div
-          v-if="showCreatePanel"
-          class="mb-2 rounded-3xl bg-white p-4 shadow-sm"
+          class="create-panel"
+          :class="{ expanded: showCreatePanel }"
+          @click="!showCreatePanel && openCreatePanel()"
         >
-          <p v-if="errorMessage" class="mb-3 rounded-md border border-[#efb3a7] bg-[#fff7ed] px-3 py-2 text-sm text-[#9a3412]">
-            {{ errorMessage }}
-          </p>
-          <input
-            ref="nameInput"
-            v-model="newProjectName"
-            type="text"
-            class="mb-3 w-full border-none bg-transparent text-base font-medium text-[#1f2937] outline-none placeholder:text-[#9ca3af]"
-            placeholder="科目名称"
-            :disabled="creatingProject"
-            @keydown.enter.prevent="handleCreateProject"
-            @keydown.esc.prevent="closeCreatePanel"
-          />
-          <div class="mb-3 border-t border-[#f3f4f6]" />
-          <div class="relative">
-            <textarea
-              v-model="newProjectDesc"
-              class="w-full resize-none border-none bg-transparent text-sm leading-relaxed text-[#374151] outline-none placeholder:text-[#9ca3af]"
-              :placeholder="`一句话描述这个科目（可选，${DESC_MAX} 字以内）`"
-              rows="2"
-              :maxlength="DESC_MAX"
-              :disabled="creatingProject"
-              @keydown.esc.prevent="closeCreatePanel"
-            />
-            <span class="absolute bottom-0 right-0 text-xs text-[#d1d5db]">{{ newProjectDesc.length }} / {{ DESC_MAX }}</span>
-          </div>
-          <div class="mt-3 flex items-center justify-end gap-2">
-            <button
-              type="button"
-              class="rounded-2xl px-4 py-2 text-sm text-[#6b7280] transition hover:bg-[#f3f4f6]"
-              :disabled="creatingProject"
-              @click="closeCreatePanel"
-            >
-              取消
-            </button>
-            <button
-              type="button"
-              class="flex h-9 items-center justify-center gap-1 rounded-2xl border border-transparent bg-[#1f2937] px-5 text-sm text-white transition hover:bg-[#111827] disabled:cursor-not-allowed disabled:border-[#d1d5db] disabled:bg-white disabled:text-[#9ca3af]"
-              :disabled="!newProjectName.trim() || creatingProject"
-              @click="handleCreateProject"
-            >
-              创建科目
-            </button>
+          <span class="create-placeholder">新建科目...</span>
+
+          <div class="create-fields">
+            <div class="create-fields-inner">
+              <p v-if="errorMessage" class="mb-3 rounded-md border border-[#efb3a7] bg-[#fff7ed] px-3 py-2 text-sm text-[#9a3412]">
+                {{ errorMessage }}
+              </p>
+              <input
+                ref="nameInput"
+                v-model="newProjectName"
+                type="text"
+                class="w-full border-none bg-transparent py-2 text-base font-medium text-[#1f2937] outline-none placeholder:text-[#9ca3af]"
+                placeholder="科目名称"
+                :disabled="creatingProject"
+                @keydown.enter.prevent="handleCreateProject"
+                @keydown.esc.prevent="closeCreatePanel"
+                @click.stop
+              />
+              <div class="mx-2 border-t border-[#f3f4f6]" />
+              <div class="relative">
+                <textarea
+                  v-model="newProjectDesc"
+                  class="w-full resize-none border-none bg-transparent py-2 text-sm leading-relaxed text-[#374151] outline-none placeholder:text-[#9ca3af]"
+                  :placeholder="`一句话描述这个科目（可选，${DESC_MAX} 字以内）`"
+                  rows="2"
+                  :maxlength="DESC_MAX"
+                  :disabled="creatingProject"
+                  @keydown.esc.prevent="closeCreatePanel"
+                  @click.stop
+                />
+                <span class="absolute bottom-2 right-0 text-xs text-[#d1d5db]">{{ newProjectDesc.length }} / {{ DESC_MAX }}</span>
+              </div>
+              <div class="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  class="rounded-2xl px-4 py-2 text-sm text-[#6b7280] transition hover:bg-[#f3f4f6]"
+                  :disabled="creatingProject"
+                  @click.stop="closeCreatePanel"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  class="flex h-9 items-center justify-center gap-1 rounded-2xl border border-transparent bg-[#1f2937] px-5 text-sm text-white transition hover:bg-[#111827] disabled:cursor-not-allowed disabled:border-[#d1d5db] disabled:bg-white disabled:text-[#9ca3af]"
+                  :disabled="!newProjectName.trim() || creatingProject"
+                  @click.stop="handleCreateProject"
+                >
+                  创建科目
+                </button>
+              </div>
+            </div>
           </div>
         </div>
-
-        <!-- 触发区 -->
-        <button
-          v-if="!showCreatePanel"
-          type="button"
-          class="w-full rounded-3xl bg-white px-4 py-4 text-left text-[#9ca3af] shadow-sm transition hover:bg-[#f9fafb]"
-          @click="openCreatePanel"
-        >
-          新建科目...
-        </button>
       </div>
     </div>
 
@@ -465,6 +504,24 @@ onMounted(() => {
   transform: translateY(18px);
 }
 
+/* 卡片滚动区：左右渐变淡出，延伸部分模糊 */
+.card-scroller {
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    black 4%,
+    black 96%,
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    black 4%,
+    black 96%,
+    transparent 100%
+  );
+}
+
 /* 箭头离场：向下冲出页面 */
 .ov-arrow-leave-active {
   transition: opacity 320ms ease, transform 320ms cubic-bezier(0.4, 0, 1, 1);
@@ -473,5 +530,92 @@ onMounted(() => {
 .ov-arrow-leave-to {
   opacity: 0;
   transform: translateY(120px);
+}
+
+/* ── 创建面板：同一元素的展开/收起变换 ── */
+.create-panel {
+  position: relative;
+  cursor: pointer;
+  border-radius: 1.5rem;
+  background: white;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  padding: 1rem;
+  overflow: hidden;
+  transition:
+    transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1),
+    margin-bottom 0.4s cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.create-panel.expanded {
+  cursor: default;
+  transform: translateY(-12px);
+  margin-bottom: -12px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.create-placeholder {
+  display: block;
+  color: #9ca3af;
+  transition: opacity 0.25s ease;
+  opacity: 1;
+  position: relative;
+  z-index: 1;
+}
+
+.create-panel.expanded .create-placeholder {
+  opacity: 0;
+  height: 0;
+  overflow: hidden;
+}
+
+.create-fields {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+  position: relative;
+  z-index: 1;
+}
+
+.create-panel.expanded .create-fields {
+  grid-template-rows: 1fr;
+}
+
+.create-fields-inner {
+  overflow: hidden;
+  min-height: 0;
+}
+
+.create-panel.expanded .create-fields-inner input,
+.create-panel.expanded .create-fields-inner textarea {
+  animation: create-field-in 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+}
+
+.create-panel.expanded .create-fields-inner input {
+  animation-delay: 0.08s;
+}
+
+.create-panel.expanded .create-fields-inner textarea {
+  animation-delay: 0.14s;
+}
+
+.create-panel.expanded .create-fields-inner .pt-2 {
+  animation: create-field-in 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) 0.2s backwards;
+}
+
+@keyframes create-field-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.create-panel:not(.expanded) .create-fields-inner > * {
+  opacity: 0;
+  transition: opacity 0.2s ease;
 }
 </style>

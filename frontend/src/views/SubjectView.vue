@@ -266,8 +266,8 @@ watch(
             @keydown.enter.prevent="goToSession(session)"
           >
             <div class="min-w-0 flex-1 pr-4">
-              <div class="truncate font-medium text-[#1f2937]">{{ session.sessionname }}</div>
-              <div class="mt-1 truncate text-xs text-[#9ca3af]">更新于 {{ formatDateTime(session.timestamp) }}</div>
+              <div class="font-hans truncate font-medium text-[#1f2937]">{{ session.sessionname }}</div>
+              <div class="font-hans mt-1 truncate text-xs text-[#9ca3af]">更新于 {{ formatDateTime(session.timestamp) }}</div>
             </div>
             <RowMenu
               :open="openMenuKey === sessionKey(session.sid)"
@@ -288,59 +288,63 @@ watch(
           {{ errorMessage }}
         </p>
 
-        <!-- 创建面板 -->
-        <div v-if="showCreatePanel" class="rounded-3xl bg-white p-4 shadow-sm">
-          <input
-            ref="sessionNameInput"
-            v-model="newSessionName"
-            type="text"
-            class="mb-3 w-full border-none bg-transparent text-base font-medium text-[#1f2937] outline-none placeholder:text-[#9ca3af]"
-            placeholder="会话名称"
-            :disabled="creatingSession"
-            @keydown.enter.prevent="messageInput?.focus()"
-            @keydown.esc.prevent="closeCreatePanel"
-          />
-          <div class="mb-3 border-t border-[#f3f4f6]" />
-          <textarea
-            ref="messageInput"
-            v-model="newSessionDraft"
-            class="max-h-32 w-full resize-none border-none bg-transparent text-sm leading-normal text-[#1f2937] outline-none placeholder:text-[#9ca3af]"
-            placeholder="输入第一条消息..."
-            rows="2"
-            :disabled="creatingSession"
-            @keydown.ctrl.enter.prevent="handleStartNewSessionFromSubject"
-            @keydown.meta.enter.prevent="handleStartNewSessionFromSubject"
-            @keydown.esc.prevent="closeCreatePanel"
-          />
-          <div class="mt-3 flex items-center justify-end gap-2">
-            <button
-              type="button"
-              class="rounded-2xl px-4 py-2 text-sm text-[#6b7280] transition hover:bg-[#f3f4f6]"
-              :disabled="creatingSession"
-              @click="closeCreatePanel"
-            >
-              取消
-            </button>
-            <button
-              type="button"
-              class="flex h-9 items-center justify-center gap-1 rounded-2xl border border-transparent bg-[#1f2937] px-5 text-sm text-white transition hover:bg-[#111827] disabled:cursor-not-allowed disabled:border-[#d1d5db] disabled:bg-white disabled:text-[#9ca3af]"
-              :disabled="!newSessionName.trim() || !newSessionDraft.trim() || creatingSession"
-              @click="handleStartNewSessionFromSubject"
-            >
-              发送
-            </button>
+        <!-- 创建面板：同一元素的展开/收起变换 -->
+        <div
+          class="create-panel"
+          :class="{ expanded: showCreatePanel }"
+          @click="!showCreatePanel && openCreatePanel()"
+        >
+          <!-- 收起态占位文字 -->
+          <span class="create-placeholder">在这个科目中新建会话...</span>
+
+          <!-- 展开态表单内容 -->
+          <div class="create-fields">
+            <div class="create-fields-inner">
+              <input
+                ref="sessionNameInput"
+                v-model="newSessionName"
+                type="text"
+                class="w-full border-none bg-transparent py-2 text-base font-medium text-[#1f2937] outline-none placeholder:text-[#9ca3af]"
+                placeholder="会话名称"
+                :disabled="creatingSession"
+                @keydown.enter.prevent="messageInput?.focus()"
+                @keydown.esc.prevent="closeCreatePanel"
+                @click.stop
+              />
+              <div class="mx-2 border-t border-[#f3f4f6]" />
+              <textarea
+                ref="messageInput"
+                v-model="newSessionDraft"
+                class="max-h-32 w-full resize-none border-none bg-transparent py-2 text-sm leading-normal text-[#1f2937] outline-none placeholder:text-[#9ca3af]"
+                placeholder="输入第一条消息..."
+                rows="2"
+                :disabled="creatingSession"
+                @keydown.ctrl.enter.prevent="handleStartNewSessionFromSubject"
+                @keydown.meta.enter.prevent="handleStartNewSessionFromSubject"
+                @keydown.esc.prevent="closeCreatePanel"
+                @click.stop
+              />
+              <div class="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  class="rounded-2xl px-4 py-2 text-sm text-[#6b7280] transition hover:bg-[#f3f4f6]"
+                  :disabled="creatingSession"
+                  @click.stop="closeCreatePanel"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  class="flex h-9 items-center justify-center gap-1 rounded-2xl border border-transparent bg-[#1f2937] px-5 text-sm text-white transition hover:bg-[#111827] disabled:cursor-not-allowed disabled:border-[#d1d5db] disabled:bg-white disabled:text-[#9ca3af]"
+                  :disabled="!newSessionName.trim() || !newSessionDraft.trim() || creatingSession"
+                  @click.stop="handleStartNewSessionFromSubject"
+                >
+                  发送
+                </button>
+              </div>
+            </div>
           </div>
         </div>
-
-        <!-- 触发区 -->
-        <button
-          v-else
-          type="button"
-          class="w-full rounded-3xl bg-white px-4 py-4 text-left text-[#9ca3af] shadow-sm transition hover:bg-[#f9fafb]"
-          @click="openCreatePanel"
-        >
-          在这个科目中新建会话...
-        </button>
       </div>
     </div>
   </div>
@@ -355,3 +359,98 @@ watch(
     @cancel="cancelDelete"
   />
 </template>
+
+<style scoped>
+/* ── 创建面板：同一元素的展开/收起变换 ── */
+.create-panel {
+  position: relative;
+  cursor: pointer;
+  border-radius: 1.5rem;
+  background: white;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  padding: 1rem;
+  overflow: hidden;
+  /* transform 上移 + margin 补偿保持底部锚定 */
+  transition:
+    transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1),
+    margin-bottom 0.4s cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* 展开：上边框向上移动，底部锚定 */
+.create-panel.expanded {
+  cursor: default;
+  transform: translateY(-12px);
+  margin-bottom: -12px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+/* 占位文字：收起时可见，展开时淡出并收起高度 */
+.create-placeholder {
+  display: block;
+  color: #9ca3af;
+  transition: opacity 0.25s ease;
+  opacity: 1;
+  position: relative;
+  z-index: 1;
+}
+
+.create-panel.expanded .create-placeholder {
+  opacity: 0;
+  height: 0;
+  overflow: hidden;
+}
+
+/* 表单区域：grid 行高动画实现平滑展开/收起 */
+.create-fields {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+  position: relative;
+  z-index: 1;
+}
+
+.create-panel.expanded .create-fields {
+  grid-template-rows: 1fr;
+}
+
+.create-fields-inner {
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* 字段元素错开入场 */
+.create-panel.expanded .create-fields-inner input,
+.create-panel.expanded .create-fields-inner textarea {
+  animation: create-field-in 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+}
+
+.create-panel.expanded .create-fields-inner input {
+  animation-delay: 0.08s;
+}
+
+.create-panel.expanded .create-fields-inner textarea {
+  animation-delay: 0.14s;
+}
+
+.create-panel.expanded .create-fields-inner .pt-2 {
+  animation: create-field-in 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) 0.2s backwards;
+}
+
+@keyframes create-field-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 收起时字段淡出 */
+.create-panel:not(.expanded) .create-fields-inner > * {
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+</style>

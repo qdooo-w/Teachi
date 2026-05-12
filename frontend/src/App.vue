@@ -342,8 +342,25 @@ onBeforeUnmount(() => {
             type="button"
             @click="closeSidebarOnMobile(); router.push({ name: 'overview' })"
           >
-            <span class="text-xl font-bold tracking-tight">Teachi</span>
+            <span class="text-2xl font-bold tracking-tight">Teachi</span>
           </button>
+
+          <div class="mb-4 flex min-h-[34px] items-center gap-1 rounded-2xl bg-[#f3f4f6] px-2">
+            <button
+              type="button"
+              disabled
+              class="flex h-6 w-6 flex-shrink-0 cursor-not-allowed items-center justify-center text-[#9ca3af]"
+            >
+              <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+            </button>
+            <input
+              type="text"
+              disabled
+              class="h-7 flex-1 bg-transparent text-sm outline-none placeholder:text-transparent"
+            />
+          </div>
 
           <div class="no-scrollbar flex-1 overflow-y-auto">
             <div class="mb-2 px-2 text-xs font-medium text-[#6b7280]">我的科目</div>
@@ -366,18 +383,15 @@ onBeforeUnmount(() => {
                   role="button"
                   tabindex="0"
                   :class="[
-                    'flex min-h-[40px] w-full cursor-pointer items-center justify-start gap-2 rounded-lg border px-3 py-2.5 text-left text-sm transition-colors',
+                    'flex min-h-[34px] w-full cursor-pointer items-center justify-start gap-2 rounded-2xl px-3 py-1.5 text-left text-sm transition-colors',
                     ($route.params.pid as string | undefined) === project.pid
-                      ? 'border-[#d1d5db] bg-[#e5e7eb] font-medium'
-                      : 'border-transparent hover:border-[#d1d5db] hover:bg-[#e5e7eb]',
+                      ? 'bg-[#e5e7eb] font-medium'
+                      : 'hover:bg-[#e5e7eb]',
                   ]"
                   @click="closeSidebarOnMobile(); router.push({ name: 'subject', params: { pid: project.pid } })"
                   @keydown.enter.prevent="closeSidebarOnMobile(); router.push({ name: 'subject', params: { pid: project.pid } })"
                 >
-                  <svg class="h-4 w-4 flex-shrink-0 text-[#6b7280]" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
-                  </svg>
-                  <span class="flex-1 truncate text-sm">{{ project.projectname }}</span>
+                  <span class="font-hans flex-1 truncate text-sm">{{ project.projectname }}</span>
                   <RowMenu
                     :open="openMenuKey === projectKey('sidebar', project.pid)"
                     class="opacity-0 transition-opacity group-hover:opacity-100"
@@ -391,7 +405,7 @@ onBeforeUnmount(() => {
               </div>
               <button
                 type="button"
-                class="flex min-h-[40px] w-full items-center justify-start gap-2 rounded-lg border border-dashed border-[#d1d5db] px-3 py-2.5 text-left text-sm text-[#6b7280] transition-colors hover:border-solid hover:bg-[#e5e7eb]"
+                class="flex min-h-[34px] w-full items-center justify-start gap-2 rounded-2xl px-3 py-1.5 text-left text-sm text-[#6b7280] transition-colors hover:bg-[#e5e7eb]"
                 @click="closeSidebarOnMobile(); router.push({ name: 'overview' })"
               >
                 查看全部科目
@@ -399,9 +413,9 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
-          <div class="mt-4 flex-shrink-0 space-y-1 border-t border-[#d1d5db] pt-4">
+          <div class="mt-4 flex-shrink-0 space-y-1 pt-4">
             <button
-              class="flex min-h-[40px] w-full cursor-not-allowed items-center justify-start gap-2 rounded-lg border border-transparent px-3 py-2.5 text-left text-sm text-[#9ca3af]"
+              class="flex min-h-[34px] w-full cursor-not-allowed items-center justify-start gap-2 rounded-2xl border border-transparent px-3 py-1.5 text-left text-sm text-[#9ca3af]"
               type="button"
               disabled
               title="暂未实现"
@@ -412,7 +426,7 @@ onBeforeUnmount(() => {
               文档
             </button>
             <button
-              class="flex min-h-[40px] w-full cursor-not-allowed items-center justify-start gap-2 rounded-lg border border-transparent px-3 py-2.5 text-left text-sm text-[#9ca3af]"
+              class="flex min-h-[34px] w-full cursor-not-allowed items-center justify-start gap-2 rounded-2xl border border-transparent px-3 py-1.5 text-left text-sm text-[#9ca3af]"
               type="button"
               disabled
               title="暂未实现"
@@ -423,7 +437,7 @@ onBeforeUnmount(() => {
               仪表盘
             </button>
             <button
-              class="flex min-h-[40px] w-full cursor-not-allowed items-center justify-start gap-2 rounded-lg border border-transparent px-3 py-2.5 text-left text-sm text-[#9ca3af]"
+              class="flex min-h-[34px] w-full cursor-not-allowed items-center justify-start gap-2 rounded-2xl border border-transparent px-3 py-1.5 text-left text-sm text-[#9ca3af]"
               type="button"
               disabled
               title="暂未实现"
@@ -435,7 +449,7 @@ onBeforeUnmount(() => {
               设置
             </button>
             <div
-              class="mt-2 flex cursor-pointer items-center gap-3 rounded-xl border-t border-[#d1d5db] px-3 pb-2 pt-3 transition-colors hover:bg-[#e5e7eb]"
+              class="mt-2 flex cursor-pointer items-center gap-3 rounded-2xl px-3 py-2.5 shadow-sm transition-colors hover:bg-[#e5e7eb]"
               title="退出登录"
               @click="handleLogout"
             >
@@ -484,6 +498,12 @@ onBeforeUnmount(() => {
           </div>
 
           <div class="flex items-center gap-1">
+            <span class="flex h-9 items-center gap-1 px-2 text-sm text-[#9ca3af]">
+              Skills管理
+              <svg class="h-3 w-3" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+              </svg>
+            </span>
             <button
               v-if="$route.name === 'chat'"
               class="flex h-9 items-center gap-1 rounded-xl border border-transparent px-3 text-sm text-[#4b5563] transition-colors hover:border-[#d1d5db] hover:bg-[#e5e7eb]"

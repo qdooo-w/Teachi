@@ -16,6 +16,10 @@
   box-sizing: border-box;
 }
 
+.font-hans {
+  font-family: "Source Han Sans SC", "Noto Sans CJK SC", "Noto Sans SC", sans-serif;
+}
+
 html,
 body,
 #app {
@@ -84,6 +88,7 @@ input {
   margin: 1em 0 0.5em;
   font-weight: 600;
   line-height: 1.3;
+  font-family: "Source Han Serif SC", "Noto Serif CJK SC", "Noto Serif SC", serif;
 }
 .markdown-body h1 { font-size: 1.5em; }
 .markdown-body h2 { font-size: 1.3em; }

@@ -448,7 +448,7 @@ watch(
       </div>
     </div>
 
-    <footer class="flex-shrink-0 bg-[#f3f4f6] px-4 pb-4 pt-2">
+    <footer class="flex-shrink-0 bg-[#f3f4f6] px-4 pb-4 pt-2 md:px-6">
       <div class="mx-auto max-w-3xl">
         <p v-if="errorMessage" class="mb-2 rounded-md border border-[#efb3a7] bg-[#fff7ed] px-3 py-2 text-sm text-[#9a3412]">
           {{ errorMessage }}
@@ -473,7 +473,7 @@ watch(
         </Transition>
         <div
           :class="[
-            'composer-shell relative bg-white p-3 shadow-sm focus-within:ring-2 focus-within:ring-[#1f6f5b]/20',
+            'composer-shell relative bg-white p-4 shadow-sm focus-within:ring-2 focus-within:ring-[#1f6f5b]/20',
             showSkillPicker ? 'drawer-open' : '',
             streaming ? 'generating' : '',
           ]"
