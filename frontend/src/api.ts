@@ -34,9 +34,8 @@ export interface MessageItem {
   raw_json: string
   timestamp: number
   created_at: number
-  parent_msg_id: string | null
+  anchor_msg_id: string | null
   version: number
-  is_latest: number
 }
 
 export interface DisplayMessage {
@@ -44,6 +43,8 @@ export interface DisplayMessage {
   role: 'user' | 'assistant'
   content: string
   timestamp: number
+  anchor_msg_id?: string | null
+  version?: number
   pending?: boolean
 }
 
@@ -55,6 +56,7 @@ export interface ChatWorkspace {
 export interface DoneEvent {
   type: 'done'
   msg_id?: string
+  anchor_msg_id?: string
   error?: string
   error_code?: string
 }
@@ -77,6 +79,7 @@ interface StreamEvent {
   tool_name?: string
   status?: string
   msg_id?: string
+  anchor_msg_id?: string
   error?: string
   error_code?: string
 }
@@ -309,6 +312,10 @@ export function parseMessage(raw: MessageItem): DisplayMessage | null {
   }
 
   const parts = Array.isArray(parsed.parts) ? parsed.parts : []
+  const meta = {
+    anchor_msg_id: raw.anchor_msg_id,
+    version: raw.version,
+  }
 
   if (raw.kind === 'user' && parsed.kind === 'request') {
     const content = parts
@@ -317,7 +324,9 @@ export function parseMessage(raw: MessageItem): DisplayMessage | null {
       .join('\n')
       .trim()
 
-    return content ? { id: raw.msg_id, role: 'user', content, timestamp: raw.timestamp } : null
+    return content
+      ? { id: raw.msg_id, role: 'user', content, timestamp: raw.timestamp, ...meta }
+      : null
   }
 
   if ((raw.kind === 'assistant' || raw.kind === 'agent_response') && parsed.kind === 'response') {
@@ -327,18 +336,61 @@ export function parseMessage(raw: MessageItem): DisplayMessage | null {
       .join('\n')
       .trim()
 
-    return content ? { id: raw.msg_id, role: 'assistant', content, timestamp: raw.timestamp } : null
+    return content
+      ? { id: raw.msg_id, role: 'assistant', content, timestamp: raw.timestamp, ...meta }
+      : null
   }
 
   return null
 }
 
+export async function listRawMessages(sid: string): Promise<MessageItem[]> {
+  const response = await request<MessageListResponse>(`/sessions/${encodeURIComponent(sid)}/messages`)
+  return response.messages
+}
+
 export async function listDisplayMessages(sid: string): Promise<DisplayMessage[]> {
   const response = await request<MessageListResponse>(`/sessions/${encodeURIComponent(sid)}/messages`)
   return response.messages
-    .filter((message) => message.is_latest === 1)
+    .filter((message) => message.version === 0)
     .map(parseMessage)
     .filter((message): message is DisplayMessage => message !== null)
+}
+
+export interface MessageVersionItem {
+  msg_id: string
+  kind: string
+  raw_json: string
+  anchor_msg_id: string | null
+  version: number
+  timestamp: number
+  created_at: number
+}
+
+interface MessageVersionsResponse {
+  versions: MessageVersionItem[]
+}
+
+export async function listMessageVersions(anchorMsgId: string): Promise<MessageVersionItem[]> {
+  const response = await request<MessageVersionsResponse>(
+    `/messages/${encodeURIComponent(anchorMsgId)}/versions`,
+  )
+  return response.versions
+}
+
+interface SwitchVersionResponse {
+  success: boolean
+  switched_msg_id: string
+}
+
+export async function switchMessageVersion(targetVersionMsgId: string): Promise<SwitchVersionResponse> {
+  return request<SwitchVersionResponse>(
+    `/messages/${encodeURIComponent(targetVersionMsgId)}/switch-version`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ target_version_msg_id: targetVersionMsgId }),
+    },
+  )
 }
 
 function createNonce(): string {
@@ -363,7 +415,12 @@ function parseSseFrame(frame: string): StreamEvent | null {
 
 async function streamLoop(
   sid: string,
-  payload: { pid: string; action: 'send' | 'stop'; message?: string },
+  payload: {
+    pid: string
+    action: 'send' | 'regenerate' | 'stop'
+    message?: string
+    anchor_msg_id?: string | null
+  },
   callbacks: {
     onTextDelta?: (content: string) => void
     onToolEvent?: (event: StreamEvent) => void
@@ -425,6 +482,7 @@ async function streamLoop(
         const doneEvent: DoneEvent = {
           type: 'done',
           msg_id: event.msg_id,
+          anchor_msg_id: event.anchor_msg_id,
           error: event.error,
           error_code: event.error_code,
         }
@@ -457,6 +515,26 @@ export async function sendChatMessage(
   signal?: AbortSignal,
 ): Promise<DoneEvent> {
   return streamLoop(sid, { pid, action: 'send', message }, callbacks, signal)
+}
+
+export async function regenerateChatMessage(
+  sid: string,
+  pid: string,
+  anchorMsgId: string,
+  message: string,
+  callbacks: {
+    onTextDelta: (content: string) => void
+    onToolEvent?: (event: StreamEvent) => void
+    onDone?: (event: DoneEvent) => void
+  },
+  signal?: AbortSignal,
+): Promise<DoneEvent> {
+  return streamLoop(
+    sid,
+    { pid, action: 'regenerate', anchor_msg_id: anchorMsgId, message },
+    callbacks,
+    signal,
+  )
 }
 
 export async function stopChatGeneration(sid: string, pid: string): Promise<void> {

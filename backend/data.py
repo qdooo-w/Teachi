@@ -101,9 +101,8 @@ class MessageItem(BaseModel):
     raw_json: str
     timestamp: float
     created_at: float
-    parent_msg_id: str | None = None
-    version: int = 1
-    is_latest: int = 1
+    anchor_msg_id: str | None = None
+    version: int = 0
 
 
 class MessageListResponse(BaseModel):
@@ -372,9 +371,8 @@ def list_session_messages(
                 raw_json=m["raw_json"],
                 timestamp=float(m["timestamp"]),
                 created_at=float(m["created_at"]),
-                parent_msg_id=m.get("parent_msg_id"),
-                version=m.get("version", 1),
-                is_latest=m.get("is_latest", 1),
+                anchor_msg_id=m.get("anchor_msg_id"),
+                version=int(m.get("version", 0) or 0),
             )
             for m in messages
         ]
@@ -403,8 +401,8 @@ class MessageVersionItem(BaseModel):
     msg_id: str
     kind: str
     raw_json: str
+    anchor_msg_id: str | None = None
     version: int
-    is_latest: int
     timestamp: float
     created_at: float
 
@@ -420,7 +418,7 @@ def get_message_versions(
     msg_id: str,
     current_user: dict[str, Any] = Depends(get_current_user),
 ) -> MessageVersionsResponse:
-    """查询某条消息作为 parent 的所有版本。"""
+    """查询某个回合 anchor 下的所有版本消息（含活跃版 version=0 与历史版 version>0）。"""
     user_uuid = current_user.get("uuid")
     if not isinstance(user_uuid, str):
         raise HTTPException(
@@ -429,7 +427,7 @@ def get_message_versions(
         )
 
     versions = db.messages.list_versions(
-        parent_msg_id=msg_id,
+        anchor_msg_id=msg_id,
         user_uuid=user_uuid,
     )
     return MessageVersionsResponse(
@@ -438,8 +436,8 @@ def get_message_versions(
                 msg_id=v["msg_id"],
                 kind=v["kind"],
                 raw_json=v["raw_json"],
-                version=v["version"],
-                is_latest=v["is_latest"],
+                anchor_msg_id=v.get("anchor_msg_id"),
+                version=int(v["version"]),
                 timestamp=float(v["timestamp"]),
                 created_at=float(v["created_at"]),
             )
@@ -451,7 +449,7 @@ def get_message_versions(
 class SwitchVersionRequest(BaseModel):
     """切换版本请求"""
 
-    target_version_msg_id: str = Field(..., description="要切换到的版本的消息 ID")
+    target_version_msg_id: str = Field(..., description="要切换到活跃位（version=0）的版本消息 ID")
 
 
 class SwitchVersionResponse(BaseModel):
@@ -467,7 +465,10 @@ def switch_to_message_version(
     payload: SwitchVersionRequest,
     current_user: dict[str, Any] = Depends(get_current_user),
 ) -> SwitchVersionResponse:
-    """切换到指定版本。"""
+    """切换到指定版本：把 target_version_msg_id 所在版本与 version=0 整组对调。
+
+    整组 swap 保证同一回合内 user / tool_call / tool_result / assistant 的版本不会错位。
+    """
     user_uuid = current_user.get("uuid")
     if not isinstance(user_uuid, str):
         raise HTTPException(
@@ -475,7 +476,7 @@ def switch_to_message_version(
             detail={"code": "AUTH_TOKEN_INVALID", "message": "Invalid token"},
         )
 
-    success = db.messages.switch_version(
+    success = db.messages.swap_version_group(
         msg_id=payload.target_version_msg_id,
         user_uuid=user_uuid,
     )

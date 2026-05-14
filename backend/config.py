@@ -6,6 +6,8 @@ from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 from backend.context import ChatDeps
 
+# 系统提示词
+INSTUCTION = os.getenv("SYSTEM_INSTRUCTION","")
 
 # 项目根目录用于拼接默认数据库和技能存储目录。
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -62,7 +64,7 @@ def GetAgent(
     """创建一个可复用的 Pydantic AI Agent。每次调用都创建新实例，注入工具和能力。"""
     return Agent(
         GetProvider(),
-        instructions=instructions or "你是一个智能助手",
+        instructions=instructions or INSTUCTION,
         tools=tools or [],
         capabilities=capabilities or [],
         deps_type=ChatDeps,

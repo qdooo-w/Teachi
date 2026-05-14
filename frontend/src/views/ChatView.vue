@@ -4,13 +4,18 @@ import { useRoute, useRouter } from 'vue-router'
 import MessageContent from '../components/MessageContent.vue'
 import SkillPicker from '../components/SkillPicker.vue'
 import SkillChips from '../components/SkillChips.vue'
+import EditPromptDialog from '../components/EditPromptDialog.vue'
 import {
   getErrorMessage,
   listDisplayMessages,
+  listMessageVersions,
   listSessions,
+  regenerateChatMessage,
   sendChatMessage,
   stopChatGeneration,
+  switchMessageVersion,
   type DisplayMessage,
+  type MessageVersionItem,
   type ProjectItem,
   type SessionItem,
 } from '../api'
@@ -44,6 +49,21 @@ const stickToBottom = ref(true)
 const composerTextarea = ref<HTMLTextAreaElement | null>(null)
 const copiedId = ref<string | null>(null)
 let copyResetTimer: number | null = null
+// 当前正在生成的那条 user 输入（不含 skill 前缀），用于 stop 后回填到输入框
+const inflightUserPrompt = ref<string>('')
+
+// ── 版本（重放）状态 ─────────────────────────────────────────────────────────
+// 每个 anchor 的全部版本快照，用于角标显示与版本切换
+const versionsByAnchor = ref<Record<string, MessageVersionItem[]>>({})
+// 用户当前在该 anchor 下"看到"的是第几个版本（1-based）。
+// 由于后端用 swap 表示"切换"——切换后 version=0 仍然是活跃——这里用客户端指针
+// 来维持用户的视觉位置。loadMessages 时若 anchor 已知则保留位置，未知则置 1。
+const displayedPosByAnchor = ref<Record<string, number>>({})
+
+// 编辑 PROMPT 弹窗
+const editDialogOpen = ref(false)
+const editDialogAnchor = ref<string | null>(null)
+const editDialogInitial = ref('')
 
 const isChatReady = computed(
   () => Boolean(currentProject.value && currentSession.value && !preparing.value),
@@ -82,7 +102,179 @@ function handleChatScroll(): void {
 async function loadMessages(): Promise<void> {
   if (!currentSession.value) return
   messages.value = await listDisplayMessages(currentSession.value.sid)
+  await refreshVersionMap()
   scrollToBottom(true)
+}
+
+async function refreshVersionMap(): Promise<void> {
+  // 收集 messages 中出现的所有 anchor，逐个拉取版本快照
+  const anchors = new Set<string>()
+  for (const m of messages.value) {
+    if (m.anchor_msg_id) anchors.add(m.anchor_msg_id)
+  }
+  const next: Record<string, MessageVersionItem[]> = {}
+  await Promise.all(
+    Array.from(anchors).map(async (anchor) => {
+      try {
+        const versions = await listMessageVersions(anchor)
+        next[anchor] = versions
+      } catch {
+        // 单个失败不阻断其他
+      }
+    }),
+  )
+  versionsByAnchor.value = next
+  // 第一次见到的 anchor 默认显示位置 = 1
+  for (const anchor of anchors) {
+    if (!displayedPosByAnchor.value[anchor]) {
+      displayedPosByAnchor.value[anchor] = 1
+    }
+  }
+}
+
+function anchorVersionCount(anchor?: string | null): number {
+  if (!anchor) return 0
+  const versions = versionsByAnchor.value[anchor]
+  if (!versions) return 0
+  // 同一 (anchor, version) 下可能有 user/tool/assistant 多条；按 version 去重再计数
+  return new Set(versions.map((v) => v.version)).size
+}
+
+function anchorDisplayedPos(anchor?: string | null): number {
+  if (!anchor) return 1
+  return displayedPosByAnchor.value[anchor] ?? 1
+}
+
+async function regenerateMessage(message: DisplayMessage, newPrompt = ''): Promise<void> {
+  if (streaming.value || !currentSession.value || !currentProject.value) return
+  if (!message.anchor_msg_id) {
+    errorMessage.value = '该消息缺少回合 anchor，无法重放。'
+    return
+  }
+
+  const anchor = message.anchor_msg_id
+  errorMessage.value = ''
+  toolStatus.value = ''
+
+  // 找到当前活跃的 user 与 assistant：改 PROMPT 时把 user 气泡先乐观更新成新内容
+  const targetUser = messages.value.find(
+    (m) => m.anchor_msg_id === anchor && m.role === 'user',
+  )
+  const targetAssistant = messages.value.find(
+    (m) => m.anchor_msg_id === anchor && m.role === 'assistant',
+  )
+  if (newPrompt && targetUser) {
+    targetUser.content = newPrompt
+  }
+  if (targetAssistant) {
+    targetAssistant.content = ''
+    targetAssistant.pending = true
+  }
+
+  streaming.value = true
+  inflightUserPrompt.value = newPrompt || targetUser?.content || ''
+  const abortController = new AbortController()
+  currentAbort.value = abortController
+  scrollToBottom(true)
+
+  try {
+    const done = await regenerateChatMessage(
+      currentSession.value.sid,
+      currentProject.value.pid,
+      anchor,
+      newPrompt,
+      {
+        onTextDelta(delta) {
+          if (targetAssistant) {
+            targetAssistant.content += delta
+            scrollToBottom()
+          }
+        },
+        onToolEvent(event) {
+          if (event.type === 'tool_call') {
+            toolStatus.value = `正在调用 ${event.tool_name || '工具'}`
+          }
+          if (event.type === 'tool_result') {
+            toolStatus.value = ''
+          }
+        },
+      },
+      abortController.signal,
+    )
+
+    if (targetAssistant) targetAssistant.pending = false
+
+    if (done.error) {
+      errorMessage.value = done.error_code ? `${done.error_code}: ${done.error}` : done.error
+      return
+    }
+
+    await loadMessages()
+  } catch (error) {
+    if (targetAssistant) targetAssistant.pending = false
+    if (!isAbortError(error)) errorMessage.value = getErrorMessage(error)
+  } finally {
+    streaming.value = false
+    toolStatus.value = ''
+    currentAbort.value = null
+    inflightUserPrompt.value = ''
+    scrollToBottom()
+  }
+}
+
+function openEditPromptDialog(message: DisplayMessage): void {
+  if (streaming.value || !message.anchor_msg_id) return
+  editDialogAnchor.value = message.anchor_msg_id
+  editDialogInitial.value = message.content
+  editDialogOpen.value = true
+}
+
+async function handleEditPromptSubmit(text: string): Promise<void> {
+  const anchor = editDialogAnchor.value
+  if (!anchor) return
+  const target = messages.value.find(
+    (m) => m.anchor_msg_id === anchor && m.role === 'user',
+  )
+  editDialogOpen.value = false
+  editDialogAnchor.value = null
+  editDialogInitial.value = ''
+  if (target) await regenerateMessage(target, text)
+}
+
+async function switchVersion(anchor: string, direction: -1 | 1): Promise<void> {
+  if (streaming.value) return
+  const versions = versionsByAnchor.value[anchor]
+  if (!versions || versions.length === 0) return
+
+  // 按 version 去重并排序：version=0 是活跃版本，1..N-1 是历史版本
+  const versionNumbers = Array.from(new Set(versions.map((v) => v.version))).sort((a, b) => a - b)
+  const total = versionNumbers.length
+  if (total <= 1) return
+
+  const currentPos = displayedPosByAnchor.value[anchor] ?? 1 // 1-based
+  const nextPos = ((currentPos - 1 + direction + total) % total) + 1
+
+  // pos 序列：1 → 当前活跃（version=0）；2..total → 历史版本（按 version 升序）
+  const historyVersions = versionNumbers.filter((v) => v !== 0)
+  const targetVersion = nextPos === 1 ? 0 : historyVersions[nextPos - 2]
+  if (targetVersion === 0) {
+    // 已经在活跃位，无需 swap
+    displayedPosByAnchor.value[anchor] = nextPos
+    return
+  }
+
+  const target =
+    versions.find((v) => v.version === targetVersion && v.kind === 'user') ||
+    versions.find((v) => v.version === targetVersion)
+  if (!target) return
+
+  try {
+    await switchMessageVersion(target.msg_id)
+    displayedPosByAnchor.value[anchor] = nextPos
+    await loadMessages()
+  } catch (error) {
+    errorMessage.value = getErrorMessage(error)
+  }
 }
 
 function isAbortError(error: unknown): boolean {
@@ -121,6 +313,7 @@ async function sendMessage(): Promise<void> {
   toolStatus.value = ''
   messages.value.push(userMessage, assistantMessage)
   streaming.value = true
+  inflightUserPrompt.value = rawContent
 
   const abortController = new AbortController()
   currentAbort.value = abortController
@@ -174,6 +367,7 @@ async function sendMessage(): Promise<void> {
     streaming.value = false
     toolStatus.value = ''
     currentAbort.value = null
+    inflightUserPrompt.value = ''
     scrollToBottom()
   }
 }
@@ -181,12 +375,23 @@ async function sendMessage(): Promise<void> {
 async function stopStreaming(): Promise<void> {
   if (!streaming.value || !currentSession.value || !currentProject.value) return
 
+  const restored = inflightUserPrompt.value
+
   try {
     await stopChatGeneration(currentSession.value.sid, currentProject.value.pid)
   } catch (error) {
     errorMessage.value = getErrorMessage(error)
   } finally {
     currentAbort.value?.abort()
+    // 把刚才发出去的内容回填到输入框，便于用户继续修改后再发送
+    if (restored && !draft.value.trim()) {
+      draft.value = restored
+      await nextTick()
+      autosizeComposer()
+      composerTextarea.value?.focus()
+      const len = composerTextarea.value?.value.length ?? 0
+      composerTextarea.value?.setSelectionRange(len, len)
+    }
   }
 }
 
@@ -410,9 +615,23 @@ watch(
         </div>
 
         <div v-for="message in messages" :key="message.id" class="flex w-full flex-col">
-          <div v-if="message.role === 'user'" class="flex justify-end">
-            <div class="max-w-[85%] rounded-3xl border border-[#d1d5db] bg-[#e5e7eb] px-5 py-3 text-[15px] leading-relaxed text-[#1f2937]">
-              <p class="whitespace-pre-wrap break-words">{{ message.content }}</p>
+          <div v-if="message.role === 'user'" class="group flex justify-end">
+            <div class="flex max-w-[85%] items-end gap-1">
+              <button
+                v-if="message.anchor_msg_id && !streaming"
+                class="flex h-6 w-6 items-center justify-center rounded text-[#9ca3af] opacity-0 transition-opacity hover:bg-[#e5e7eb] hover:text-[#4b5563] group-hover:opacity-100"
+                title="编辑后重放"
+                type="button"
+                @click="openEditPromptDialog(message)"
+              >
+                <svg class="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
+                  <path d="M12 20h9" />
+                  <path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+                </svg>
+              </button>
+              <div class="rounded-3xl border border-[#d1d5db] bg-[#e5e7eb] px-5 py-3 text-[15px] leading-relaxed text-[#1f2937]">
+                <p class="whitespace-pre-wrap break-words">{{ message.content }}</p>
+              </div>
             </div>
           </div>
           <div v-else class="group flex max-w-[85%] flex-col items-start">
@@ -429,20 +648,59 @@ watch(
                 <span class="h-1.5 w-1.5 animate-bounce rounded-full bg-[#6b7280] [animation-delay:240ms]" />
               </div>
             </div>
-            <button
-              v-if="message.content && !message.pending"
-              class="ml-2 mt-1 flex h-6 w-6 items-center justify-center rounded text-[#9ca3af] opacity-0 transition-opacity hover:bg-[#e5e7eb] hover:text-[#4b5563] group-hover:opacity-100"
-              :title="copiedId === message.id ? '已复制' : '复制'"
-              type="button"
-              @click="copyMessage(message.id, message.content)"
-            >
-              <svg v-if="copiedId !== message.id" class="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v2m-6 12h8a2 2 0 0 1 2-2v-8a2 2 0 0 1-2-2h-8a2 2 0 0 1-2 2v8a2 2 0 0 1 2 2z" />
-              </svg>
-              <svg v-else class="h-3.5 w-3.5 text-[#1f6f5b]" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-              </svg>
-            </button>
+            <div v-if="message.content && !message.pending" class="ml-2 mt-1 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+              <button
+                class="flex h-6 w-6 items-center justify-center rounded text-[#9ca3af] hover:bg-[#e5e7eb] hover:text-[#4b5563]"
+                :title="copiedId === message.id ? '已复制' : '复制'"
+                type="button"
+                @click="copyMessage(message.id, message.content)"
+              >
+                <svg v-if="copiedId !== message.id" class="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v2m-6 12h8a2 2 0 0 1 2-2v-8a2 2 0 0 1-2-2h-8a2 2 0 0 1-2 2v8a2 2 0 0 1 2 2z" />
+                </svg>
+                <svg v-else class="h-3.5 w-3.5 text-[#1f6f5b]" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                </svg>
+              </button>
+              <button
+                class="flex h-6 w-6 items-center justify-center rounded text-[#9ca3af] hover:bg-[#e5e7eb] hover:text-[#4b5563] disabled:cursor-not-allowed disabled:opacity-40"
+                title="重新生成"
+                type="button"
+                :disabled="streaming || !message.anchor_msg_id"
+                @click="regenerateMessage(message)"
+              >
+                <svg class="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v6h6M20 20v-6h-6M5.07 9A7 7 0 0 1 19 11M18.93 15A7 7 0 0 1 5 13" />
+                </svg>
+              </button>
+              <template v-if="message.anchor_msg_id && anchorVersionCount(message.anchor_msg_id) > 1">
+                <button
+                  class="flex h-6 w-6 items-center justify-center rounded text-[#9ca3af] hover:bg-[#e5e7eb] hover:text-[#4b5563] disabled:cursor-not-allowed disabled:opacity-40"
+                  title="上一版本"
+                  type="button"
+                  :disabled="streaming"
+                  @click="switchVersion(message.anchor_msg_id, -1)"
+                >
+                  <svg class="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+                  </svg>
+                </button>
+                <span class="text-xs text-[#6b7280] tabular-nums">
+                  {{ anchorDisplayedPos(message.anchor_msg_id) }}/{{ anchorVersionCount(message.anchor_msg_id) }}
+                </span>
+                <button
+                  class="flex h-6 w-6 items-center justify-center rounded text-[#9ca3af] hover:bg-[#e5e7eb] hover:text-[#4b5563] disabled:cursor-not-allowed disabled:opacity-40"
+                  title="下一版本"
+                  type="button"
+                  :disabled="streaming"
+                  @click="switchVersion(message.anchor_msg_id, 1)"
+                >
+                  <svg class="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                  </svg>
+                </button>
+              </template>
+            </div>
           </div>
         </div>
       </div>
@@ -533,5 +791,11 @@ watch(
         </div>
       </div>
     </footer>
+    <EditPromptDialog
+      v-model="editDialogOpen"
+      :initial-text="editDialogInitial"
+      :submitting="streaming"
+      @submit="handleEditPromptSubmit"
+    />
   </div>
 </template>

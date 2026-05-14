@@ -60,7 +60,9 @@ class LoopContext:
     action: ActionKind = ActionKind.SEND
 
     user_input: str = ""
-    parent_msg_id: str | None = None
+    # SEND: 新回合产生的 anchor，由 SAVE 节点从 save_agent_messages 回填。
+    # REGENERATE: 必填，前端传入的回合 anchor msg_id（即原首条 user 消息的 msg_id）。
+    anchor_msg_id: str | None = None
     history_messages: list[ModelMessage] = field(default_factory=list)
     messages: list[ModelMessage] = field(default_factory=list)
 
