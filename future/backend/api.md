@@ -106,9 +106,8 @@ FastAPI 和后端当前可能返回两类错误体：
 | `raw_json` | string | Pydantic AI `ModelMessage` 序列化后的 JSON 字符串 |
 | `timestamp` | float | 消息时间 |
 | `created_at` | float | 记录创建时间 |
-| `parent_msg_id` | string \| null | regenerate 版本所属的父消息 ID |
-| `version` | int | 版本号 |
-| `is_latest` | int | 是否为当前启用版本，`1` 表示是，`0` 表示否 |
+| `anchor_msg_id` | string \| null | 回合（turn）锚点 msg_id。同一回合内 `user` / `tool_call` / `tool_result` / `assistant` / `agent_response` 共享此值。第一条 `user` 消息的 `anchor_msg_id` 等于自身 `msg_id`（self-reference）|
+| `version` | int | `0` 表示当前活跃版本；`>0` 表示历史版本（数字越大越早）。前端默认按 (anchor_msg_id, version=0) 编排活跃链 |
 
 ## 认证接口
 
@@ -498,7 +497,7 @@ FastAPI 和后端当前可能返回两类错误体：
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `messages` | `MessageItem[]` | 消息列表，按 `timestamp` 升序排列；当前实现返回该会话下所有已保存消息（包含历史版本），不按 `is_latest` 过滤，前端需要自行以 `is_latest=1` 过滤 |
+| `messages` | `MessageItem[]` | 消息列表，按 `timestamp` 升序排列；返回该会话下所有消息（包含全部 `version`），前端按 `(anchor_msg_id, version=0)` 取出活跃链；按 `anchor_msg_id` 分组可拿到各回合的全部版本 |
 
 错误：
 
@@ -508,7 +507,7 @@ FastAPI 和后端当前可能返回两类错误体：
 
 ### GET `/messages/{msg_id}/versions`
 
-意义：获取以某条消息为 `parent_msg_id` 的所有版本消息。
+意义：查询某个回合 anchor 下的所有版本消息（含活跃版 `version=0` 与历史版 `version>0`）。
 
 认证：需要 `Authorization: Bearer <access_token>`。
 
@@ -516,7 +515,7 @@ FastAPI 和后端当前可能返回两类错误体：
 
 | 名称 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `msg_id` | string | 是 | 父消息 ID |
+| `msg_id` | string | 是 | 回合 anchor msg_id（即原回合首条 user 消息 ID）|
 
 请求体：无。
 
@@ -526,7 +525,7 @@ FastAPI 和后端当前可能返回两类错误体：
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `versions` | `MessageVersionItem[]` | 版本列表，按 `version` 升序排列；没有匹配版本时为空数组 |
+| `versions` | `MessageVersionItem[]` | 该 anchor 下全部消息，按 `(version ASC, timestamp ASC)` 排列；anchor 不存在或无版本时为空数组 |
 
 `MessageVersionItem`：
 
@@ -535,14 +534,14 @@ FastAPI 和后端当前可能返回两类错误体：
 | `msg_id` | string | 版本消息 ID |
 | `kind` | string | 消息类型 |
 | `raw_json` | string | Pydantic AI `ModelMessage` 序列化后的 JSON 字符串 |
-| `version` | int | 版本号 |
-| `is_latest` | int | 是否当前启用版本 |
+| `anchor_msg_id` | string \| null | 回合 anchor msg_id |
+| `version` | int | `0` 表示活跃版本，`>0` 为历史版本 |
 | `timestamp` | float | 消息时间 |
 | `created_at` | float | 记录创建时间 |
 
 ### POST `/messages/{msg_id}/switch-version`
 
-意义：切换某个 regenerate 版本为当前启用版本。
+意义：把某个版本切到活跃位（`version=0`）。后端会把该版本所在组与当前 `version=0` 组**整组对调**——同一回合内 `user` / `tool_call` / `tool_result` / `assistant` 等不会错位。
 
 认证：需要 `Authorization: Bearer <access_token>`。
 
@@ -556,7 +555,7 @@ FastAPI 和后端当前可能返回两类错误体：
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `target_version_msg_id` | string | 是 | 要切换到的版本消息 ID，必须属于当前用户且必须有 `parent_msg_id` |
+| `target_version_msg_id` | string | 是 | 要切到活跃位的版本消息 ID。后端取其 `(anchor_msg_id, version)` 后整组与 `version=0` 对调 |
 
 成功返回：`200 OK`
 
@@ -565,13 +564,13 @@ FastAPI 和后端当前可能返回两类错误体：
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `success` | bool | 切换成功时为 true |
-| `switched_msg_id` | string | 已切换到的消息 ID |
+| `switched_msg_id` | string | 已被切到 `version=0` 的消息 ID |
 
 错误：
 
 | 状态码 | detail | 说明 |
 |---|---|---|
-| 400 | `{ code: "SWITCH_FAILED", message: "Failed to switch version" }` | 目标消息不存在、不属于当前用户，或不是可切换的版本消息 |
+| 400 | `{ code: "SWITCH_FAILED", message: "Failed to switch version" }` | 目标消息不存在、不属于当前用户，或缺少 `anchor_msg_id` |
 | 422 | 参数校验错误 | 请求体缺少 `target_version_msg_id` |
 
 ## 工具接口
@@ -624,8 +623,8 @@ FastAPI 和后端当前可能返回两类错误体：
 |---|---|---|---|---|
 | `pid` | string | 是 | 无 | 项目 ID，必须与 `sid` 所属会话同属当前用户 |
 | `action` | string | 否 | `send` | 动作类型，只支持 `send`、`regenerate`、`stop` |
-| `message` | string | 否 | 空字符串 | 用户输入文本；`send` 时去除空白后不能为空 |
-| `parent_msg_id` | string \| null | 否 | null | `regenerate` 时必填，表示要重新生成的父消息 ID |
+| `message` | string | 否 | 空字符串 | 用户输入文本；`send` 时去除空白后不能为空；`regenerate` 时为空表示沿用 anchor 原 PROMPT，非空则用作新 PROMPT |
+| `anchor_msg_id` | string \| null | 否 | null | `regenerate` 必填：要重放回合的 anchor msg_id（即原回合首条 user 消息 ID）|
 | `allowed_tools` | `string[]` \| null | 否 | null | 前端传入的工具限制列表；当前路由接收并放入运行上下文，不在路由层校验 |
 
 成功返回：`200 OK`
@@ -638,8 +637,8 @@ SSE 数据帧格式：每帧为 `data: <JSON>`，以空行分隔。
 
 | action | 意义 | 额外要求 | 主要行为 |
 |---|---|---|---|
-| `send` | 发送新用户消息并生成回复 | `message` 不能为空 | 加载历史、追加当前输入、调用模型、保存新产生的消息、返回流式事件 |
-| `regenerate` | 基于指定父消息重新生成回复 | `parent_msg_id` 必须存在且属于当前用户 | 加载历史并在 `parent_msg_id` 前截断，重新调用模型，保存为该父消息的新版本 |
+| `send` | 发送新用户消息并生成回复 | `message` 不能为空 | 加载历史活跃链（`version=0`）、追加当前输入、调用模型、保存新产生的消息（新回合 anchor 即首条 user 消息自身），返回流式事件 |
+| `regenerate` | 基于指定回合 anchor 重新生成 | `anchor_msg_id` 必须存在且为 turn anchor（self-referencing 的 user 消息）；`message` 为空表示沿用原 PROMPT，非空则覆盖 | 加载 anchor 之前的活跃链作为上下文，调用模型；保存前把 anchor 下旧消息整组 `version+=1`，新消息以同一 anchor、`version=0` 写入 |
 | `stop` | 取消当前用户正在运行的生成任务 | `pid` 和 `sid` 仍需通过归属校验 | 取消当前用户运行中的任务并释放用户锁 |
 
 #### SSE 事件体
@@ -672,6 +671,7 @@ SSE 数据帧格式：每帧为 `data: <JSON>`，以空行分隔。
 |---|---|---|---|
 | `type` | string | 是 | 固定为 `done` |
 | `msg_id` | string | 否 | 成功保存最终回复后返回的消息 ID |
+| `anchor_msg_id` | string | 否 | 本次成功生成回合的 anchor msg_id；`send` 时即新回合首条 user 消息的 ID，`regenerate` 时即原 anchor |
 | `error` | string | 否 | SSE 流内错误描述 |
 | `error_code` | string | 否 | SSE 流内错误码 |
 
@@ -697,8 +697,8 @@ SSE 数据帧格式：每帧为 `data: <JSON>`，以空行分隔。
 |---|---|---|
 | `FORBIDDEN` | 无权访问项目或会话 | `pid`、`sid` 不属于当前用户，或二者不匹配 |
 | `SESSION_BUSY` | 当前用户已有生成任务在运行 | 同一用户同时发起多个 `send` 或 `regenerate` |
-| `BAD_REQUEST` | 请求数据不合法 | `send` 的 `message` 为空，或 `regenerate` 缺少 `parent_msg_id` |
-| `RESOURCE_NOT_FOUND` | 资源不存在 | `parent_msg_id` 不存在或不属于当前用户 |
+| `BAD_REQUEST` | 请求数据不合法 | `send` 的 `message` 为空，或 `regenerate` 缺少 `anchor_msg_id` |
+| `RESOURCE_NOT_FOUND` | 资源不存在 | `anchor_msg_id` 不存在或不属于当前用户 |
 | `MODEL_CALL_FAILED` | 模型调用失败 | 模型调用异常，最多重试 3 次后仍失败，或没有收到模型结果事件 |
 | `LOOP_CONFIG_ERROR` | 状态机配置错误 | 状态机节点未注册 |
 | `LOOP_EXECUTION_ERROR` | 节点执行异常 | 状态机节点抛出未捕获异常 |

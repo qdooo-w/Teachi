@@ -70,7 +70,7 @@ async def validate_node(ctx: LoopContext) -> NodeOutput:
     """校验请求归属与合法性。
 
     所有 action 统一走归属链验证: user → project → session。
-    REGENERATE 额外校验 parent_msg_id 存在性。
+    REGENERATE 额外校验 anchor_msg_id 存在性。
     SEND 额外校验 user_input 和 pid 非空。
     STOP 仅归属链校验，不过则拒绝。
     """
@@ -95,20 +95,25 @@ async def validate_node(ctx: LoopContext) -> NodeOutput:
             ctx.error_code = "SESSION_BUSY"
             return NodeOutput(transition=NodeName.STREAM_ERROR)
         await lock.acquire()
-    # 重试需要绑定原有的 parent_msg_id，校验其存在性和归属
+    # 重试需要绑定原有的 anchor（turn anchor），校验其存在性和归属
     if ctx.action == ActionKind.REGENERATE:
-        if not ctx.parent_msg_id:
-            ctx.error = "Missing parent_msg_id for regenerate"
+        if not ctx.anchor_msg_id:
+            ctx.error = "Missing anchor_msg_id for regenerate"
             ctx.error_code = "BAD_REQUEST"
             return NodeOutput(transition=NodeName.STREAM_ERROR)
 
-        parent = db.messages.get_for_user(
-            msg_id=ctx.parent_msg_id,
+        anchor = db.messages.get_for_user(
+            msg_id=ctx.anchor_msg_id,
             user_uuid=ctx.user_uuid,
         )
-        if parent is None:
-            ctx.error = "Parent message not found"
+        if anchor is None:
+            ctx.error = "Anchor message not found"
             ctx.error_code = "RESOURCE_NOT_FOUND"
+            return NodeOutput(transition=NodeName.STREAM_ERROR)
+        # anchor 必须是 turn 的根（self-reference）。前端没传根时也应为非空。
+        if anchor.get("anchor_msg_id") != anchor.get("msg_id"):
+            ctx.error = "anchor_msg_id must be a turn anchor (self-referencing user message)"
+            ctx.error_code = "BAD_REQUEST"
             return NodeOutput(transition=NodeName.STREAM_ERROR)
 
     elif ctx.action == ActionKind.SEND:
@@ -152,15 +157,16 @@ async def stop_node(ctx: LoopContext) -> NodeOutput:
 
 @register_node(NodeName.LOAD_HISTORY)
 async def load_history_node(ctx: LoopContext) -> NodeOutput:
-    """加载会话最新消息历史并反序列化为 ModelMessage 列表。
+    """加载会话当前活跃版本（version=0）的消息并反序列化为 ModelMessage 列表。
 
-    REGENERATE 模式: 截断到 parent_msg_id 之前。
-    parent_msg_id 是数据库的 msg_id（非 ModelMessage.run_id），
-    因此用原始行中的 msg_id 做匹配。
+    REGENERATE 模式：截断到 anchor（anchor_msg_id）所在回合之前。
+    anchor 自身和它之后的活跃消息都不进入上下文 —— 等本次重放写新版本，
+    旧版本会被 bump 到 version=1。
+    SEND 模式：返回到当前为止的全部活跃消息。
     """
     db = DatabaseFacade(db_path=DATABASE_PATH)
 
-    raw_messages = db.messages.list_latest_by_session_for_user(
+    raw_messages = db.messages.list_active_by_session_for_user(
         sid=ctx.sid,
         user_uuid=ctx.user_uuid,
     )
@@ -169,9 +175,11 @@ async def load_history_node(ctx: LoopContext) -> NodeOutput:
     history: list[ModelMessage] = []
 
     for m in raw_messages:
-        if ctx.action == ActionKind.REGENERATE and ctx.parent_msg_id:
-            if m["msg_id"] == ctx.parent_msg_id:
-                break  # 停止在前一条，不包含 parent 消息
+        if ctx.action == ActionKind.REGENERATE and ctx.anchor_msg_id:
+            # 命中本 anchor 的任意消息即停止——active 序列里属于该 anchor 的消息
+            # 在 SAVE bump 之后会被替换为新一轮内容，这里截断就是「本回合之前的上下文」。
+            if m["anchor_msg_id"] == ctx.anchor_msg_id:
+                break
         history.append(adapter.validate_json(m["raw_json"]))
 
     ctx.history_messages = history
@@ -182,16 +190,54 @@ async def load_history_node(ctx: LoopContext) -> NodeOutput:
 async def build_messages_node(ctx: LoopContext) -> NodeOutput:
     """组装传给模型的完整消息列表 ctx.messages。
 
-    SEND: 在历史末尾追加当前用户消息 ModelRequest。
-    REGENERATE: 历史已截断至 target 之前，最后一条为用户消息，直接复用。
+    SEND: 在历史末尾追加当前用户输入。
+    REGENERATE:
+        - user_input 非空 → 用新 PROMPT 覆盖 anchor 原内容，作为本回合新 user 消息追加。
+        - user_input 为空 → 复用 anchor 对应的原始 user 消息内容。
     """
     if ctx.action == ActionKind.SEND:
         now = datetime.datetime.now(datetime.timezone.utc)
         user_part = UserPromptPart(content=ctx.user_input, timestamp=now)
         user_msg: ModelMessage = ModelRequest(parts=[user_part])  # type: ignore[arg-type]
         ctx.messages = ctx.history_messages + [user_msg]
+        return NodeOutput()
+
+    # REGENERATE
+    if ctx.user_input.strip():
+        # 用户改了 PROMPT
+        prompt_text = ctx.user_input
     else:
-        ctx.messages = list(ctx.history_messages)
+        # 用户没改，复用 anchor 的原文（从数据库读 raw_json 反序列化取 UserPromptPart.content）
+        db = DatabaseFacade(db_path=DATABASE_PATH)
+        anchor_row = db.messages.get_for_user(
+            msg_id=ctx.anchor_msg_id or "",
+            user_uuid=ctx.user_uuid,
+        )
+        if anchor_row is None:
+            ctx.error = "Anchor message vanished"
+            ctx.error_code = "RESOURCE_NOT_FOUND"
+            return NodeOutput(transition=NodeName.STREAM_ERROR)
+        adapter = TypeAdapter(ModelMessage)
+        anchor_msg = adapter.validate_json(anchor_row["raw_json"])
+        # 取第一段 UserPromptPart.content
+        prompt_text = ""
+        if isinstance(anchor_msg, ModelRequest):
+            for part in anchor_msg.parts:
+                if isinstance(part, UserPromptPart):
+                    # UserPromptPart.content 可能是 str 或多模态序列；当前仅支持文本场景
+                    prompt_text = part.content if isinstance(part.content, str) else str(part.content)
+                    break
+        if not prompt_text:
+            ctx.error = "Cannot recover prompt from anchor message"
+            ctx.error_code = "BAD_REQUEST"
+            return NodeOutput(transition=NodeName.STREAM_ERROR)
+
+    # 把决定后的 prompt 写回 ctx.user_input，便于 CALL_MODEL 直接复用
+    ctx.user_input = prompt_text
+    now = datetime.datetime.now(datetime.timezone.utc)
+    user_part = UserPromptPart(content=prompt_text, timestamp=now)
+    user_msg = ModelRequest(parts=[user_part])  # type: ignore[arg-type]
+    ctx.messages = ctx.history_messages + [user_msg]
 
     return NodeOutput()
 
@@ -249,8 +295,9 @@ async def call_model_node(ctx: LoopContext) -> NodeOutput:
         user_prompt: str | None = ctx.user_input
         message_history: list[ModelMessage] | None = ctx.history_messages
     else:
-        # REGENERATE: 历史已含用户消息，传 None 让 PydanticAI 从历史末尾继续
-        user_prompt = None
+        # REGENERATE: BUILD_MESSAGES 已把 prompt 回填到 ctx.user_input。
+        # 历史是「anchor 之前的活跃消息」，不含本回合的任何旧版本。
+        user_prompt = ctx.user_input
         message_history = ctx.history_messages if ctx.history_messages else None
 
     try:
@@ -306,27 +353,35 @@ async def call_model_node(ctx: LoopContext) -> NodeOutput:
 
 @register_node(NodeName.SAVE)
 async def save_node(ctx: LoopContext) -> NodeOutput:
-    """落库本轮新消息并更新会话时间戳。"""
+    """落库本轮新消息并更新会话时间戳。
+
+    SEND: anchor=None 传入，save_agent_messages 内部会用本回合第一条 user 消息
+          的 msg_id 自引用作为新 anchor。
+    REGENERATE: 先把 anchor 组所有旧消息的 version 自增 1（旧版本退到 v=1...n），
+                再以同一 anchor、version=0 写入新一组消息。前端按 version=0 取出即活跃组。
+    """
     db = DatabaseFacade(db_path=DATABASE_PATH)
 
-    # 计算本轮新产生的消息
-    new_messages = [
-        m for m in ctx.messages
-        if m not in ctx.history_messages
-    ]
+    new_messages = [m for m in ctx.messages if m not in ctx.history_messages]
 
     if new_messages:
-        parent_msg_id = (
-            ctx.parent_msg_id if ctx.action == ActionKind.REGENERATE else None
-        )
-        response_msg_id = db.messages.save_agent_messages(
+        if ctx.action == ActionKind.REGENERATE and ctx.anchor_msg_id:
+            db.messages.bump_versions_for_anchor(anchor_msg_id=ctx.anchor_msg_id)
+            anchor_for_save: str | None = ctx.anchor_msg_id
+        else:
+            anchor_for_save = None
+
+        response_msg_id, anchor_msg_id = db.messages.save_agent_messages(
             sid=ctx.sid,
             user_uuid=ctx.user_uuid,
             new_messages=new_messages,
             is_final_turn=True,
-            parent_msg_id=parent_msg_id,
+            anchor_msg_id=anchor_for_save,
         )
         ctx.response_msg_id = response_msg_id
+        # SEND 场景把新生成的 anchor 回写，便于响应携带
+        if ctx.action == ActionKind.SEND:
+            ctx.anchor_msg_id = anchor_msg_id
 
     db.sessions.touch_timestamp(sid=ctx.sid)
     return NodeOutput()

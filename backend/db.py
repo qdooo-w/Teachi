@@ -285,20 +285,23 @@ class MessagesFacade(_DataBase):
         sid: str,
         kind: str,
         raw_json: str,
-        parent_msg_id: str | None = None,
-        version: int | None = None,
-        is_latest: int = 1,
+        anchor_msg_id: str | None = None,
+        version: int = 0,
     ) -> dict:
+        """新增消息。
+
+        version 含义：0 表示当前活跃版本；>0 表示已被新一次 regenerate 推到旧版位的历史版本。
+        anchor_msg_id 含义：turn anchor，同一回合内 user/tool_call/tool_result/assistant 共享。
+        - 第一条 user 消息会被建表后立刻回填为自身的 msg_id（self-reference）。
+        - 同一 anchor 下，(anchor_msg_id, version, kind, timestamp) 标识一条具体消息。
+        """
         msg_id = str(uuid.uuid4())
         message_timestamp = self._now_timestamp()
-        # 设置默认版本号
-        if version is None:
-            version = 1
         with self._cursor() as cursor:
             cursor.execute(
                 """
-                INSERT INTO messages (msg_id, sid, kind, raw_json, timestamp, parent_msg_id, version, is_latest, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO messages (msg_id, sid, kind, raw_json, timestamp, anchor_msg_id, version, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     msg_id,
@@ -306,9 +309,8 @@ class MessagesFacade(_DataBase):
                     kind,
                     raw_json,
                     message_timestamp,
-                    parent_msg_id,
+                    anchor_msg_id,
                     version,
-                    is_latest,
                     message_timestamp,
                 ),
             )
@@ -323,9 +325,8 @@ class MessagesFacade(_DataBase):
         user_uuid: str,
         kind: str,
         raw_json: str,
-        parent_msg_id: str | None = None,
-        version: int | None = None,
-        is_latest: int = 1,
+        anchor_msg_id: str | None = None,
+        version: int = 0,
     ) -> dict:
         owned_session = self._root.sessions.get_for_user(sid=sid, user_uuid=user_uuid)
         if owned_session is None:
@@ -334,16 +335,23 @@ class MessagesFacade(_DataBase):
             sid=sid,
             kind=kind,
             raw_json=raw_json,
-            parent_msg_id=parent_msg_id,
+            anchor_msg_id=anchor_msg_id,
             version=version,
-            is_latest=is_latest,
         )
+
+    def set_self_anchor(self, msg_id: str) -> None:
+        """把消息的 anchor_msg_id 回填为自身（用于 turn 第一条 user 消息）。"""
+        with self._cursor() as cursor:
+            cursor.execute(
+                "UPDATE messages SET anchor_msg_id = msg_id WHERE msg_id = ? AND anchor_msg_id IS NULL",
+                (msg_id,),
+            )
 
     def get_by_id(self, msg_id: str) -> dict | None:
         with self._cursor() as cursor:
             cursor.execute(
                 """
-                SELECT msg_id, sid, kind, raw_json, timestamp, parent_msg_id, version, is_latest, created_at
+                SELECT msg_id, sid, kind, raw_json, timestamp, anchor_msg_id, version, created_at
                 FROM messages
                 WHERE msg_id = ?
                 """,
@@ -356,7 +364,7 @@ class MessagesFacade(_DataBase):
         with self._cursor() as cursor:
             cursor.execute(
                 """
-                SELECT m.msg_id, m.sid, m.kind, m.raw_json, m.timestamp, m.parent_msg_id, m.version, m.is_latest, m.created_at
+                SELECT m.msg_id, m.sid, m.kind, m.raw_json, m.timestamp, m.anchor_msg_id, m.version, m.created_at
                 FROM messages AS m
                 JOIN sessions AS s ON m.sid = s.sid
                 JOIN projects AS p ON s.pid = p.pid
@@ -371,10 +379,11 @@ class MessagesFacade(_DataBase):
         with self._cursor() as cursor:
             cursor.execute(
                 """
-                SELECT msg_id, sid, kind, raw_json, timestamp, parent_msg_id, version, is_latest, created_at
-                FROM messages
-                WHERE sid = ?
-                ORDER BY timestamp ASC
+                SELECT m.msg_id, m.sid, m.kind, m.raw_json, m.timestamp, m.anchor_msg_id, m.version, m.created_at
+                FROM messages AS m
+                LEFT JOIN messages AS a ON m.anchor_msg_id = a.msg_id
+                WHERE m.sid = ?
+                ORDER BY COALESCE(a.timestamp, m.timestamp) ASC, m.timestamp ASC
                 """,
                 (sid,),
             )
@@ -385,28 +394,36 @@ class MessagesFacade(_DataBase):
         with self._cursor() as cursor:
             cursor.execute(
                 """
-                SELECT m.msg_id, m.sid, m.kind, m.raw_json, m.timestamp, m.parent_msg_id, m.version, m.is_latest, m.created_at
+                SELECT m.msg_id, m.sid, m.kind, m.raw_json, m.timestamp, m.anchor_msg_id, m.version, m.created_at
                 FROM messages AS m
                 JOIN sessions AS s ON m.sid = s.sid
                 JOIN projects AS p ON s.pid = p.pid
+                LEFT JOIN messages AS a ON m.anchor_msg_id = a.msg_id
                 WHERE m.sid = ? AND p.user_uuid = ?
-                ORDER BY m.timestamp ASC
+                ORDER BY COALESCE(a.timestamp, m.timestamp) ASC, m.timestamp ASC
                 """,
                 (sid, user_uuid),
             )
             rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
-    def list_latest_by_session_for_user(self, sid: str, user_uuid: str) -> list[dict]:
+    def list_active_by_session_for_user(self, sid: str, user_uuid: str) -> list[dict]:
+        """加载会话内 version=0 的活跃消息，按"回合发起时间，回合内消息时间"双键升序。
+
+        用于 LOAD_HISTORY 节点构造模型上下文与 GET /sessions/{sid}/messages：
+        - 排序键用 anchor.timestamp 而非消息自身 timestamp，确保 regenerate 写入的新消息
+          回到原回合在历史中的位置，而不是被推到列表末尾。
+        """
         with self._cursor() as cursor:
             cursor.execute(
                 """
-                SELECT m.msg_id, m.sid, m.kind, m.raw_json, m.timestamp, m.parent_msg_id, m.version, m.is_latest, m.created_at
+                SELECT m.msg_id, m.sid, m.kind, m.raw_json, m.timestamp, m.anchor_msg_id, m.version, m.created_at
                 FROM messages AS m
                 JOIN sessions AS s ON m.sid = s.sid
                 JOIN projects AS p ON s.pid = p.pid
-                WHERE m.sid = ? AND p.user_uuid = ? AND m.is_latest = 1
-                ORDER BY m.timestamp ASC
+                LEFT JOIN messages AS a ON m.anchor_msg_id = a.msg_id
+                WHERE m.sid = ? AND p.user_uuid = ? AND m.version = 0
+                ORDER BY COALESCE(a.timestamp, m.timestamp) ASC, m.timestamp ASC
                 """,
                 (sid, user_uuid),
             )
@@ -417,10 +434,11 @@ class MessagesFacade(_DataBase):
         with self._cursor() as cursor:
             cursor.execute(
                 """
-                SELECT msg_id, sid, kind, raw_json, timestamp, parent_msg_id, version, is_latest, created_at
-                FROM messages
-                WHERE sid = ?
-                ORDER BY timestamp ASC
+                SELECT m.msg_id, m.sid, m.kind, m.raw_json, m.timestamp, m.anchor_msg_id, m.version, m.created_at
+                FROM messages AS m
+                LEFT JOIN messages AS a ON m.anchor_msg_id = a.msg_id
+                WHERE m.sid = ?
+                ORDER BY COALESCE(a.timestamp, m.timestamp) ASC, m.timestamp ASC
                 LIMIT ? OFFSET ?
                 """,
                 (sid, limit, offset),
@@ -438,12 +456,13 @@ class MessagesFacade(_DataBase):
         with self._cursor() as cursor:
             cursor.execute(
                 """
-                SELECT m.msg_id, m.sid, m.kind, m.raw_json, m.timestamp, m.parent_msg_id, m.version, m.is_latest, m.created_at
+                SELECT m.msg_id, m.sid, m.kind, m.raw_json, m.timestamp, m.anchor_msg_id, m.version, m.created_at
                 FROM messages AS m
                 JOIN sessions AS s ON m.sid = s.sid
                 JOIN projects AS p ON s.pid = p.pid
+                LEFT JOIN messages AS a ON m.anchor_msg_id = a.msg_id
                 WHERE m.sid = ? AND p.user_uuid = ?
-                ORDER BY m.timestamp ASC
+                ORDER BY COALESCE(a.timestamp, m.timestamp) ASC, m.timestamp ASC
                 LIMIT ? OFFSET ?
                 """,
                 (sid, user_uuid, limit, offset),
@@ -496,64 +515,73 @@ class MessagesFacade(_DataBase):
             affected = cursor.rowcount
         return affected > 0
 
-    def mark_not_latest_after(self, sid: str, timestamp: float) -> int:
+    def bump_versions_for_anchor(self, anchor_msg_id: str) -> int:
+        """把同一 turn anchor 下所有消息的 version 自增 1。
+
+        regenerate 调用前执行：把当前活跃组（version=0）整体推到 version=1，
+        随后写入的新消息以 version=0 占据活跃位。
+        """
         with self._cursor() as cursor:
             cursor.execute(
-                """
-                UPDATE messages
-                SET is_latest = 0
-                WHERE sid = ? AND timestamp > ?
-                """,
-                (sid, timestamp),
+                "UPDATE messages SET version = version + 1 WHERE anchor_msg_id = ?",
+                (anchor_msg_id,),
             )
             affected = cursor.rowcount
         return affected
 
-    def get_max_version_for_parent(self, parent_msg_id: str) -> int:
-        with self._cursor() as cursor:
-            cursor.execute(
-                "SELECT MAX(version) AS max_ver FROM messages WHERE parent_msg_id = ?",
-                (parent_msg_id,),
-            )
-            row = cursor.fetchone()
-        return int(row["max_ver"]) if row and row["max_ver"] else 0
+    def list_versions(self, anchor_msg_id: str, user_uuid: str) -> list[dict]:
+        """列出同一 anchor 下的所有消息（含历史版本与当前活跃版本）。
 
-    def list_versions(self, parent_msg_id: str, user_uuid: str) -> list[dict]:
+        前端可按 (version, kind, timestamp) 自行重组各版本回合。
+        """
         with self._cursor() as cursor:
             cursor.execute(
                 """
-                SELECT m.msg_id, m.sid, m.kind, m.raw_json, m.timestamp, m.parent_msg_id, m.version, m.is_latest, m.created_at
+                SELECT m.msg_id, m.sid, m.kind, m.raw_json, m.timestamp, m.anchor_msg_id, m.version, m.created_at
                 FROM messages AS m
                 JOIN sessions AS s ON m.sid = s.sid
                 JOIN projects AS p ON s.pid = p.pid
-                WHERE m.parent_msg_id = ? AND p.user_uuid = ?
-                ORDER BY m.version ASC
+                WHERE m.anchor_msg_id = ? AND p.user_uuid = ?
+                ORDER BY m.version ASC, m.timestamp ASC
                 """,
-                (parent_msg_id, user_uuid),
+                (anchor_msg_id, user_uuid),
             )
             rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
-    def switch_version(self, msg_id: str, user_uuid: str) -> bool:
+    def swap_version_group(self, msg_id: str, user_uuid: str) -> bool:
+        """把 msg_id 所在版本与当前活跃版本（version=0）整组对调。
+
+        语义：找到 msg_id 的 (anchor, version=v)，若 v == 0 直接成功；
+        否则把 anchor 下所有 version=0 的记录改为 v，所有 version=v 的记录改为 0。
+        整组 swap 保证 (user, tool_call, tool_result, assistant) 在版本切换后仍属于同一回合。
+        """
         msg = self.get_for_user(msg_id=msg_id, user_uuid=user_uuid)
         if msg is None:
             return False
 
-        parent_msg_id = msg.get("parent_msg_id")
-        if not parent_msg_id:
+        anchor = msg.get("anchor_msg_id")
+        target_version = msg.get("version")
+        if not anchor or target_version is None:
             return False
+        if int(target_version) == 0:
+            return True
 
+        sentinel = -1  # 临时占位，避免 UPDATE 顺序导致两组撞车
         with self._cursor() as cursor:
             cursor.execute(
-                "UPDATE messages SET is_latest = 0 WHERE parent_msg_id = ?",
-                (parent_msg_id,),
+                "UPDATE messages SET version = ? WHERE anchor_msg_id = ? AND version = 0",
+                (sentinel, anchor),
             )
             cursor.execute(
-                "UPDATE messages SET is_latest = 1 WHERE msg_id = ?",
-                (msg_id,),
+                "UPDATE messages SET version = 0 WHERE anchor_msg_id = ? AND version = ?",
+                (anchor, target_version),
             )
-            affected = cursor.rowcount
-        return affected > 0
+            cursor.execute(
+                "UPDATE messages SET version = ? WHERE anchor_msg_id = ? AND version = ?",
+                (target_version, anchor, sentinel),
+            )
+        return True
 
     def save_agent_messages(
         self,
@@ -562,76 +590,56 @@ class MessagesFacade(_DataBase):
         user_uuid: str,
         new_messages: list[ModelMessage],
         is_final_turn: bool = False,
-        parent_msg_id: str | None = None,
-        version: int | None = None,
-    ) -> str | None:
-        """
-        保存 Agent 产生的消息到数据库。
-        
-        注意：工具调用次数现在通过 Pydantic AI 的 result.usage().tool_calls 获取，
-        本函数不再负责计数。
-        
-        参数：
-        - version: 消息版本号。仅在 regenerate 场景（parent_msg_id 非空时）使用
-        
-        返回值：最终消息的 msg_id（仅在 is_final_turn=True 且有 assistant 消息时有值）
+        anchor_msg_id: str | None = None,
+    ) -> tuple[str | None, str | None]:
+        """保存 Agent 一个回合产生的消息列表。
+
+        参数:
+            anchor_msg_id: 回合锚点。
+                - None 表示首次发送：本回合第一条 user 消息会被回填为自身 msg_id 作为新 anchor。
+                - 非 None 表示 regenerate：调用方应已对该 anchor 调用过 bump_versions_for_anchor，
+                  本次写入的全部消息共享此 anchor 且 version=0。
+        返回:
+            (final_msg_id, anchor_msg_id)。final_msg_id 仅在 is_final_turn 且有 assistant 消息时返回。
         """
         final_msg_id: str | None = None
+        current_anchor = anchor_msg_id
+
+        def _insert(kind: str, raw: str) -> dict:
+            row = self.create_for_user(
+                sid=sid,
+                user_uuid=user_uuid,
+                kind=kind,
+                raw_json=raw,
+                anchor_msg_id=current_anchor,
+                version=0,
+            )
+            return row
 
         for message in new_messages:
             if isinstance(message, ModelResponse):
                 has_tool_call = any(isinstance(part, ToolCallPart) for part in message.parts)
                 if has_tool_call:
-                    self.create_for_user(
-                        sid=sid,
-                        user_uuid=user_uuid,
-                        kind="tool_call",
-                        raw_json=self._serialize_message(message),
-                        parent_msg_id=parent_msg_id,
-                        version=version,
-                    )
+                    _insert("tool_call", self._serialize_message(message))
                 else:
                     if is_final_turn:
-                        row = self.create_for_user(
-                            sid=sid,
-                            user_uuid=user_uuid,
-                            kind="assistant",
-                            raw_json=self._serialize_message(message),
-                            parent_msg_id=parent_msg_id,
-                            version=version,
-                        )
+                        row = _insert("assistant", self._serialize_message(message))
                         final_msg_id = str(row["msg_id"])
                     else:
-                        self.create_for_user(
-                            sid=sid,
-                            user_uuid=user_uuid,
-                            kind="agent_response",
-                            raw_json=self._serialize_message(message),
-                            parent_msg_id=parent_msg_id,
-                            version=version,
-                        )
+                        _insert("agent_response", self._serialize_message(message))
             elif isinstance(message, ModelRequest):
                 has_tool_return = any(isinstance(part, ToolReturnPart) for part in message.parts)
                 if has_tool_return:
-                    self.create_for_user(
-                        sid=sid,
-                        user_uuid=user_uuid,
-                        kind="tool_result",
-                        raw_json=self._serialize_message(message),
-                        parent_msg_id=parent_msg_id,
-                        version=version,
-                    )
+                    _insert("tool_result", self._serialize_message(message))
                 elif any(isinstance(part, UserPromptPart) for part in message.parts):
-                    self.create_for_user(
-                        sid=sid,
-                        user_uuid=user_uuid,
-                        kind="user",
-                        raw_json=self._serialize_message(message),
-                        parent_msg_id=parent_msg_id,
-                        version=version,
-                    )
+                    row = _insert("user", self._serialize_message(message))
+                    if current_anchor is None:
+                        # 首次发送：把这条 user 消息作为本回合 anchor
+                        new_anchor = str(row["msg_id"])
+                        self.set_self_anchor(new_anchor)
+                        current_anchor = new_anchor
 
-        return final_msg_id
+        return final_msg_id, current_anchor
 
 
 class AccessFacade(_DataBase):
@@ -764,12 +772,11 @@ class DatabaseFacade:
                 kind TEXT NOT NULL,
                 raw_json TEXT NOT NULL,
                 timestamp REAL NOT NULL,
-                parent_msg_id TEXT,
-                version INTEGER DEFAULT 1,
-                is_latest INTEGER DEFAULT 1,
+                anchor_msg_id TEXT,
+                version INTEGER NOT NULL DEFAULT 0,
                 created_at REAL NOT NULL,
                 FOREIGN KEY (sid) REFERENCES sessions(sid) ON DELETE CASCADE,
-                FOREIGN KEY (parent_msg_id) REFERENCES messages(msg_id) ON DELETE SET NULL
+                FOREIGN KEY (anchor_msg_id) REFERENCES messages(msg_id) ON DELETE SET NULL
             );
             CREATE TABLE IF NOT EXISTS nonces (
                 nonce TEXT PRIMARY KEY,

@@ -25,27 +25,8 @@
 
 ## CRITICAL
 
-### C1. JWT 密钥默认为空字符串 — 可伪造任意 Token
 
-**位置**：`config.py:19`
 
-```python
-JWT_SECRET = os.getenv("JWT_SECRET", "")
-```
-
-**问题**：未设置环境变量时，JWT 使用空字符串签名。PyJWT 不拒绝空密钥，攻击者可随意伪造任意用户的 access token。
-
-**修复**：启动时校验，空则拒绝启动
-
-```python
-JWT_SECRET = os.getenv("JWT_SECRET", "")
-if not JWT_SECRET or len(JWT_SECRET) < 32:
-    raise RuntimeError("JWT_SECRET must be set and at least 32 characters")
-```
-
----
-
-## HIGH
 
 ### H1. 无接口限流 — 登录端点可被暴力破解
 
@@ -125,28 +106,6 @@ def _safe_path(self, relative_path: str) -> Path:
         raise FileError(f"Access denied: Path {relative_path} is outside base directory.")
     return target_path
 ```
-
-### H5. AI 工具暴露 delete_file / delete_dir — 提示注入可导致数据销毁
-
-**位置**：`file.py:154-158`、`tool.py:104-125`
-
-**问题**：`File_Handler` 通过 `getattr` 动态调用方法，仅排除 `_` 开头的方法。`delete_file` 和 `delete_dir`（含 `shutil.rmtree`）对 LLM 可见。若用户消息中嵌入提示注入，LLM 可调用 `delete_dir({"path": "."})` 删除整个项目目录。
-
-**修复**：使用显式白名单
-
-```python
-# file.py
-ALLOWED_METHODS = {"create_file", "read_file", "create_dir", "search_dir"}
-
-def File_Handler(method: str, args: dict, pid=None, user_uuid=None) -> dict:
-    ...
-    if method not in ALLOWED_METHODS:
-        return {"error": f"method_not_allowed: {method}"}
-    func = getattr(fs, method)
-    result = func(**args)
-    ...
-```
-
 ---
 
 ## MEDIUM

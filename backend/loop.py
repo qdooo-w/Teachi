@@ -208,6 +208,8 @@ async def stream_response(ctx: LoopContext) -> AsyncGenerator[str, None]:
     done_event: dict[str, Any] = {"type": "done"}
     if ctx.response_msg_id:
         done_event["msg_id"] = ctx.response_msg_id
+    if ctx.anchor_msg_id:
+        done_event["anchor_msg_id"] = ctx.anchor_msg_id
     if ctx.error:
         done_event["error"] = ctx.error
         done_event["error_code"] = ctx.error_code
@@ -224,8 +226,11 @@ class ChatRequest(BaseModel):
 
     pid: str = Field(..., description="项目 ID")
     action: ActionKind = Field(default=ActionKind.SEND, description="send | regenerate | stop")
-    message: str = Field(default="", description="用户输入文本 (action=stop 时可为空)")
-    parent_msg_id: str | None = Field(default=None, description="regenerate 时指定的父消息 ID")
+    message: str = Field(default="", description="用户输入文本（regenerate 时可为空表示沿用原 PROMPT）")
+    anchor_msg_id: str | None = Field(
+        default=None,
+        description="regenerate 必填：要重放回合的 anchor msg_id（即原回合首条 user 消息 ID）",
+    )
     allowed_tools: list[str] | None = Field(default=None, description="前端请求允许的工具列表")
 
 
@@ -248,7 +253,7 @@ async def chat_loop(
         sid=sid,
         action=payload.action,
         user_input=payload.message,
-        parent_msg_id=payload.parent_msg_id,
+        anchor_msg_id=payload.anchor_msg_id,
         allowed_tools=payload.allowed_tools,
     )
 
