@@ -5,7 +5,9 @@ import MessageContent from '../components/MessageContent.vue'
 import SkillPicker from '../components/SkillPicker.vue'
 import SkillChips from '../components/SkillChips.vue'
 import EditPromptDialog from '../components/EditPromptDialog.vue'
+import ConfirmDialog from '../components/ConfirmDialog.vue'
 import {
+  deleteTurn,
   getErrorMessage,
   listDisplayMessages,
   listMessageVersions,
@@ -64,6 +66,12 @@ const displayedPosByAnchor = ref<Record<string, number>>({})
 const editDialogOpen = ref(false)
 const editDialogAnchor = ref<string | null>(null)
 const editDialogInitial = ref('')
+
+// 删除回合确认弹窗
+const deleteDialogOpen = ref(false)
+const deleteDialogAnchor = ref<string | null>(null)
+const deleteSubmitting = ref(false)
+const deleteDialogError = ref('')
 
 const isChatReady = computed(
   () => Boolean(currentProject.value && currentSession.value && !preparing.value),
@@ -239,6 +247,39 @@ async function handleEditPromptSubmit(text: string): Promise<void> {
   editDialogAnchor.value = null
   editDialogInitial.value = ''
   if (target) await regenerateMessage(target, text)
+}
+
+function openDeleteTurnDialog(message: DisplayMessage): void {
+  if (streaming.value || !message.anchor_msg_id) return
+  deleteDialogAnchor.value = message.anchor_msg_id
+  deleteDialogError.value = ''
+  deleteDialogOpen.value = true
+}
+
+async function handleDeleteTurnConfirm(): Promise<void> {
+  const anchor = deleteDialogAnchor.value
+  if (!anchor) return
+  deleteSubmitting.value = true
+  deleteDialogError.value = ''
+  try {
+    await deleteTurn(anchor)
+    // 关闭弹窗并清掉该 anchor 的客户端版本指针
+    deleteDialogOpen.value = false
+    deleteDialogAnchor.value = null
+    delete displayedPosByAnchor.value[anchor]
+    await loadMessages()
+  } catch (error) {
+    deleteDialogError.value = getErrorMessage(error)
+  } finally {
+    deleteSubmitting.value = false
+  }
+}
+
+function handleDeleteTurnCancel(): void {
+  if (deleteSubmitting.value) return
+  deleteDialogOpen.value = false
+  deleteDialogAnchor.value = null
+  deleteDialogError.value = ''
 }
 
 async function switchVersion(anchor: string, direction: -1 | 1): Promise<void> {
@@ -629,6 +670,19 @@ watch(
                   <path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
                 </svg>
               </button>
+              <button
+                v-if="message.anchor_msg_id && !streaming"
+                class="flex h-6 w-6 items-center justify-center rounded text-[#9ca3af] opacity-0 transition-opacity hover:bg-[#fee2e2] hover:text-[#b91c1c] group-hover:opacity-100"
+                title="删除此回合"
+                type="button"
+                @click="openDeleteTurnDialog(message)"
+              >
+                <svg class="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
+                  <path d="M3 6h18" />
+                  <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                </svg>
+              </button>
               <div class="rounded-3xl border border-[#d1d5db] bg-[#e5e7eb] px-5 py-3 text-[15px] leading-relaxed text-[#1f2937]">
                 <p class="whitespace-pre-wrap break-words">{{ message.content }}</p>
               </div>
@@ -796,6 +850,17 @@ watch(
       :initial-text="editDialogInitial"
       :submitting="streaming"
       @submit="handleEditPromptSubmit"
+    />
+    <ConfirmDialog
+      v-if="deleteDialogOpen"
+      title="删除此回合"
+      message="该回合当前活跃版本（user 与 assistant，含工具调用）将被永久删除。如果之前重放过，历史版本会保留。确定继续吗？"
+      confirm-text="删除"
+      danger
+      :submitting="deleteSubmitting"
+      :error="deleteDialogError"
+      @confirm="handleDeleteTurnConfirm"
+      @cancel="handleDeleteTurnCancel"
     />
   </div>
 </template>

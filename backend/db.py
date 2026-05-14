@@ -529,6 +529,31 @@ class MessagesFacade(_DataBase):
             affected = cursor.rowcount
         return affected
 
+    def delete_active_turn(self, *, anchor_msg_id: str, user_uuid: str) -> int:
+        """删除某 anchor 当前活跃版本（version=0）的整组消息。
+
+        范围：同 anchor + version=0 的所有 kind（user 自引用本条 + tool_call / tool_result /
+        assistant / agent_response）。历史版本（version>=1）保留，可通过版本切换访问。
+
+        归属校验：用户必须拥有 sid 所在的项目，否则 0 affected。
+        """
+        with self._cursor() as cursor:
+            cursor.execute(
+                """
+                DELETE FROM messages
+                WHERE anchor_msg_id = ? AND version = 0
+                    AND sid IN (
+                        SELECT s.sid
+                        FROM sessions AS s
+                        JOIN projects AS p ON s.pid = p.pid
+                        WHERE p.user_uuid = ?
+                    )
+                """,
+                (anchor_msg_id, user_uuid),
+            )
+            affected = cursor.rowcount
+        return affected
+
     def list_versions(self, anchor_msg_id: str, user_uuid: str) -> list[dict]:
         """列出同一 anchor 下的所有消息（含历史版本与当前活跃版本）。
 

@@ -393,6 +393,13 @@ export async function switchMessageVersion(targetVersionMsgId: string): Promise<
   )
 }
 
+export async function deleteTurn(anchorMsgId: string): Promise<void> {
+  await request<void>(
+    `/messages/${encodeURIComponent(anchorMsgId)}/turn`,
+    { method: 'DELETE' },
+  )
+}
+
 function createNonce(): string {
   return crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`
 }

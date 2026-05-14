@@ -492,6 +492,35 @@ def switch_to_message_version(
     )
 
 
+@router.delete("/messages/{anchor_msg_id}/turn", status_code=status.HTTP_204_NO_CONTENT)
+def delete_active_turn(
+    anchor_msg_id: str,
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> None:
+    """删除该回合当前活跃版本（version=0）的整组消息。
+
+    范围：anchor_msg_id 指向的回合下，所有 version=0 的消息（user 自身 +
+    tool_call / tool_result / assistant / agent_response）一并物理删除。
+    历史版本（version>=1）保留，可通过版本切换功能恢复。
+    """
+    user_uuid = current_user.get("uuid")
+    if not isinstance(user_uuid, str):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "AUTH_TOKEN_INVALID", "message": "Invalid token"},
+        )
+
+    affected = db.messages.delete_active_turn(
+        anchor_msg_id=anchor_msg_id,
+        user_uuid=user_uuid,
+    )
+    if affected == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "RESOURCE_NOT_FOUND", "message": "Active turn not found"},
+        )
+
+
 # ── 文件 API 模型 ───────────────────────────────────────────────────────────────
 
 class FileListEntry(BaseModel):
