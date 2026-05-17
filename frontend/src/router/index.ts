@@ -17,6 +17,12 @@ const routes: RouteRecordRaw[] = [
     name: 'chat',
     component: () => import('../views/ChatView.vue'),
   },
+  {
+    path: '/community',
+    name: 'community',
+    component: () => import('../views/CommunityView.vue'),
+    meta: { title: '社区' },
+  },
   { path: '/:pathMatch(.*)*', redirect: { name: 'overview' } },
 ]
 

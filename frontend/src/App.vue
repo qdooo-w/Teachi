@@ -337,13 +337,27 @@ onBeforeUnmount(() => {
         ]"
       >
         <div class="flex h-full w-64 flex-shrink-0 flex-col p-4">
-          <button
-            class="mb-6 mt-2 flex items-center gap-2 px-2 text-left"
-            type="button"
-            @click="closeSidebarOnMobile(); router.push({ name: 'overview' })"
-          >
-            <span class="text-2xl font-bold tracking-tight">Teachi</span>
-          </button>
+          <div class="mb-6 mt-2 flex items-center justify-between gap-2 px-2">
+            <button
+              class="flex items-center gap-2 text-left"
+              type="button"
+              @click="closeSidebarOnMobile(); router.push({ name: 'overview' })"
+            >
+              <span class="text-2xl font-bold tracking-tight">Teachi</span>
+            </button>
+            <button
+              class="flex h-7 items-center gap-1 rounded-full border border-[#e5e7eb] px-2.5 text-xs text-[#4b5563] transition-colors hover:border-[#1f6f5b]/40 hover:bg-[#e6f4ee] hover:text-[#1f6f5b]"
+              :class="{ 'border-[#1f6f5b]/40 bg-[#e6f4ee] text-[#1f6f5b]': $route.name === 'community' }"
+              type="button"
+              title="技能社区"
+              @click="closeSidebarOnMobile(); router.push({ name: 'community' })"
+            >
+              <svg class="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87m6-5.13a4 4 0 11-8 0 4 4 0 018 0zm6 3a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+              社区
+            </button>
+          </div>
 
           <div class="mb-4 flex min-h-[34px] items-center gap-1 rounded-2xl bg-[#f3f4f6] px-2">
             <button
