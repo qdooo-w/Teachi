@@ -1,6 +1,7 @@
 // frontend/src/composables/useAuth.ts
 import { reactive, ref, type Ref } from 'vue'
 import {
+  getCurrentUser,
   getCurrentUserId,
   getStoredToken,
   login,
@@ -9,11 +10,13 @@ import {
   register as registerAccount,
   setStoredToken,
   getErrorMessage,
+  type UserOut,
 } from '../api'
 
 const LAST_EMAIL_KEY = 'teachi.last_email'
 
 const token = ref<string | null>(getStoredToken())
+const currentUser = ref<UserOut | null>(null)
 const bootstrapping = ref(true)
 const preparing = ref(false)
 const authSubmitting = ref(false)
@@ -35,7 +38,23 @@ function setOnTokenReady(fn: () => Promise<void>): void {
 }
 
 function handleTokenChange(event: Event): void {
-  token.value = (event as CustomEvent<string | null>).detail
+  const next = (event as CustomEvent<string | null>).detail
+  token.value = next
+  // token 被清掉（如 401 刷新失败）时同步清缓存的用户信息
+  if (!next) currentUser.value = null
+}
+
+// 拉取并缓存当前登录用户信息；失败时不阻断整体流程，只记录用于回退展示。
+async function refreshCurrentUser(): Promise<void> {
+  if (!getStoredToken()) {
+    currentUser.value = null
+    return
+  }
+  try {
+    currentUser.value = await getCurrentUser()
+  } catch {
+    currentUser.value = null
+  }
 }
 
 async function initializeAuth(): Promise<void> {
@@ -44,7 +63,10 @@ async function initializeAuth(): Promise<void> {
       await refreshAccessToken().catch(() => undefined)
     }
     token.value = getStoredToken()
-    if (token.value && onTokenReady) await onTokenReady()
+    if (token.value) {
+      await refreshCurrentUser()
+      if (onTokenReady) await onTokenReady()
+    }
   } catch (error) {
     const message = getErrorMessage(error)
     errorMessage.value = message
@@ -75,6 +97,7 @@ async function submitAuth(): Promise<void> {
     }
     await login(authForm.email.trim(), authForm.password)
     localStorage.setItem(LAST_EMAIL_KEY, authForm.email.trim())
+    await refreshCurrentUser()
     if (onTokenReady) await onTokenReady()
   } catch (error) {
     authError.value = getErrorMessage(error)
@@ -85,10 +108,12 @@ async function submitAuth(): Promise<void> {
 
 async function handleLogout(): Promise<void> {
   await logout()
+  currentUser.value = null
 }
 
 function displayUser(): string {
-  const savedEmail = localStorage.getItem(LAST_EMAIL_KEY)
+  if (currentUser.value?.username) return currentUser.value.username
+  const savedEmail = currentUser.value?.email || localStorage.getItem(LAST_EMAIL_KEY)
   const userId = token.value ? getCurrentUserId() : null
   return savedEmail || (userId ? `${userId.slice(0, 8)}...` : '已登录')
 }
@@ -96,6 +121,7 @@ function displayUser(): string {
 export function useAuth() {
   return {
     token: token as Ref<string | null>,
+    currentUser,
     bootstrapping,
     preparing,
     authSubmitting,
