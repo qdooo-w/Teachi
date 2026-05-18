@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 from backend.auth import get_current_user
 from backend.config import APP_NAME, DATABASE_PATH
 from backend.db import DatabaseFacade
-from backend.file import FileBase, ProjectFile, UserFile, FileError, _TEXT_FILE_EXTENSIONS
+from backend.file import FileBase, ProjectFile, UserFile, FileError, _TEXT_FILE_EXTENSIONS, validate_skill_storage_path
 from backend.tool import get_registered_tool_names
 
 
@@ -556,6 +556,12 @@ class WriteFileRequest(BaseModel):
     content: str = Field(..., max_length=256 * 1024)
 
 
+class CreateDirectoryRequest(BaseModel):
+    """创建目录请求"""
+
+    path: str = Field(..., min_length=1, max_length=512)
+
+
 # ── 辅助函数 ────────────────────────────────────────────────────────────────────
 
 def _check_text_extension(path: str) -> None:
@@ -565,6 +571,57 @@ def _check_text_extension(path: str) -> None:
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             detail={"code": "UNSUPPORTED_FILE_TYPE", "message": f"File type {ext!r} is not supported"},
+        )
+
+
+def _validate_file_write_path(path: str) -> None:
+    _check_text_extension(path)
+    try:
+        validate_skill_storage_path(path)
+    except FileError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "FILE_ERROR", "message": str(e)},
+        ) from e
+
+
+def _validate_file_read_path(path: str) -> None:
+    _check_text_extension(path)
+    try:
+        validate_skill_storage_path(path)
+    except FileError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "FILE_ERROR", "message": str(e)},
+        ) from e
+
+
+def _validate_file_delete_path(path: str) -> None:
+    try:
+        validate_skill_storage_path(path, allow_skill_dir=True)
+    except FileError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "FILE_ERROR", "message": str(e)},
+        ) from e
+
+
+def _validate_file_directory_path(path: str) -> None:
+    try:
+        validate_skill_storage_path(path)
+    except FileError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "FILE_ERROR", "message": str(e)},
+        ) from e
+    parts = Path(path).parts
+    if len(parts) != 3 or parts[0] != "skills" or parts[2] not in {"references", "assets"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "FILE_ERROR",
+                "message": "Skill folders can only be skills/<name>/references or skills/<name>/assets",
+            },
         )
 
 
@@ -613,7 +670,7 @@ def read_user_file(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"code": "FORBIDDEN", "message": "Cannot access other user's files"},
         )
-    _check_text_extension(path)
+    _validate_file_read_path(path)
     try:
         fs = UserFile(user_uuid=user_id, db_facade=db)
         safe = fs._safe_path(path)
@@ -651,7 +708,7 @@ def write_user_file(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"code": "FORBIDDEN", "message": "Cannot access other user's files"},
         )
-    _check_text_extension(payload.path)
+    _validate_file_write_path(payload.path)
     try:
         fs = UserFile(user_uuid=user_id, db_facade=db)
         fs.create_file(payload.path, payload.content)
@@ -660,6 +717,34 @@ def write_user_file(
         return FileContentResponse(
             path=payload.path, content=payload.content, size=stat.st_size, updated_at=stat.st_mtime
         )
+    except PermissionError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "FORBIDDEN", "message": "Access denied"},
+        )
+    except FileError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "FILE_ERROR", "message": str(e)},
+        )
+
+
+@router.post("/users/{user_id}/files/directories", status_code=status.HTTP_204_NO_CONTENT)
+def create_user_directory(
+    user_id: str,
+    payload: CreateDirectoryRequest,
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> None:
+    """创建用户文件目录。当前仅允许 materialize skill 规范目录。"""
+    if user_id != current_user.get("uuid"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "FORBIDDEN", "message": "Cannot access other user's files"},
+        )
+    try:
+        _validate_file_directory_path(payload.path)
+        fs = UserFile(user_uuid=user_id, db_facade=db)
+        fs.create_dir(payload.path)
     except PermissionError:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -684,6 +769,7 @@ def delete_user_file(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"code": "FORBIDDEN", "message": "Cannot access other user's files"},
         )
+    _validate_file_delete_path(path)
     try:
         fs = UserFile(user_uuid=user_id, db_facade=db)
         safe = fs._safe_path(path)
@@ -757,7 +843,7 @@ def read_project_file(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"code": "AUTH_TOKEN_INVALID", "message": "Invalid token"},
         )
-    _check_text_extension(path)
+    _validate_file_read_path(path)
     try:
         fs = ProjectFile(pid=pid, user_uuid=user_uuid, db_facade=db)
         safe = fs._safe_path(path)
@@ -796,7 +882,7 @@ def write_project_file(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"code": "AUTH_TOKEN_INVALID", "message": "Invalid token"},
         )
-    _check_text_extension(payload.path)
+    _validate_file_write_path(payload.path)
     try:
         fs = ProjectFile(pid=pid, user_uuid=user_uuid, db_facade=db)
         fs.create_file(payload.path, payload.content)
@@ -805,6 +891,35 @@ def write_project_file(
         return FileContentResponse(
             path=payload.path, content=payload.content, size=stat.st_size, updated_at=stat.st_mtime
         )
+    except PermissionError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "RESOURCE_NOT_FOUND", "message": "Project not found"},
+        )
+    except FileError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "FILE_ERROR", "message": str(e)},
+        )
+
+
+@router.post("/projects/{pid}/files/directories", status_code=status.HTTP_204_NO_CONTENT)
+def create_project_directory(
+    pid: str,
+    payload: CreateDirectoryRequest,
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> None:
+    """创建项目文件目录。当前仅允许 materialize skill 规范目录。"""
+    user_uuid = current_user.get("uuid")
+    if not isinstance(user_uuid, str):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "AUTH_TOKEN_INVALID", "message": "Invalid token"},
+        )
+    try:
+        _validate_file_directory_path(payload.path)
+        fs = ProjectFile(pid=pid, user_uuid=user_uuid, db_facade=db)
+        fs.create_dir(payload.path)
     except PermissionError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -830,6 +945,7 @@ def delete_project_file(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"code": "AUTH_TOKEN_INVALID", "message": "Invalid token"},
         )
+    _validate_file_delete_path(path)
     try:
         fs = ProjectFile(pid=pid, user_uuid=user_uuid, db_facade=db)
         safe = fs._safe_path(path)

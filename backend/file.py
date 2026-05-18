@@ -2,7 +2,7 @@ import logging
 import re
 import shutil
 from pathlib import Path
-from typing import Union, List, Dict, Optional
+from typing import Union, List, Dict
 
 from backend.config import BASE_DIR
 
@@ -152,8 +152,10 @@ _SKILL_NAME_RESERVED: frozenset[str] = frozenset({"anthropic", "claude"})
 
 # 文本文件扩展名白名单（独立于 _TEXT_FILE_EXTENSIONS，避免被无关接口扩散影响）
 _SKILL_TEXT_EXTENSIONS: frozenset[str] = frozenset({
-    ".md", ".txt", ".json", ".yaml", ".yml", ".csv", ".xml",
+    ".md", ".txt", ".json", ".yaml", ".yml",
 })
+
+_SKILL_RESOURCE_DIRS: frozenset[str] = frozenset({"references", "assets"})
 
 
 def _validate_skill_name(skill_name: str) -> None:
@@ -191,4 +193,56 @@ def _validate_skill_relpath(rel_path: str) -> None:
             f"{sorted(_SKILL_TEXT_EXTENSIONS)}"
         )
 
+
+def validate_skill_storage_path(path: str, *, allow_skill_dir: bool = False) -> None:
+    """Validate paths under ``skills/`` against the Skill folder structure.
+
+    Non-skill paths are intentionally ignored so the generic file API can keep
+    serving other callers. Skill paths are constrained to:
+
+    - skills/<name>/SKILL.md
+    - skills/<name>/<text-file>
+    - skills/<name>/references/<text-file>
+    - skills/<name>/assets/<text-file>
+    - optional directory paths for references/assets and whole skill delete
+    """
+    if not isinstance(path, str) or not path.strip():
+        raise FileError("path must be a non-empty string")
+    if "\x00" in path:
+        raise FileError("path contains NUL byte")
+    if path.startswith("/") or path.startswith("\\"):
+        raise FileError("path must be relative, not absolute")
+
+    parts = Path(path).parts
+    if not parts or parts[0] != "skills":
+        return
+    if any(part in {"", ".", ".."} for part in parts):
+        raise FileError("skill path must not contain empty, '.', or '..' segments")
+    if len(parts) < 2:
+        raise FileError("skill path must include a skill name")
+
+    skill_name = parts[1]
+    _validate_skill_name(skill_name)
+
+    rel_parts = parts[2:]
+    if not rel_parts:
+        if allow_skill_dir:
+            return
+        raise FileError("skill root directory cannot be written as a file")
+
+    if len(rel_parts) == 1:
+        item = rel_parts[0]
+        if item in _SKILL_RESOURCE_DIRS:
+            return
+        _validate_skill_relpath(item)
+        return
+
+    if len(rel_parts) == 2:
+        folder, filename = rel_parts
+        if folder not in _SKILL_RESOURCE_DIRS:
+            raise FileError("skill folders can only be 'references' or 'assets'")
+        _validate_skill_relpath(filename)
+        return
+
+    raise FileError("nested directories inside skill folders are not supported")
 

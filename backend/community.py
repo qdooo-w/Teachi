@@ -3,7 +3,7 @@ community.py - 社区技能广场路由
 
 5 个端点：
 - GET    /community/skills            列表（关键字搜索 + 分页 + 排序）
-- GET    /community/skills/{id}       详情（含正文）
+- GET    /community/skills/{id}       详情（元信息）
 - POST   /community/skills            发布
 - POST   /community/skills/{id}/install   一键安装到我的私有 skills 目录
 - DELETE /community/skills/{id}       删除（仅作者）
@@ -13,6 +13,8 @@ community.py - 社区技能广场路由
 from __future__ import annotations
 
 import logging
+import shutil
+import uuid
 from pathlib import Path
 from typing import Any, Literal
 
@@ -20,14 +22,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from backend.auth import get_current_user, verify_nonce
-from backend.config import DATABASE_PATH
+from backend.config import BASE_DIR, DATABASE_PATH
 from backend.db import DatabaseFacade
-from backend.file import FileError, UserFile
+from backend.file import FileBase, FileError, ProjectFile, UserFile
 from backend.skill_parser import (
-    SKILL_MAX_BYTES,
     SkillParseError,
     parse_skill_file,
-    utf8_byte_size,
     validate_skill_name,
 )
 
@@ -54,8 +54,8 @@ class CommunitySkillSummary(BaseModel):
 
 
 class CommunitySkillDetail(CommunitySkillSummary):
-    """详情：附带完整 SKILL.md。"""
-    body_md: str
+    """详情：技能内容本体在归档目录中，不通过 API 返回全文。"""
+    pass
 
 
 class CommunitySkillListResponse(BaseModel):
@@ -67,8 +67,14 @@ class CommunitySkillListResponse(BaseModel):
 
 
 class PublishSkillRequest(BaseModel):
-    """发布请求。后端只信任 body_md，name/description 从其中重新解析。"""
-    body_md: str = Field(..., min_length=1)
+    """发布请求。后端从当前用户的 skills/<skill_name>/ 复制整个目录。"""
+    skill_name: str = Field(..., min_length=1, max_length=64)
+
+
+class InstallSkillRequest(BaseModel):
+    """安装目标。默认安装到当前用户的私有 skills 目录。"""
+    target: Literal["user", "project"] = "user"
+    pid: str | None = None
 
 
 class InstallResponse(BaseModel):
@@ -95,10 +101,67 @@ def _to_summary(record: dict) -> CommunitySkillSummary:
 
 
 def _to_detail(record: dict) -> CommunitySkillDetail:
-    return CommunitySkillDetail(
-        **_to_summary(record).model_dump(),
-        body_md=record["body_md"],
-    )
+    return CommunitySkillDetail(**_to_summary(record).model_dump())
+
+
+def _archive_root() -> Path:
+    root = (BASE_DIR / "archived_skill").resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _archive_rel_path(skill_id: str) -> str:
+    return f"archived_skill/{skill_id}"
+
+
+def _resolve_archive_path(archive_path: str) -> Path:
+    root = _archive_root()
+    target = (BASE_DIR / archive_path).resolve()
+    if target != root and root not in target.parents:
+        raise FileError("Archived skill path is outside archived_skill directory.")
+    return target
+
+
+def _directory_size(path: Path) -> int:
+    return sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
+
+
+def _copy_skill_dir(src: Path, dst: Path) -> None:
+    if not src.is_dir():
+        raise FileError("Skill folder not found")
+    if dst.exists():
+        raise FileError("Target skill folder already exists")
+    try:
+        shutil.copytree(src, dst)
+    except Exception as e:
+        raise FileError(str(e)) from e
+
+
+def _install_target_fs(
+    payload: InstallSkillRequest,
+    user_uuid: str,
+) -> FileBase:
+    if payload.target == "project":
+        if not payload.pid:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"code": "VALIDATION_ERROR", "message": "pid is required when target is project"},
+            )
+        try:
+            return ProjectFile(pid=payload.pid, user_uuid=user_uuid, db_facade=db)
+        except PermissionError:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "RESOURCE_NOT_FOUND", "message": "Project not found"},
+            )
+
+    try:
+        return UserFile(user_uuid=user_uuid, db_facade=db)
+    except PermissionError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "FORBIDDEN", "message": "Access denied"},
+        )
 
 
 # ── 路由 ───────────────────────────────────────────────────────────────────────
@@ -150,39 +213,93 @@ def publish_community_skill(
 ) -> CommunitySkillDetail:
     """发布 skill 到社区。
 
-    - 后端**重新解析** frontmatter，不信任前端字段
-    - body_md UTF-8 字节数 ≤ SKILL_MAX_BYTES
+    - 后端从当前用户 skills/<skill_name>/ 复制整个目录到 archived_skill/{id}/
+    - 后端**重新解析** SKILL.md frontmatter，不信任前端元信息
     - 同一作者可重复发布同名 skill：每次都是独立条目
     """
-    body_md = payload.body_md
-    size_bytes = utf8_byte_size(body_md)
-    if size_bytes > SKILL_MAX_BYTES:
+    skill_name = payload.skill_name.strip()
+    if name_err := validate_skill_name(skill_name):
         raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail={
-                "code": "SKILL_TOO_LARGE",
-                "message": f"SKILL.md 不能超过 {SKILL_MAX_BYTES // 1024} KB（当前 {size_bytes} 字节）",
-            },
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "SKILL_PARSE_ERROR", "message": f"skill_name 不合法：{name_err}"},
         )
 
     try:
-        fields = parse_skill_file(body_md)
+        user_fs = UserFile(user_uuid=current_user["uuid"], db_facade=db)
+        skill_dir = user_fs._safe_path(f"skills/{skill_name}")
+    except PermissionError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "FORBIDDEN", "message": "Access denied"},
+        )
+    except FileError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "FILE_ERROR", "message": str(e)},
+        )
+
+    if not skill_dir.is_dir():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "RESOURCE_NOT_FOUND", "message": "Skill folder not found"},
+        )
+
+    skill_md = skill_dir / "SKILL.md"
+    if not skill_md.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "SKILL_PARSE_ERROR", "message": "技能文件夹缺少 SKILL.md"},
+        )
+
+    try:
+        fields = parse_skill_file(skill_md.read_text(encoding="utf-8"))
     except SkillParseError as e:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={"code": "SKILL_PARSE_ERROR", "message": str(e)},
         )
+    except UnicodeDecodeError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "SKILL_PARSE_ERROR", "message": f"SKILL.md 必须是 UTF-8 文本：{e}"},
+        )
+
+    if fields.name != skill_name:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "SKILL_PARSE_ERROR",
+                "message": "SKILL.md frontmatter.name 必须与技能文件夹名一致",
+            },
+        )
 
     owner_uuid = current_user["uuid"]
-    record = db.community.create(
-        owner_uuid=owner_uuid,
-        name=fields.name,
-        description=fields.description,
-        body_md=body_md,
-        size_bytes=size_bytes,
-        license=fields.license,
-        compatibility=fields.compatibility,
-    )
+    skill_id = str(uuid.uuid4())
+    archive_rel_path = _archive_rel_path(skill_id)
+    archive_dir = _resolve_archive_path(archive_rel_path)
+    try:
+        _copy_skill_dir(skill_dir, archive_dir)
+        record = db.community.create(
+            skill_id=skill_id,
+            owner_uuid=owner_uuid,
+            name=fields.name,
+            description=fields.description,
+            archive_path=archive_rel_path,
+            size_bytes=_directory_size(archive_dir),
+            license=fields.license,
+            compatibility=fields.compatibility,
+        )
+    except FileError as e:
+        if archive_dir.exists():
+            shutil.rmtree(archive_dir, ignore_errors=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "FILE_ERROR", "message": str(e)},
+        ) from e
+    except Exception:
+        if archive_dir.exists():
+            shutil.rmtree(archive_dir, ignore_errors=True)
+        raise
     logger.info("community_skill_published id=%s name=%s owner=%s", record["id"], fields.name, owner_uuid)
     return _to_detail(record)
 
@@ -194,13 +311,15 @@ def publish_community_skill(
 )
 def install_community_skill(
     skill_id: str,
+    payload: InstallSkillRequest | None = None,
     current_user: dict[str, Any] = Depends(get_current_user),
 ) -> InstallResponse:
-    """把社区 skill 安装到当前用户的 data/{user_uuid}/skills/{name}/SKILL.md。
+    """把社区 skill 安装到用户级或项目级 skills/{name}/。
 
     - 本地已存在同名目录（不论是否含 SKILL.md）→ 409，由用户改名后重试
     - 安装成功后社区记录 downloads += 1
     """
+    payload = payload or InstallSkillRequest()
     record = db.community.get_by_id(skill_id)
     if record is None:
         raise HTTPException(
@@ -210,7 +329,6 @@ def install_community_skill(
 
     user_uuid = current_user["uuid"]
     name = record["name"]
-    body_md = record["body_md"]
 
     # 信任但验证：DB 中的 name 应已通过 publish 层校验，但仍兜底防御历史脏数据
     if validate_skill_name(name) is not None:
@@ -219,19 +337,11 @@ def install_community_skill(
             detail={"code": "INVALID_SKILL_NAME", "message": "Skill name in record is not safe"},
         )
 
-    try:
-        user_fs = UserFile(user_uuid=user_uuid, db_facade=db)
-    except PermissionError:
-        # 理论上 get_current_user 已校验，这里兜底
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={"code": "FORBIDDEN", "message": "Access denied"},
-        )
+    target_fs = _install_target_fs(payload, user_uuid)
 
     # 目录冲突检测：直接看 skills/{name} 目录是否已存在
-    target_rel = f"skills/{name}/SKILL.md"
     try:
-        skill_dir = user_fs._safe_path(f"skills/{name}")
+        skill_dir = target_fs._safe_path(f"skills/{name}")
     except FileError:
         # name 含非法路径字符——理论上 publish 时已通过 validate_skill_name 拦截
         raise HTTPException(
@@ -248,7 +358,10 @@ def install_community_skill(
         )
 
     try:
-        user_fs.create_file(target_rel, body_md)
+        archive_dir = _resolve_archive_path(record["archive_path"])
+        if not archive_dir.is_dir():
+            raise FileError("Archived skill folder not found")
+        _copy_skill_dir(archive_dir, skill_dir)
     except FileError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -278,6 +391,15 @@ def delete_community_skill(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"code": "FORBIDDEN", "message": "Only the author can delete this skill"},
+        )
+    try:
+        archive_dir = _resolve_archive_path(record["archive_path"])
+        if archive_dir.exists():
+            shutil.rmtree(archive_dir)
+    except FileError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "FILE_ERROR", "message": str(e)},
         )
     if not db.community.delete_for_owner(skill_id, current_user["uuid"]):
         # 极端竞态：刚才存在，DELETE 之间被别人删了；按 404 处理更直观

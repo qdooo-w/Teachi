@@ -719,16 +719,16 @@ class NoncesFacade(_DataBase):
 
 
 class CommunitySkillsFacade(_DataBase):
-    """社区技能广场。每条记录是一份完整的 SKILL.md 副本。
+    """社区技能广场。每条记录指向一份归档 skill 文件夹。
 
     设计取舍：
-    - body_md 直接存 TEXT。当前 SKILL.md ≤ 128KB 单文件，TEXT 足够且便于 LIKE 搜索。
+    - skill 内容本体存放在 archived_skill/{id}/，数据库只保存路径和展示元信息。
     - 同作者可重复发布同名 skill：每次 publish 都是独立 id；老条目作者可手动删除。
-    - 下载时把内容 copy 到用户私有目录，作者删除后已下载副本不受影响（解耦）。
+    - 下载时把归档文件夹 copy 到用户私有目录，作者删除后已下载副本不受影响（解耦）。
     """
 
     _COLUMNS = (
-        "id, owner_uuid, name, description, body_md, license, compatibility, "
+        "id, owner_uuid, name, description, archive_path, license, compatibility, "
         "size_bytes, downloads, created_at, updated_at"
     )
 
@@ -738,31 +738,54 @@ class CommunitySkillsFacade(_DataBase):
         owner_uuid: str,
         name: str,
         description: str,
-        body_md: str,
+        archive_path: str,
         size_bytes: int,
         license: str | None = None,
         compatibility: str | None = None,
+        skill_id: str | None = None,
     ) -> dict:
-        skill_id = str(uuid.uuid4())
+        skill_id = skill_id or str(uuid.uuid4())
         now_ts = self._now_timestamp()
         with self._cursor() as cursor:
-            cursor.execute(
-                f"""
-                INSERT INTO community_skills ({self._COLUMNS})
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
-                """,
-                (
+            cursor.execute("PRAGMA table_info(community_skills)")
+            table_columns = {row["name"] for row in cursor.fetchall()}
+            if "body_md" in table_columns:
+                insert_columns = (
+                    "id, owner_uuid, name, description, archive_path, body_md, "
+                    "license, compatibility, size_bytes, downloads, created_at, updated_at"
+                )
+                values = (
                     skill_id,
                     owner_uuid,
                     name,
                     description,
-                    body_md,
+                    archive_path,
+                    "",
                     license,
                     compatibility,
                     size_bytes,
+                    0,
                     now_ts,
                     now_ts,
-                ),
+                )
+            else:
+                insert_columns = self._COLUMNS
+                values = (
+                    skill_id,
+                    owner_uuid,
+                    name,
+                    description,
+                    archive_path,
+                    license,
+                    compatibility,
+                    size_bytes,
+                    0,
+                    now_ts,
+                    now_ts,
+                )
+            cursor.execute(
+                f"INSERT INTO community_skills ({insert_columns}) VALUES ({','.join(['?'] * len(values))})",
+                values,
             )
         record = self.get_by_id(skill_id)
         if record is None:
@@ -899,6 +922,44 @@ class DatabaseFacade:
             return None
         return dict(row)
 
+    @staticmethod
+    def _migrate_legacy_community_skill_bodies(cursor: sqlite3.Cursor) -> None:
+        """Move old DB-stored SKILL.md text into archived_skill/{id}/SKILL.md."""
+        cursor.execute("PRAGMA table_info(community_skills)")
+        columns = {row[1] for row in cursor.fetchall()}
+        if "body_md" not in columns or "archive_path" not in columns:
+            return
+
+        from backend.config import BASE_DIR
+
+        archive_root = (BASE_DIR / "archived_skill").resolve()
+        archive_root.mkdir(parents=True, exist_ok=True)
+        cursor.execute(
+            """
+            SELECT id, body_md, size_bytes
+            FROM community_skills
+            WHERE body_md != '' AND (archive_path IS NULL OR archive_path = '')
+            """
+        )
+        rows = cursor.fetchall()
+        for row in rows:
+            skill_id = str(row["id"])
+            archive_dir = (archive_root / skill_id).resolve()
+            if archive_dir != archive_root and archive_root not in archive_dir.parents:
+                continue
+            archive_dir.mkdir(parents=True, exist_ok=True)
+            skill_file = archive_dir / "SKILL.md"
+            skill_file.write_text(str(row["body_md"]), encoding="utf-8")
+            size_bytes = skill_file.stat().st_size
+            cursor.execute(
+                """
+                UPDATE community_skills
+                SET archive_path = ?, body_md = '', size_bytes = ?
+                WHERE id = ?
+                """,
+                (f"archived_skill/{skill_id}", size_bytes, skill_id),
+            )
+
     def setup_database(self) -> None:
         with self.db_cursor() as cursor:
             schema = """
@@ -950,7 +1011,7 @@ class DatabaseFacade:
                 owner_uuid TEXT NOT NULL,
                 name TEXT NOT NULL,
                 description TEXT NOT NULL,
-                body_md TEXT NOT NULL,
+                archive_path TEXT NOT NULL,
                 license TEXT,
                 compatibility TEXT,
                 size_bytes INTEGER NOT NULL,
@@ -965,6 +1026,13 @@ class DatabaseFacade:
             CREATE INDEX IF NOT EXISTS idx_community_skills_name ON community_skills(name);
             """
             cursor.executescript(schema)
+            cursor.execute("PRAGMA table_info(community_skills)")
+            columns = {row[1] for row in cursor.fetchall()}
+            if "archive_path" not in columns:
+                cursor.execute(
+                    "ALTER TABLE community_skills ADD COLUMN archive_path TEXT NOT NULL DEFAULT ''"
+                )
+            self._migrate_legacy_community_skill_bodies(cursor)
 
         logger.info("Database setup completed")
 

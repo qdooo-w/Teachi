@@ -12,8 +12,10 @@ import {
   getCurrentUserId,
   getErrorMessage,
 } from '../api'
+import { useProjects } from '../composables/useProjects'
 
 const router = useRouter()
+const { projects, loadProjects } = useProjects()
 
 const currentUserId = ref<string | null>(getCurrentUserId())
 
@@ -30,6 +32,8 @@ const offset = ref(0)
 const selected = ref<CommunitySkillDetail | null>(null)
 const detailLoading = ref(false)
 const installing = ref(false)
+const installingProject = ref(false)
+const selectedProjectId = ref('')
 const deleting = ref(false)
 const flashMsg = ref('')
 
@@ -90,6 +94,24 @@ async function doInstall(): Promise<void> {
   }
 }
 
+async function doInstallProject(): Promise<void> {
+  if (!selected.value || !selectedProjectId.value) return
+  installingProject.value = true
+  flashMsg.value = ''
+  try {
+    const r = await installCommunitySkill(selected.value.id, { target: 'project', pid: selectedProjectId.value })
+    selected.value.downloads = r.downloads
+    const inList = skills.value.find((s) => s.id === selected.value!.id)
+    if (inList) inList.downloads = r.downloads
+    const project = projects.value.find((p) => p.pid === selectedProjectId.value)
+    flashMsg.value = `已安装到项目 ${project?.projectname ?? selectedProjectId.value}：${r.name}`
+  } catch (e) {
+    flashMsg.value = getErrorMessage(e)
+  } finally {
+    installingProject.value = false
+  }
+}
+
 async function doDelete(): Promise<void> {
   if (!selected.value) return
   if (!confirm(`确定要删除社区中的 "${selected.value.name}" 吗？此操作不可撤销。`)) return
@@ -136,6 +158,7 @@ function gotoPage(page: number): void {
 onMounted(() => {
   document.title = '社区 · Teachi'
   void load()
+  void loadProjects()
 })
 </script>
 
@@ -302,7 +325,6 @@ onMounted(() => {
             <p class="mb-4 rounded-md bg-[#f9fafb] px-3 py-2 text-sm text-[#374151]">
               {{ selected.description }}
             </p>
-            <pre class="whitespace-pre-wrap rounded-md border border-[#e5e7eb] bg-[#fafafa] p-3 font-mono text-xs leading-relaxed text-[#374151]">{{ selected.body_md }}</pre>
           </div>
 
           <div class="flex-shrink-0 border-t border-[#e5e7eb] bg-white px-5 py-3">
@@ -323,14 +345,33 @@ onMounted(() => {
                 {{ deleting ? '删除中...' : '删除发布' }}
               </button>
               <div v-else />
-              <button
-                class="rounded-md bg-[#1f6f5b] px-4 py-1.5 text-sm text-white transition hover:bg-[#1a5b4a] disabled:cursor-not-allowed disabled:bg-[#9ca3af]"
-                :disabled="installing"
-                type="button"
-                @click="doInstall"
-              >
-                {{ installing ? '安装中...' : '安装到我的技能' }}
-              </button>
+              <div class="flex items-center gap-2">
+                <select
+                  v-model="selectedProjectId"
+                  class="h-8 rounded-md border border-[#d1d5db] bg-white px-2 text-sm text-[#374151] outline-none focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
+                >
+                  <option value="">选择项目</option>
+                  <option v-for="project in projects" :key="project.pid" :value="project.pid">
+                    {{ project.projectname }}
+                  </option>
+                </select>
+                <button
+                  class="rounded-md border border-[#1f6f5b] px-3 py-1.5 text-sm text-[#1f6f5b] transition hover:bg-[#e6f4ee] disabled:cursor-not-allowed disabled:opacity-50"
+                  :disabled="installingProject || !selectedProjectId"
+                  type="button"
+                  @click="doInstallProject"
+                >
+                  {{ installingProject ? '安装中...' : '安装到项目' }}
+                </button>
+                <button
+                  class="rounded-md bg-[#1f6f5b] px-4 py-1.5 text-sm text-white transition hover:bg-[#1a5b4a] disabled:cursor-not-allowed disabled:bg-[#9ca3af]"
+                  :disabled="installing"
+                  type="button"
+                  @click="doInstall"
+                >
+                  {{ installing ? '安装中...' : '安装到我的技能' }}
+                </button>
+              </div>
             </div>
           </div>
         </template>

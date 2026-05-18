@@ -1,19 +1,30 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, onBeforeUnmount, onMounted } from 'vue'
 import {
   type FileSpace,
-  type SkillMeta,
   type SkillFields,
-  listSkills,
-  readSkill,
-  writeSkill,
-  deleteSkill,
-  validateSkillName,
-  parseSkillFile,
+  type SkillMeta,
+  type SkillResourceDir,
+  type SkillTreeEntry,
+  SKILL_RESOURCE_DIRS,
   buildSkillFile,
+  createSkillDirectory,
+  createSkillFile,
+  deleteSkill,
+  deleteSkillFile,
+  listSkillTree,
+  listSkills,
+  parseSkillFile,
+  readSkill,
+  readSkillFile,
+  skillFileEditorKind,
+  validatePlainSkillFileContent,
+  validateSkillName,
+  validateSkillRelativePath,
+  writeSkill,
+  writeSkillFile,
 } from '../skills'
-import { getErrorMessage } from '../api'
-import { publishCommunitySkill } from '../api'
+import { getErrorMessage, publishCommunitySkill } from '../api'
 
 const props = defineProps<{
   space: FileSpace
@@ -26,16 +37,22 @@ const emit = defineEmits<{
 }>()
 
 const skills = ref<SkillMeta[]>([])
+const tree = ref<SkillTreeEntry[]>([])
 const loading = ref(false)
+const treeLoading = ref(false)
+const fileLoading = ref(false)
 const saving = ref(false)
 const deleting = ref(false)
+const deletingFile = ref(false)
 const publishing = ref(false)
 const errorMsg = ref('')
 const publishMsg = ref('')
 
-// 编辑状态：结构化字段
 const selectedName = ref<string | null>(null)
+const selectedPath = ref<string | null>(null)
 const isNew = ref(false)
+const cleanSnapshot = ref<string | null>(null)
+
 const form = ref<SkillFields>({
   name: '',
   description: '',
@@ -44,20 +61,18 @@ const form = ref<SkillFields>({
   body: '',
 })
 const showAdvanced = ref(false)
-const dirty = ref(false)
-// 原始文件无法被结构化解析时，退化为原始 textarea 编辑模式
 const rawMode = ref(false)
 const rawContent = ref('')
 const parseWarning = ref('')
+const plainContent = ref('')
+
+const DESCRIPTION_MAX = 1024
+const COMPATIBILITY_MAX = 500
 
 const nameError = computed(() => {
   if (!isNew.value) return null
   return validateSkillName(form.value.name)
 })
-
-// 官方 Skills 规范硬限制
-const DESCRIPTION_MAX = 1024
-const COMPATIBILITY_MAX = 500
 
 const descriptionError = computed(() => {
   const d = form.value.description
@@ -72,20 +87,64 @@ const compatibilityError = computed(() => {
   return null
 })
 
-// 正文仅作参考计数，不限制大小
 const bodyCharCount = computed(() => form.value.body.length)
 const bodyLineCount = computed(() => form.value.body.split('\n').length)
+const plainCharCount = computed(() => plainContent.value.length)
+const plainLineCount = computed(() => plainContent.value.split('\n').length)
+
+const currentEntry = computed(() => tree.value.find((entry) => entry.relPath === selectedPath.value) ?? null)
+const selectedEditorKind = computed(() => {
+  if (isNew.value || selectedPath.value === 'SKILL.md') return 'skill'
+  return selectedPath.value ? skillFileEditorKind(selectedPath.value) : null
+})
+const selectedFileLabel = computed(() => selectedPath.value ?? (isNew.value ? 'SKILL.md' : ''))
+const canDeleteSelectedFile = computed(() =>
+  !!selectedName.value
+  && !!selectedPath.value
+  && selectedPath.value !== 'SKILL.md'
+  && currentEntry.value?.isDir !== true,
+)
+const dirty = computed(() => cleanSnapshot.value !== null && editorSnapshot() !== cleanSnapshot.value)
 
 const canSave = computed(() => {
-  if (rawMode.value) return !saving.value && rawContent.value.trim().length > 0
-  if (saving.value) return false
-  if (isNew.value && nameError.value) return false
-  if (descriptionError.value) return false
-  if (compatibilityError.value) return false
-  return true
+  if (saving.value || fileLoading.value) return false
+  if (selectedEditorKind.value === 'skill') {
+    if (rawMode.value) return rawContent.value.trim().length > 0
+    if (isNew.value && nameError.value) return false
+    if (descriptionError.value) return false
+    if (compatibilityError.value) return false
+    return true
+  }
+  return !!selectedName.value && !!selectedPath.value && currentEntry.value?.isDir !== true
 })
 
-async function loadSkills() {
+const canPublish = computed(() =>
+  props.space.kind === 'user'
+  && !isNew.value
+  && !!selectedName.value
+  && !dirty.value
+  && selectedPath.value === 'SKILL.md',
+)
+
+function markClean(): void {
+  cleanSnapshot.value = editorSnapshot()
+}
+
+function resetEditor(): void {
+  form.value = { name: '', description: '', license: '', compatibility: '', body: '' }
+  showAdvanced.value = false
+  rawMode.value = false
+  rawContent.value = ''
+  parseWarning.value = ''
+  plainContent.value = ''
+  markClean()
+}
+
+function confirmDiscard(message = '有未保存的更改，确定要切换吗？'): boolean {
+  return !dirty.value || confirm(message)
+}
+
+async function loadSkills(): Promise<void> {
   loading.value = true
   errorMsg.value = ''
   try {
@@ -97,60 +156,20 @@ async function loadSkills() {
   }
 }
 
-function resetForm() {
-  form.value = { name: '', description: '', license: '', compatibility: '', body: '' }
-  showAdvanced.value = false
-  rawMode.value = false
-  rawContent.value = ''
-  parseWarning.value = ''
-  dirty.value = false
-}
-
-async function selectSkill(name: string) {
-  if (dirty.value && !confirm('有未保存的更改，确定要切换吗？')) return
-  isNew.value = false
-  selectedName.value = name
-  errorMsg.value = ''
-  resetForm()
-
+async function loadTree(name: string): Promise<void> {
+  treeLoading.value = true
   try {
-    const { content } = await readSkill(props.space, name)
-    const parsed = parseSkillFile(content)
-    if (parsed.ok && parsed.fields) {
-      form.value = {
-        name: parsed.fields.name,
-        description: parsed.fields.description,
-        license: parsed.fields.license ?? '',
-        compatibility: parsed.fields.compatibility ?? '',
-        body: parsed.fields.body,
-      }
-      if (parsed.fields.license || parsed.fields.compatibility) {
-        showAdvanced.value = true
-      }
-    } else {
-      // 结构化解析失败，退回原始文本编辑模式
-      rawMode.value = true
-      rawContent.value = content
-      parseWarning.value = `原始文件未通过结构化解析（${parsed.error ?? '未知错误'}），已切换到原始编辑模式。`
-    }
-    dirty.value = false
+    tree.value = await listSkillTree(props.space, name)
   } catch (e) {
+    tree.value = []
     errorMsg.value = getErrorMessage(e)
+  } finally {
+    treeLoading.value = false
   }
 }
 
-function startNew() {
-  if (dirty.value && !confirm('有未保存的更改，确定要新建吗？')) return
-  isNew.value = true
-  selectedName.value = null
-  errorMsg.value = ''
-  resetForm()
-  form.value.body = '# 技能说明\n\n'
-}
-
-function switchToStructured() {
-  // 从原始模式切回结构化：尝试重新解析
-  const parsed = parseSkillFile(rawContent.value)
+function loadSkillForm(content: string, folderName: string): void {
+  const parsed = parseSkillFile(content)
   if (parsed.ok && parsed.fields) {
     form.value = {
       name: parsed.fields.name,
@@ -160,42 +179,180 @@ function switchToStructured() {
       body: parsed.fields.body,
     }
     rawMode.value = false
+    rawContent.value = ''
+    parseWarning.value = parsed.fields.name !== folderName
+      ? 'SKILL.md frontmatter.name 与技能文件夹名不一致，保存时会按文件夹名写回。'
+      : ''
+    showAdvanced.value = !!(parsed.fields.license || parsed.fields.compatibility)
+  } else {
+    rawMode.value = true
+    rawContent.value = content
+    parseWarning.value = `原始文件未通过结构化解析（${parsed.error ?? '未知错误'}），已切换到原始编辑模式。`
+  }
+  markClean()
+}
+
+async function openFile(relPath: string, askBeforeSwitch = true): Promise<void> {
+  if (!selectedName.value) return
+  if (askBeforeSwitch && !confirmDiscard()) return
+  const pathError = validateSkillRelativePath(relPath, true)
+  if (pathError) {
+    errorMsg.value = pathError
+    return
+  }
+  const entry = tree.value.find((item) => item.relPath === relPath)
+  if (entry?.isDir) return
+
+  fileLoading.value = true
+  errorMsg.value = ''
+  selectedPath.value = relPath
+  resetEditor()
+  try {
+    if (relPath === 'SKILL.md') {
+      const { content } = await readSkill(props.space, selectedName.value)
+      loadSkillForm(content, selectedName.value)
+    } else {
+      const { content } = await readSkillFile(props.space, selectedName.value, relPath)
+      plainContent.value = content
+      markClean()
+    }
+  } catch (e) {
+    errorMsg.value = getErrorMessage(e)
+  } finally {
+    fileLoading.value = false
+  }
+}
+
+async function selectSkill(name: string): Promise<void> {
+  if (!confirmDiscard()) return
+  isNew.value = false
+  selectedName.value = name
+  selectedPath.value = 'SKILL.md'
+  errorMsg.value = ''
+  publishMsg.value = ''
+  resetEditor()
+  await loadTree(name)
+  await openFile('SKILL.md', false)
+}
+
+function startNew(): void {
+  if (!confirmDiscard('有未保存的更改，确定要新建吗？')) return
+  isNew.value = true
+  selectedName.value = null
+  selectedPath.value = null
+  tree.value = []
+  errorMsg.value = ''
+  publishMsg.value = ''
+  resetEditor()
+  form.value.body = '# 技能说明\n\n'
+  markClean()
+}
+
+function switchToStructured(): void {
+  const parsed = parseSkillFile(rawContent.value)
+  if (parsed.ok && parsed.fields) {
+    form.value = {
+      name: selectedName.value ?? parsed.fields.name,
+      description: parsed.fields.description,
+      license: parsed.fields.license ?? '',
+      compatibility: parsed.fields.compatibility ?? '',
+      body: parsed.fields.body,
+    }
+    rawMode.value = false
     parseWarning.value = ''
+    showAdvanced.value = !!(parsed.fields.license || parsed.fields.compatibility)
   } else {
     parseWarning.value = `仍无法解析：${parsed.error ?? '未知错误'}`
   }
 }
 
-watch(
-  () => [form.value.name, form.value.description, form.value.license, form.value.compatibility, form.value.body, rawContent.value],
-  () => { dirty.value = true },
-  { deep: false },
-)
+function structuredSkillContent(name: string): string {
+  return buildSkillFile({
+    name,
+    description: form.value.description.trim(),
+    license: form.value.license?.trim() || undefined,
+    compatibility: form.value.compatibility?.trim() || undefined,
+    body: form.value.body,
+  })
+}
 
-async function save() {
-  errorMsg.value = ''
+function editorSnapshot(): string {
+  if (selectedEditorKind.value === 'skill') {
+    if (rawMode.value) {
+      return JSON.stringify({
+        kind: 'skill-raw',
+        content: rawContent.value,
+      })
+    }
+    return JSON.stringify({
+      kind: 'skill-structured',
+      name: isNew.value ? form.value.name : (selectedName.value ?? form.value.name),
+      description: form.value.description,
+      license: form.value.license ?? '',
+      compatibility: form.value.compatibility ?? '',
+      body: form.value.body,
+    })
+  }
+
+  if (selectedEditorKind.value) {
+    return JSON.stringify({
+      kind: selectedEditorKind.value,
+      path: selectedPath.value,
+      content: plainContent.value,
+    })
+  }
+
+  return JSON.stringify({ kind: 'none' })
+}
+
+async function saveSkillFile(): Promise<boolean> {
+  if (!selectedName.value || !selectedPath.value) return false
 
   let content: string
-  let name: string
-
   if (rawMode.value) {
-    // 原始模式：保存前仍然校验 frontmatter 合法
     const parsed = parseSkillFile(rawContent.value)
     if (!parsed.ok) {
       errorMsg.value = `保存被拦截：${parsed.error ?? 'frontmatter 不合法'}`
-      return
+      return false
     }
-    name = parsed.fields!.name
-    if (isNew.value) {
-      const nameErr = validateSkillName(name)
-      if (nameErr) {
-        errorMsg.value = `frontmatter.name 不合法：${nameErr}`
-        return
-      }
+    if (parsed.fields!.name !== selectedName.value) {
+      errorMsg.value = 'SKILL.md frontmatter.name 必须与技能文件夹名一致。'
+      return false
     }
     content = rawContent.value
   } else {
-    if (isNew.value && nameError.value) {
+    if (descriptionError.value) {
+      errorMsg.value = descriptionError.value
+      return false
+    }
+    if (compatibilityError.value) {
+      errorMsg.value = compatibilityError.value
+      return false
+    }
+    content = structuredSkillContent(selectedName.value)
+  }
+
+  await writeSkill(props.space, selectedName.value, content)
+  return true
+}
+
+async function savePlainFile(): Promise<boolean> {
+  if (!selectedName.value || !selectedPath.value) return false
+  const contentError = validatePlainSkillFileContent(selectedPath.value, plainContent.value)
+  if (contentError) {
+    errorMsg.value = contentError
+    return false
+  }
+  await writeSkillFile(props.space, selectedName.value, selectedPath.value, plainContent.value)
+  return true
+}
+
+async function save(): Promise<void> {
+  errorMsg.value = ''
+  publishMsg.value = ''
+
+  if (isNew.value) {
+    if (nameError.value) {
       errorMsg.value = nameError.value
       return
     }
@@ -203,24 +360,33 @@ async function save() {
       errorMsg.value = descriptionError.value
       return
     }
-    name = isNew.value ? form.value.name.trim() : selectedName.value!
-    // 重命名现有技能需要先删后建。本次保持简单：只允许新建时设置名称
-    content = buildSkillFile({
-      name,
-      description: form.value.description.trim(),
-      license: form.value.license?.trim() || undefined,
-      compatibility: form.value.compatibility?.trim() || undefined,
-      body: form.value.body,
-    })
   }
 
   saving.value = true
   try {
-    await writeSkill(props.space, name, content)
-    dirty.value = false
-    await loadSkills()
-    selectedName.value = name
-    isNew.value = false
+    if (isNew.value) {
+      const name = form.value.name.trim()
+      await writeSkill(props.space, name, structuredSkillContent(name))
+      selectedName.value = name
+      selectedPath.value = 'SKILL.md'
+      isNew.value = false
+      await loadSkills()
+      await loadTree(name)
+      markClean()
+    } else if (selectedEditorKind.value === 'skill') {
+      const saved = await saveSkillFile()
+      if (!saved) return
+      if (selectedName.value) {
+        await loadSkills()
+        await loadTree(selectedName.value)
+      }
+      markClean()
+    } else {
+      const saved = await savePlainFile()
+      if (!saved) return
+      if (selectedName.value) await loadTree(selectedName.value)
+      markClean()
+    }
   } catch (e) {
     errorMsg.value = getErrorMessage(e)
   } finally {
@@ -228,15 +394,18 @@ async function save() {
   }
 }
 
-async function remove() {
+async function remove(): Promise<void> {
   if (!selectedName.value) return
   if (!confirm(`确定要删除技能 "${selectedName.value}" 吗？此操作不可撤销。`)) return
   deleting.value = true
   errorMsg.value = ''
+  publishMsg.value = ''
   try {
     await deleteSkill(props.space, selectedName.value)
     selectedName.value = null
-    resetForm()
+    selectedPath.value = null
+    tree.value = []
+    resetEditor()
     await loadSkills()
   } catch (e) {
     errorMsg.value = getErrorMessage(e)
@@ -245,9 +414,83 @@ async function remove() {
   }
 }
 
-const canPublish = computed(() => props.space.kind === 'user' && !isNew.value && !!selectedName.value && !dirty.value)
+async function removeSelectedFile(): Promise<void> {
+  if (!selectedName.value || !selectedPath.value || selectedPath.value === 'SKILL.md') return
+  if (!confirm(`确定要删除文件 "${selectedPath.value}" 吗？此操作不可撤销。`)) return
+  deletingFile.value = true
+  errorMsg.value = ''
+  publishMsg.value = ''
+  try {
+    await deleteSkillFile(props.space, selectedName.value, selectedPath.value)
+    await loadTree(selectedName.value)
+    await openFile('SKILL.md', false)
+  } catch (e) {
+    errorMsg.value = getErrorMessage(e)
+  } finally {
+    deletingFile.value = false
+  }
+}
 
-async function publishToCommunity() {
+function askTargetFolder(defaultFolder: '' | SkillResourceDir = ''): '' | SkillResourceDir | null {
+  const raw = prompt('目标文件夹：留空表示技能根目录，或输入 references / assets', defaultFolder)
+  if (raw === null) return null
+  const value = raw.trim()
+  if (value === '') return ''
+  if ((SKILL_RESOURCE_DIRS as readonly string[]).includes(value)) return value as SkillResourceDir
+  errorMsg.value = '只能使用 references 或 assets 文件夹。'
+  return null
+}
+
+async function addFile(defaultFolder: '' | SkillResourceDir = ''): Promise<void> {
+  if (!selectedName.value) return
+  if (!confirmDiscard()) return
+  errorMsg.value = ''
+  publishMsg.value = ''
+  const folder = askTargetFolder(defaultFolder)
+  if (folder === null) return
+  const filename = prompt('文件名（支持 md、txt、json、yaml、yml）')
+  if (filename === null) return
+  const safeName = filename.trim()
+  const relPath = folder ? `${folder}/${safeName}` : safeName
+  const pathError = validateSkillRelativePath(relPath)
+  if (pathError) {
+    errorMsg.value = pathError
+    return
+  }
+  if (tree.value.some((entry) => entry.relPath === relPath)) {
+    errorMsg.value = `文件 ${relPath} 已存在。`
+    return
+  }
+  try {
+    await createSkillFile(props.space, selectedName.value, relPath)
+    await loadTree(selectedName.value)
+    await openFile(relPath, false)
+  } catch (e) {
+    errorMsg.value = getErrorMessage(e)
+  }
+}
+
+async function addFolder(): Promise<void> {
+  if (!selectedName.value) return
+  errorMsg.value = ''
+  publishMsg.value = ''
+  const raw = prompt('文件夹名（只能是 references 或 assets）')
+  if (raw === null) return
+  const name = raw.trim()
+  if (!(SKILL_RESOURCE_DIRS as readonly string[]).includes(name)) {
+    errorMsg.value = '只能新建 references 或 assets 文件夹。'
+    return
+  }
+  try {
+    await createSkillDirectory(props.space, selectedName.value, name as SkillResourceDir)
+    await loadTree(selectedName.value)
+    publishMsg.value = `已创建 ${name}/`
+  } catch (e) {
+    errorMsg.value = getErrorMessage(e)
+  }
+}
+
+async function publishToCommunity(): Promise<void> {
   if (!canPublish.value || !selectedName.value) return
   if (!confirm(`将 "${selectedName.value}" 发布到社区，让所有用户可见并下载？`)) return
 
@@ -255,19 +498,7 @@ async function publishToCommunity() {
   errorMsg.value = ''
   publishMsg.value = ''
   try {
-    let bodyMd: string
-    if (rawMode.value) {
-      bodyMd = rawContent.value
-    } else {
-      bodyMd = buildSkillFile({
-        name: form.value.name,
-        description: form.value.description.trim(),
-        license: form.value.license?.trim() || undefined,
-        compatibility: form.value.compatibility?.trim() || undefined,
-        body: form.value.body,
-      })
-    }
-    const published = await publishCommunitySkill(bodyMd)
+    const published = await publishCommunitySkill(selectedName.value)
     publishMsg.value = `已发布到社区：${published.name}`
   } catch (e) {
     errorMsg.value = getErrorMessage(e)
@@ -276,21 +507,32 @@ async function publishToCommunity() {
   }
 }
 
-function handleClose() {
-  if (dirty.value && !confirm('有未保存的更改，确定要关闭吗？')) return
+function handleClose(): void {
+  if (!confirmDiscard('有未保存的更改，确定要关闭吗？')) return
   emit('close')
 }
 
+function handleKeydown(event: KeyboardEvent): void {
+  if (event.key.toLowerCase() !== 's' || (!event.ctrlKey && !event.metaKey) || event.altKey) return
+  event.preventDefault()
+  if (!canSave.value) return
+  void save()
+}
+
 onMounted(async () => {
+  document.addEventListener('keydown', handleKeydown)
   await loadSkills()
   if (props.initialSkill) await selectSkill(props.initialSkill)
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('keydown', handleKeydown)
 })
 </script>
 
 <template>
   <div class="fixed inset-0 z-[1000] flex items-center justify-center bg-black/40" @click.self="handleClose">
-    <div class="flex h-[640px] w-[880px] max-w-[95vw] flex-col rounded-xl bg-white shadow-xl">
-      <!-- 标题栏 -->
+    <div class="flex h-[680px] w-[1080px] max-w-[96vw] flex-col rounded-xl bg-white shadow-xl">
       <div class="flex h-14 flex-shrink-0 items-center justify-between border-b border-[#e5e7eb] px-5">
         <span class="font-semibold text-[#1f2937]">{{ title }}</span>
         <button
@@ -305,7 +547,6 @@ onMounted(async () => {
       </div>
 
       <div class="flex min-h-0 flex-1">
-        <!-- 左栏：列表 -->
         <div class="flex w-52 flex-shrink-0 flex-col border-r border-[#e5e7eb]">
           <div class="flex-1 overflow-y-auto p-2">
             <div v-if="loading" class="px-3 py-4 text-sm text-[#9ca3af]">加载中...</div>
@@ -343,151 +584,255 @@ onMounted(async () => {
           </div>
         </div>
 
-        <!-- 右栏：编辑器 -->
+        <div
+          v-if="selectedName && !isNew"
+          class="flex w-60 flex-shrink-0 flex-col border-r border-[#e5e7eb] bg-[#fafafa]"
+        >
+          <div class="flex h-12 items-center justify-between border-b border-[#e5e7eb] px-3">
+            <span class="truncate text-sm font-medium text-[#374151]">{{ selectedName }}</span>
+            <div class="flex items-center gap-1">
+              <button
+                class="flex h-7 w-7 items-center justify-center rounded-md text-[#6b7280] hover:bg-[#e5e7eb] hover:text-[#1f2937]"
+                title="新建文件"
+                type="button"
+                @click="addFile('')"
+              >
+                <svg class="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v14m7-7H5" />
+                </svg>
+              </button>
+              <button
+                class="flex h-7 w-7 items-center justify-center rounded-md text-[#6b7280] hover:bg-[#e5e7eb] hover:text-[#1f2937]"
+                title="新建文件夹"
+                type="button"
+                @click="addFolder"
+              >
+                <svg class="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m3-3H9m-3 7h12a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7l-2-2H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2Z" />
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div class="min-h-0 flex-1 overflow-y-auto p-2">
+            <div v-if="treeLoading" class="px-3 py-4 text-sm text-[#9ca3af]">加载文件...</div>
+            <template v-else>
+              <template v-for="entry in tree" :key="entry.relPath">
+                <div
+                  v-if="entry.isDir"
+                  class="group mt-1 flex h-8 items-center justify-between rounded-md px-2 text-sm text-[#6b7280]"
+                >
+                  <div class="flex min-w-0 items-center gap-1.5">
+                    <svg class="h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7h7l2 2h9v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
+                    </svg>
+                    <span class="truncate">{{ entry.name }}</span>
+                    <span v-if="entry.virtual" class="text-[10px] text-[#9ca3af]">virtual</span>
+                  </div>
+                  <button
+                    class="flex h-6 w-6 items-center justify-center rounded text-[#9ca3af] hover:bg-[#e5e7eb] hover:text-[#1f2937]"
+                    :title="`在 ${entry.name}/ 中新建文件`"
+                    type="button"
+                    @click.stop="addFile(entry.name as SkillResourceDir)"
+                  >
+                    <svg class="h-3 w-3" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M12 5v14m7-7H5" />
+                    </svg>
+                  </button>
+                </div>
+                <button
+                  v-else
+                  :class="[
+                    'flex h-8 w-full items-center gap-1.5 rounded-md px-2 text-left text-sm transition-colors',
+                    entry.parent ? 'pl-7' : '',
+                    selectedPath === entry.relPath
+                      ? 'bg-[#e6f4ee] text-[#1f6f5b]'
+                      : 'text-[#374151] hover:bg-white',
+                  ]"
+                  type="button"
+                  @click="openFile(entry.relPath)"
+                >
+                  <svg class="h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 3h7l5 5v13H7V3Z" />
+                  </svg>
+                  <span class="truncate">{{ entry.name }}</span>
+                </button>
+              </template>
+            </template>
+          </div>
+        </div>
+
         <div class="flex min-w-0 flex-1 flex-col">
           <div v-if="!selectedName && !isNew" class="flex flex-1 items-center justify-center text-sm text-[#9ca3af]">
             从左侧选择技能或新建
           </div>
 
           <template v-else>
-            <!-- 可滚动的表单内容区 -->
+            <div class="flex h-12 flex-shrink-0 items-center justify-between border-b border-[#e5e7eb] px-5">
+              <div class="min-w-0">
+                <div class="truncate text-sm font-medium text-[#1f2937]">{{ selectedFileLabel }}</div>
+                <div v-if="selectedEditorKind && selectedEditorKind !== 'skill'" class="text-xs text-[#9ca3af]">
+                  {{ selectedEditorKind }}
+                </div>
+              </div>
+              <button
+                v-if="canDeleteSelectedFile"
+                class="rounded-md px-2 py-1 text-xs text-[#9a3412] hover:bg-[#fff7ed] disabled:opacity-50"
+                :disabled="deletingFile"
+                type="button"
+                @click="removeSelectedFile"
+              >
+                {{ deletingFile ? '删除中...' : '删除文件' }}
+              </button>
+            </div>
+
             <div class="min-h-0 flex-1 overflow-y-auto px-5 pt-5">
-              <!-- 结构化表单 -->
-              <template v-if="!rawMode">
-                <!-- 名称 -->
-                <div class="mb-4">
-                  <label class="mb-1 block text-xs font-medium text-[#6b7280]">技能名称</label>
-                  <input
-                    v-if="isNew"
-                    v-model="form.name"
-                    class="h-9 w-full rounded-md border border-[#d1d5db] px-3 text-sm outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
-                    placeholder="my-skill-name（小写字母、数字、连字符）"
-                    type="text"
-                  />
-                  <div v-else class="flex h-9 items-center rounded-md bg-[#f9fafb] px-3 text-sm text-[#374151]">
-                    {{ form.name }}
-                  </div>
-                  <p v-if="nameError" class="mt-1 text-xs text-[#9a3412]">{{ nameError }}</p>
-                </div>
+              <div v-if="fileLoading" class="py-10 text-center text-sm text-[#9ca3af]">加载文件...</div>
 
-                <!-- 描述 -->
-                <div class="mb-4">
-                  <div class="mb-1 flex items-baseline justify-between">
-                    <label class="block text-xs font-medium text-[#6b7280]">
-                      描述 <span class="text-[#9a3412]">*</span>
-                    </label>
-                    <span
-                      :class="[
-                        'text-[10px] tabular-nums',
-                        form.description.length > DESCRIPTION_MAX ? 'text-[#9a3412]' : 'text-[#9ca3af]',
-                      ]"
+              <template v-else-if="selectedEditorKind === 'skill'">
+                <template v-if="!rawMode">
+                  <div class="mb-4">
+                    <label class="mb-1 block text-xs font-medium text-[#6b7280]">技能名称</label>
+                    <input
+                      v-if="isNew"
+                      v-model="form.name"
+                      class="h-9 w-full rounded-md border border-[#d1d5db] px-3 text-sm outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
+                      placeholder="my-skill-name（小写字母、数字、连字符）"
+                      type="text"
+                    />
+                    <div v-else class="flex h-9 items-center rounded-md bg-[#f9fafb] px-3 text-sm text-[#374151]">
+                      {{ selectedName }}
+                    </div>
+                    <p v-if="nameError" class="mt-1 text-xs text-[#9a3412]">{{ nameError }}</p>
+                    <p v-if="parseWarning && !rawMode" class="mt-1 text-xs text-[#92400e]">{{ parseWarning }}</p>
+                  </div>
+
+                  <div class="mb-4">
+                    <div class="mb-1 flex items-baseline justify-between">
+                      <label class="block text-xs font-medium text-[#6b7280]">
+                        描述 <span class="text-[#9a3412]">*</span>
+                      </label>
+                      <span
+                        :class="[
+                          'text-[10px] tabular-nums',
+                          form.description.length > DESCRIPTION_MAX ? 'text-[#9a3412]' : 'text-[#9ca3af]',
+                        ]"
+                      >
+                        {{ form.description.length }} / {{ DESCRIPTION_MAX }}
+                      </span>
+                    </div>
+                    <textarea
+                      v-model="form.description"
+                      :maxlength="DESCRIPTION_MAX"
+                      class="w-full resize-y rounded-md border border-[#d1d5db] p-2.5 text-sm outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
+                      rows="2"
+                    />
+                    <p v-if="descriptionError" class="mt-1 text-xs text-[#9a3412]">{{ descriptionError }}</p>
+                  </div>
+
+                  <div class="mb-4">
+                    <button
+                      class="flex items-center gap-1 text-xs font-medium text-[#6b7280] hover:text-[#1f2937]"
+                      type="button"
+                      @click="showAdvanced = !showAdvanced"
                     >
-                      {{ form.description.length }} / {{ DESCRIPTION_MAX }}
-                    </span>
+                      <svg
+                        :class="['h-3 w-3 transition-transform', showAdvanced ? 'rotate-90' : '']"
+                        aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                      >
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7" />
+                      </svg>
+                      高级字段（可选）
+                    </button>
+                    <div v-if="showAdvanced" class="mt-2 grid grid-cols-2 gap-3">
+                      <label class="block">
+                        <span class="mb-1 block text-xs text-[#6b7280]">license</span>
+                        <input
+                          v-model="form.license"
+                          class="h-9 w-full rounded-md border border-[#d1d5db] px-3 text-sm outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
+                          placeholder="例如 MIT"
+                          type="text"
+                        />
+                      </label>
+                      <label class="block">
+                        <div class="mb-1 flex items-baseline justify-between">
+                          <span class="block text-xs text-[#6b7280]">compatibility</span>
+                          <span
+                            :class="[
+                              'text-[10px] tabular-nums',
+                              (form.compatibility ?? '').length > COMPATIBILITY_MAX ? 'text-[#9a3412]' : 'text-[#9ca3af]',
+                            ]"
+                          >
+                            {{ (form.compatibility ?? '').length }} / {{ COMPATIBILITY_MAX }}
+                          </span>
+                        </div>
+                        <input
+                          v-model="form.compatibility"
+                          :maxlength="COMPATIBILITY_MAX"
+                          class="h-9 w-full rounded-md border border-[#d1d5db] px-3 text-sm outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
+                          placeholder="兼容性说明"
+                          type="text"
+                        />
+                        <p v-if="compatibilityError" class="mt-1 text-xs text-[#9a3412]">{{ compatibilityError }}</p>
+                      </label>
+                    </div>
                   </div>
-                  <textarea
-                    v-model="form.description"
-                    :maxlength="DESCRIPTION_MAX"
-                    class="w-full resize-y rounded-md border border-[#d1d5db] p-2.5 text-sm outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
-                    placeholder="模型会看到这段描述来判断何时使用该技能。写清楚触发场景和能力边界。"
-                    rows="2"
-                  />
-                  <p v-if="descriptionError" class="mt-1 text-xs text-[#9a3412]">{{ descriptionError }}</p>
-                </div>
 
-                <!-- 高级字段（可折叠） -->
-                <div class="mb-4">
-                  <button
-                    class="flex items-center gap-1 text-xs font-medium text-[#6b7280] hover:text-[#1f2937]"
-                    type="button"
-                    @click="showAdvanced = !showAdvanced"
-                  >
-                    <svg
-                      :class="['h-3 w-3 transition-transform', showAdvanced ? 'rotate-90' : '']"
-                      aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                  <div class="mb-5">
+                    <div class="mb-1 flex items-baseline justify-between">
+                      <label class="block text-xs font-medium text-[#6b7280]">技能内容（Markdown）</label>
+                      <span class="text-[10px] tabular-nums text-[#9ca3af]">
+                        {{ bodyCharCount.toLocaleString() }} 字符 · {{ bodyLineCount }} 行
+                      </span>
+                    </div>
+                    <textarea
+                      v-model="form.body"
+                      class="w-full resize-y rounded-md border border-[#d1d5db] p-3 font-mono text-sm outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
+                      style="min-height: 250px"
+                      spellcheck="false"
+                    />
+                    <p class="mt-1 text-[10px] text-[#9ca3af]">前端会自动生成合法的 frontmatter（name/description 等），你无需手动写 `---` 分隔块。</p>
+                  </div>
+                </template>
+
+                <template v-else>
+                  <div class="mb-3 flex items-center justify-between">
+                    <span class="text-xs font-medium text-[#6b7280]">原始 SKILL.md 编辑</span>
+                    <button
+                      class="text-xs text-[#1f6f5b] hover:underline"
+                      type="button"
+                      @click="switchToStructured"
                     >
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7" />
-                    </svg>
-                    高级字段（可选）
-                  </button>
-                  <div v-if="showAdvanced" class="mt-2 grid grid-cols-2 gap-3">
-                    <label class="block">
-                      <span class="mb-1 block text-xs text-[#6b7280]">license</span>
-                      <input
-                        v-model="form.license"
-                        class="h-9 w-full rounded-md border border-[#d1d5db] px-3 text-sm outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
-                        placeholder="例如 MIT"
-                        type="text"
-                      />
-                    </label>
-                    <label class="block">
-                      <div class="mb-1 flex items-baseline justify-between">
-                        <span class="block text-xs text-[#6b7280]">compatibility</span>
-                        <span
-                          :class="[
-                            'text-[10px] tabular-nums',
-                            (form.compatibility ?? '').length > COMPATIBILITY_MAX ? 'text-[#9a3412]' : 'text-[#9ca3af]',
-                          ]"
-                        >
-                          {{ (form.compatibility ?? '').length }} / {{ COMPATIBILITY_MAX }}
-                        </span>
-                      </div>
-                      <input
-                        v-model="form.compatibility"
-                        :maxlength="COMPATIBILITY_MAX"
-                        class="h-9 w-full rounded-md border border-[#d1d5db] px-3 text-sm outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
-                        placeholder="兼容性说明"
-                        type="text"
-                      />
-                      <p v-if="compatibilityError" class="mt-1 text-xs text-[#9a3412]">{{ compatibilityError }}</p>
-                    </label>
+                      尝试切换到结构化表单
+                    </button>
                   </div>
-                </div>
-
-                <!-- 技能正文 -->
-                <div class="mb-5">
-                  <div class="mb-1 flex items-baseline justify-between">
-                    <label class="block text-xs font-medium text-[#6b7280]">技能内容（Markdown）</label>
-                    <span class="text-[10px] tabular-nums text-[#9ca3af]">
-                      {{ bodyCharCount.toLocaleString() }} 字符 · {{ bodyLineCount }} 行
-                    </span>
-                  </div>
+                  <p class="mb-3 rounded-md border border-[#fcd34d] bg-[#fffbeb] px-3 py-2 text-xs text-[#92400e]">
+                    {{ parseWarning }}
+                  </p>
                   <textarea
-                    v-model="form.body"
+                    v-model="rawContent"
                     class="w-full resize-y rounded-md border border-[#d1d5db] p-3 font-mono text-sm outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
-                    style="min-height: 220px"
-                    placeholder="# 技能说明&#10;&#10;详细说明技能的功能、用法、示例..."
+                    style="min-height: 360px"
                     spellcheck="false"
                   />
-                  <p class="mt-1 text-[10px] text-[#9ca3af]">前端会自动生成合法的 frontmatter（name/description 等），你无需手动写 `---` 分隔块。</p>
-                </div>
+                </template>
               </template>
 
-              <!-- 原始编辑模式（当文件无法被结构化解析时的兜底） -->
               <template v-else>
-                <div class="mb-3 flex items-center justify-between">
-                  <span class="text-xs font-medium text-[#6b7280]">原始 SKILL.md 编辑</span>
-                  <button
-                    class="text-xs text-[#1f6f5b] hover:underline"
-                    type="button"
-                    @click="switchToStructured"
-                  >
-                    尝试切换到结构化表单
-                  </button>
+                <div class="mb-1 flex items-baseline justify-between">
+                  <label class="block text-xs font-medium text-[#6b7280]">文本内容</label>
+                  <span class="text-[10px] tabular-nums text-[#9ca3af]">
+                    {{ plainCharCount.toLocaleString() }} 字符 · {{ plainLineCount }} 行
+                  </span>
                 </div>
-                <p class="mb-3 rounded-md border border-[#fcd34d] bg-[#fffbeb] px-3 py-2 text-xs text-[#92400e]">
-                  {{ parseWarning }}
-                </p>
                 <textarea
-                  v-model="rawContent"
+                  v-model="plainContent"
                   class="w-full resize-y rounded-md border border-[#d1d5db] p-3 font-mono text-sm outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
-                  style="min-height: 320px"
+                  style="min-height: 420px"
                   spellcheck="false"
                 />
               </template>
             </div>
 
-            <!-- 固定底部操作栏 -->
             <div class="flex-shrink-0 border-t border-[#e5e7eb] bg-white px-5 py-3">
               <p v-if="errorMsg" class="mb-2 rounded-md border border-[#efb3a7] bg-[#fff7ed] px-3 py-2 text-xs text-[#9a3412]">
                 {{ errorMsg }}
@@ -503,7 +848,7 @@ onMounted(async () => {
                   type="button"
                   @click="remove"
                 >
-                  {{ deleting ? '删除中...' : '删除' }}
+                  {{ deleting ? '删除中...' : '删除技能' }}
                 </button>
                 <div v-else />
                 <div class="flex items-center gap-2">
