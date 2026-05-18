@@ -718,8 +718,141 @@ class NoncesFacade(_DataBase):
         return affected
 
 
+class CommunitySkillsFacade(_DataBase):
+    """社区技能广场。每条记录是一份完整的 SKILL.md 副本。
+
+    设计取舍：
+    - body_md 直接存 TEXT。当前 SKILL.md ≤ 128KB 单文件，TEXT 足够且便于 LIKE 搜索。
+    - 同作者可重复发布同名 skill：每次 publish 都是独立 id；老条目作者可手动删除。
+    - 下载时把内容 copy 到用户私有目录，作者删除后已下载副本不受影响（解耦）。
+    """
+
+    _COLUMNS = (
+        "id, owner_uuid, name, description, body_md, license, compatibility, "
+        "size_bytes, downloads, created_at, updated_at"
+    )
+
+    def create(
+        self,
+        *,
+        owner_uuid: str,
+        name: str,
+        description: str,
+        body_md: str,
+        size_bytes: int,
+        license: str | None = None,
+        compatibility: str | None = None,
+    ) -> dict:
+        skill_id = str(uuid.uuid4())
+        now_ts = self._now_timestamp()
+        with self._cursor() as cursor:
+            cursor.execute(
+                f"""
+                INSERT INTO community_skills ({self._COLUMNS})
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+                """,
+                (
+                    skill_id,
+                    owner_uuid,
+                    name,
+                    description,
+                    body_md,
+                    license,
+                    compatibility,
+                    size_bytes,
+                    now_ts,
+                    now_ts,
+                ),
+            )
+        record = self.get_by_id(skill_id)
+        if record is None:
+            raise RuntimeError("Community skill was inserted but could not be loaded.")
+        return record
+
+    def get_by_id(self, skill_id: str) -> dict | None:
+        with self._cursor() as cursor:
+            cursor.execute(
+                f"SELECT {self._COLUMNS} FROM community_skills WHERE id = ?",
+                (skill_id,),
+            )
+            row = cursor.fetchone()
+        return self._row_to_dict(row)
+
+    def list(
+        self,
+        *,
+        keyword: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
+        sort: str = "popular",
+    ) -> list[dict]:
+        """列表查询。
+
+        sort:
+            - "popular"（默认）：downloads DESC, created_at DESC
+            - "newest"        ：created_at DESC
+        keyword 不为空时，按 name LIKE OR description LIKE 过滤（大小写不敏感）。
+        """
+        if sort == "newest":
+            order_clause = "ORDER BY created_at DESC"
+        else:
+            order_clause = "ORDER BY downloads DESC, created_at DESC"
+
+        params: list = []
+        where_clause = ""
+        if keyword:
+            like = f"%{keyword.strip()}%"
+            where_clause = "WHERE (name LIKE ? OR description LIKE ?)"
+            params.extend([like, like])
+        params.extend([int(limit), int(offset)])
+
+        sql = (
+            f"SELECT {self._COLUMNS} FROM community_skills "
+            f"{where_clause} {order_clause} LIMIT ? OFFSET ?"
+        )
+        with self._cursor() as cursor:
+            cursor.execute(sql, params)
+            rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+
+    def count(self, *, keyword: str | None = None) -> int:
+        params: list = []
+        where_clause = ""
+        if keyword:
+            like = f"%{keyword.strip()}%"
+            where_clause = "WHERE (name LIKE ? OR description LIKE ?)"
+            params.extend([like, like])
+
+        with self._cursor() as cursor:
+            cursor.execute(
+                f"SELECT COUNT(1) AS total FROM community_skills {where_clause}",
+                params,
+            )
+            row = cursor.fetchone()
+        return int(row["total"]) if row else 0
+
+    def delete_for_owner(self, skill_id: str, owner_uuid: str) -> bool:
+        with self._cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM community_skills WHERE id = ? AND owner_uuid = ?",
+                (skill_id, owner_uuid),
+            )
+            affected = cursor.rowcount
+        return affected > 0
+
+    def increment_downloads(self, skill_id: str) -> bool:
+        now_ts = self._now_timestamp()
+        with self._cursor() as cursor:
+            cursor.execute(
+                "UPDATE community_skills SET downloads = downloads + 1, updated_at = ? WHERE id = ?",
+                (now_ts, skill_id),
+            )
+            affected = cursor.rowcount
+        return affected > 0
+
+
 class DatabaseFacade:
-    """数据库门面对象：统一提供 users/projects/sessions/messages/access/nonces 能力。"""
+    """数据库门面对象：统一提供 users/projects/sessions/messages/access/nonces/community 能力。"""
 
     def __init__(self, db_path: str = "project.db"):
         self.db_path = db_path
@@ -729,6 +862,7 @@ class DatabaseFacade:
         self.messages = MessagesFacade(self)
         self.access = AccessFacade(self)
         self.nonces = NoncesFacade(self)
+        self.community = CommunitySkillsFacade(self)
 
     @staticmethod
     def _configure_connection(conn: sqlite3.Connection) -> None:
@@ -811,6 +945,24 @@ class DatabaseFacade:
                 FOREIGN KEY (user_uuid) REFERENCES users(uuid) ON DELETE CASCADE
             );
             CREATE INDEX IF NOT EXISTS idx_nonces_timestamp ON nonces(timestamp);
+            CREATE TABLE IF NOT EXISTS community_skills (
+                id TEXT PRIMARY KEY,
+                owner_uuid TEXT NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL,
+                body_md TEXT NOT NULL,
+                license TEXT,
+                compatibility TEXT,
+                size_bytes INTEGER NOT NULL,
+                downloads INTEGER NOT NULL DEFAULT 0,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                FOREIGN KEY (owner_uuid) REFERENCES users(uuid) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_community_skills_created_at ON community_skills(created_at);
+            CREATE INDEX IF NOT EXISTS idx_community_skills_downloads ON community_skills(downloads);
+            CREATE INDEX IF NOT EXISTS idx_community_skills_owner ON community_skills(owner_uuid);
+            CREATE INDEX IF NOT EXISTS idx_community_skills_name ON community_skills(name);
             """
             cursor.executescript(schema)
 

@@ -340,3 +340,14 @@ def get_current_user(user_uuid: str = Depends(get_current_user_uuid)) -> UserRec
     """根据用户 UUID 获取当前用户信息，供其他接口使用"""
     user = db.users.get_by_uuid(user_uuid)
     return _ensure_user_record(user)
+
+
+@router.get("/me", response_model=UserOut)
+def read_current_user(current_user: UserRecord = Depends(get_current_user)) -> UserOut:
+    """返回当前已登录用户的基础信息（用于前端展示用户名等）。"""
+    return UserOut(
+        uuid=current_user["uuid"],
+        username=current_user["username"],
+        email=current_user["email"],
+        created_at=float(current_user["created_at"]),
+    )

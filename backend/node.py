@@ -264,6 +264,7 @@ async def call_model_node(ctx: LoopContext) -> NodeOutput:
     # 让模型在 <skill>/load_skill 层面就能区分归属（否则 pydantic-ai-skills
     # 只会把三个目录平铺展示，模型无法分辨同名技能属于哪一层）。
     from backend.file import UserFile, ProjectFile
+    from backend.tool import build_tools
     from dataclasses import replace
     from pydantic_ai_skills import discover_skills
     db = DatabaseFacade(DATABASE_PATH)
@@ -285,7 +286,9 @@ async def call_model_node(ctx: LoopContext) -> NodeOutput:
 
     skills_capability = SkillsCapability(skills=scoped_skills, validate=True)
 
-    agent = GetAgent(capabilities=[skills_capability])
+    # 注入注册表中的工具（含 skill 文件读写工具），按 ctx.allowed_tools 过滤
+    tools = build_tools(allowed=ctx.allowed_tools)
+    agent = GetAgent(tools=tools, capabilities=[skills_capability])
     ctx.response_text = ""
     # 新一轮调用开始，清除上一轮的临时错误状态
     ctx.error = None

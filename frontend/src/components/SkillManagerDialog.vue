@@ -13,6 +13,7 @@ import {
   buildSkillFile,
 } from '../skills'
 import { getErrorMessage } from '../api'
+import { publishCommunitySkill } from '../api'
 
 const props = defineProps<{
   space: FileSpace
@@ -28,7 +29,9 @@ const skills = ref<SkillMeta[]>([])
 const loading = ref(false)
 const saving = ref(false)
 const deleting = ref(false)
+const publishing = ref(false)
 const errorMsg = ref('')
+const publishMsg = ref('')
 
 // 编辑状态：结构化字段
 const selectedName = ref<string | null>(null)
@@ -239,6 +242,37 @@ async function remove() {
     errorMsg.value = getErrorMessage(e)
   } finally {
     deleting.value = false
+  }
+}
+
+const canPublish = computed(() => props.space.kind === 'user' && !isNew.value && !!selectedName.value && !dirty.value)
+
+async function publishToCommunity() {
+  if (!canPublish.value || !selectedName.value) return
+  if (!confirm(`将 "${selectedName.value}" 发布到社区，让所有用户可见并下载？`)) return
+
+  publishing.value = true
+  errorMsg.value = ''
+  publishMsg.value = ''
+  try {
+    let bodyMd: string
+    if (rawMode.value) {
+      bodyMd = rawContent.value
+    } else {
+      bodyMd = buildSkillFile({
+        name: form.value.name,
+        description: form.value.description.trim(),
+        license: form.value.license?.trim() || undefined,
+        compatibility: form.value.compatibility?.trim() || undefined,
+        body: form.value.body,
+      })
+    }
+    const published = await publishCommunitySkill(bodyMd)
+    publishMsg.value = `已发布到社区：${published.name}`
+  } catch (e) {
+    errorMsg.value = getErrorMessage(e)
+  } finally {
+    publishing.value = false
   }
 }
 
@@ -458,6 +492,9 @@ onMounted(async () => {
               <p v-if="errorMsg" class="mb-2 rounded-md border border-[#efb3a7] bg-[#fff7ed] px-3 py-2 text-xs text-[#9a3412]">
                 {{ errorMsg }}
               </p>
+              <p v-if="publishMsg" class="mb-2 rounded-md border border-[#bbf7d0] bg-[#f0fdf4] px-3 py-2 text-xs text-[#166534]">
+                {{ publishMsg }}
+              </p>
               <div class="flex items-center justify-between">
                 <button
                   v-if="!isNew && selectedName"
@@ -469,14 +506,26 @@ onMounted(async () => {
                   {{ deleting ? '删除中...' : '删除' }}
                 </button>
                 <div v-else />
-                <button
-                  class="rounded-md bg-[#1f2937] px-4 py-1.5 text-sm text-white transition hover:bg-[#111827] disabled:cursor-not-allowed disabled:bg-[#9ca3af]"
-                  :disabled="!canSave"
-                  type="button"
-                  @click="save"
-                >
-                  {{ saving ? '保存中...' : '保存' }}
-                </button>
+                <div class="flex items-center gap-2">
+                  <button
+                    v-if="canPublish"
+                    class="rounded-md border border-[#1f6f5b] px-3 py-1.5 text-sm text-[#1f6f5b] transition hover:bg-[#e6f4ee] disabled:cursor-not-allowed disabled:opacity-50"
+                    :disabled="publishing"
+                    type="button"
+                    title="把当前技能发布到社区"
+                    @click="publishToCommunity"
+                  >
+                    {{ publishing ? '发布中...' : '发布到社区' }}
+                  </button>
+                  <button
+                    class="rounded-md bg-[#1f2937] px-4 py-1.5 text-sm text-white transition hover:bg-[#111827] disabled:cursor-not-allowed disabled:bg-[#9ca3af]"
+                    :disabled="!canSave"
+                    type="button"
+                    @click="save"
+                  >
+                    {{ saving ? '保存中...' : '保存' }}
+                  </button>
+                </div>
               </div>
             </div>
           </template>

@@ -1,4 +1,5 @@
 import logging
+import re
 import shutil
 from pathlib import Path
 from typing import Union, List, Dict, Optional
@@ -138,6 +139,144 @@ class UserFile(FileBase):
 
         user_path = BASE_DIR / "data" / user_uuid
         super().__init__(user_path)
+
+
+# ── Skill 文件门面 ──────────────────────────────────────────────
+# 设计目标：让 AI 在人类指令下读写 skill 目录中的文本文件，
+# 但操作面被严格收敛，不能逃出 skills/ 子目录、不能写非文本文件、不能超大。
+
+# 与 frontend/src/skills.ts 保持一致的 skill 名称约束（kebab-case，≤64）
+_SKILL_NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+_SKILL_NAME_MAX = 64
+_SKILL_NAME_RESERVED: frozenset[str] = frozenset({"anthropic", "claude"})
+
+# 文本文件扩展名白名单（独立于 _TEXT_FILE_EXTENSIONS，避免被无关接口扩散影响）
+_SKILL_TEXT_EXTENSIONS: frozenset[str] = frozenset({
+    ".md", ".txt", ".json", ".yaml", ".yml", ".csv", ".xml",
+})
+
+# 单文件内容上限（字符数，与 HTTP 文件接口对齐）
+_SKILL_FILE_MAX_CHARS = 256 * 1024
+
+
+def _validate_skill_name(skill_name: str) -> None:
+    """校验 skill 名：kebab-case、长度 ≤64、不在保留词内。"""
+    if not isinstance(skill_name, str) or not skill_name:
+        raise FileError("skill name must be a non-empty string")
+    if len(skill_name) > _SKILL_NAME_MAX:
+        raise FileError(f"skill name too long (>{_SKILL_NAME_MAX} chars)")
+    if not _SKILL_NAME_RE.match(skill_name):
+        raise FileError("skill name must match ^[a-z0-9]+(-[a-z0-9]+)*$")
+    if skill_name in _SKILL_NAME_RESERVED:
+        raise FileError(f"skill name '{skill_name}' is reserved")
+
+
+def _validate_skill_relpath(rel_path: str) -> None:
+    """校验 skill 内部相对路径：非空、扩展名在白名单、无穿越元字符。
+
+    `_safe_path` 已用 resolve() 阻止穿越；这里再做一道字面量黑名单，
+    便于在更早的位置返回明确错误。
+    """
+    if not isinstance(rel_path, str) or not rel_path.strip():
+        raise FileError("path must be a non-empty string")
+    if "\x00" in rel_path:
+        raise FileError("path contains NUL byte")
+    if rel_path.startswith("/") or rel_path.startswith("\\"):
+        raise FileError("path must be relative, not absolute")
+    # 阻止显式的父级穿越段（resolve 仍会兜底）
+    parts = Path(rel_path).parts
+    if any(p == ".." for p in parts):
+        raise FileError("path must not contain '..' segments")
+    suffix = Path(rel_path).suffix.lower()
+    if suffix not in _SKILL_TEXT_EXTENSIONS:
+        raise FileError(
+            f"unsupported file extension '{suffix}'. allowed: "
+            f"{sorted(_SKILL_TEXT_EXTENSIONS)}"
+        )
+
+
+class SkillFile(FileBase):
+    """skill 文件门面：把可写区域锁死到 <scope_root>/skills/。
+
+    scope:
+      - "user":    base = data/{user_uuid}/skills
+      - "project": base = data/{user_uuid}/{pid}/skills
+
+    全局 skill (SKILL_STORAGE_DIR) 不通过本门面暴露给 AI，仅服务端可写。
+
+    单次操作面：
+      1) 路径必须形如 "<skill_name>/<file_rel>"，不能直接落在 skills/ 根下；
+      2) skill_name 受 _validate_skill_name 限制；
+      3) file_rel 扩展名必须在 _SKILL_TEXT_EXTENSIONS 白名单内；
+      4) 写入内容长度受 _SKILL_FILE_MAX_CHARS 限制；
+      5) FileBase._safe_path 兜底防止 .. 穿越。
+    """
+
+    def __init__(self, scope: str, user_uuid: str, db_facade, pid: Optional[str] = None):
+        if scope == "user":
+            user = db_facade.users.get_by_uuid(user_uuid)
+            if not user:
+                raise PermissionError(f"Access Denied: User {user_uuid} not found")
+            base = BASE_DIR / "data" / user_uuid / "skills"
+        elif scope == "project":
+            if not pid:
+                raise PermissionError("project scope requires pid")
+            project = db_facade.projects.get_for_user(pid=pid, user_uuid=user_uuid)
+            if not project:
+                raise PermissionError(
+                    f"Access Denied: Project {pid} does not belong to user {user_uuid}"
+                )
+            base = BASE_DIR / "data" / user_uuid / pid / "skills"
+        else:
+            raise PermissionError(f"unknown skill scope: {scope}")
+        super().__init__(base)
+        self.scope = scope
+
+    # ── 内部工具 ──
+
+    def _resolve(self, skill_name: str, file_rel: str) -> Path:
+        """统一校验后返回绝对路径。"""
+        _validate_skill_name(skill_name)
+        _validate_skill_relpath(file_rel)
+        # 拼成 <skill>/<file>，再走 _safe_path 兜底
+        return self._safe_path(f"{skill_name}/{file_rel}")
+
+    # ── 对外操作 ──
+
+    def write(self, skill_name: str, file_rel: str, content: str) -> Dict[str, Union[str, int, float]]:
+        """写入或覆盖 skill 内文本文件，父目录不存在时自动创建。"""
+        if not isinstance(content, str):
+            raise FileError("content must be a string")
+        if len(content) > _SKILL_FILE_MAX_CHARS:
+            raise FileError(
+                f"content too long: {len(content)} > {_SKILL_FILE_MAX_CHARS} chars"
+            )
+        target = self._resolve(skill_name, file_rel)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        stat = target.stat()
+        return {
+            "rel_path": str(target.relative_to(self.base_path)),
+            "size": stat.st_size,
+            "updated_at": stat.st_mtime,
+        }
+
+    def delete(self, skill_name: str, file_rel: str) -> str:
+        """删除 skill 内某个文件。仅删除文件，不递归删目录。"""
+        target = self._resolve(skill_name, file_rel)
+        if not target.is_file():
+            raise FileError(f"file not found: {skill_name}/{file_rel}")
+        target.unlink()
+        return f"deleted: {skill_name}/{file_rel}"
+
+    def delete_skill(self, skill_name: str) -> str:
+        """递归删除整个 skill 目录。危险操作，AI 工具层会单独把控。"""
+        _validate_skill_name(skill_name)
+        target = self._safe_path(skill_name)
+        if not target.is_dir():
+            raise FileError(f"skill not found: {skill_name}")
+        shutil.rmtree(target)
+        return f"skill deleted: {skill_name}"
 
 
 

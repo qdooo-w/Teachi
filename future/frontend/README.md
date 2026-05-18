@@ -33,7 +33,8 @@ frontend/
    │  ├─ MessageContent.vue       Markdown 消息渲染与代码块复制、Mermaid 延迟渲染
    │  ├─ RenameInline.vue         行内重命名输入（回车提交 / Esc 取消）
    │  ├─ RowMenu.vue              列表项右上三点菜单（重命名 / 删除）
-   │  ├─ ConfirmDialog.vue        二次确认对话框（危险操作）
+   │  ├─ ConfirmDialog.vue        二次确认对话框（危险操作，含删除回合）
+   │  ├─ EditPromptDialog.vue     编辑后重放：textarea + Ctrl/⌘+Enter 提交 / Esc 取消
    │  ├─ SkillChips.vue           已选技能的 chip 行（发送时随消息带走）
    │  ├─ SkillPicker.vue          @ 触发的技能下拉选择器，支持搜索与键盘导航
    │  └─ SkillManagerDialog.vue   用户级 / 项目级技能管理对话框（结构化表单 + 原始兜底）
@@ -110,15 +111,15 @@ main.ts
 
 ### 3. 聊天主循环（SSE）
 
-- `POST /loop/{sid}`，`action=send` / `stop`，请求头必带 `Authorization` + `X-Nonce` + `X-Nonce-Timestamp`
+- `POST /loop/{sid}`，`action=send` / `regenerate` / `stop`，请求头必带 `Authorization` + `X-Nonce` + `X-Nonce-Timestamp`
 - 用 `fetch` + `ReadableStream` 读 SSE，自己按 `\n\n` 分帧，比 `EventSource` 多了携带 body 和自定义头的能力
 - 处理的帧类型：
   - `text_delta` —— 拼接到当前 assistant 消息的 content 并触发自动滚动
   - `tool_call` —— 在输入框上方显示「正在调用 XX」
   - `tool_result` —— 清除工具状态
-  - `done` —— 携带 `msg_id`（成功）或 `error` / `error_code`（失败）
+  - `done` —— 携带 `msg_id`（成功）、`anchor_msg_id`（本回合 anchor）或 `error` / `error_code`（失败）
 - 发送后立即乐观 push 一条 `pending: true` 的 assistant 占位气泡，收到 `done` 后再 `loadMessages()` 拉服务端权威版本
-- 「停止生成」：调用 `POST /loop/{sid}` 带 `action=stop`，同时 `AbortController.abort()` 关闭前端 SSE
+- 「停止生成」：调用 `POST /loop/{sid}` 带 `action=stop`，同时 `AbortController.abort()` 关闭前端 SSE。停止后把刚发出去那条 user 文本回填到输入框（仅当输入框为空时），便于用户改一改再发
 - 自动贴底滚动：监听容器 scroll，只有用户停留在底部（阈值 32px）时才自动贴底
 
 ### 4. Composer 交互
@@ -172,7 +173,8 @@ Mermaid 渲染失败降级为可见的 error 卡片而不是白屏。
 ### 7. 消息历史
 
 - `GET /sessions/{sid}/messages` 拉原始 PydanticAI `ModelMessage` 序列化数据
-- 前端只渲染 `is_latest === 1` 的条目
+- 前端只渲染 `version === 0` 的条目（活跃版本，历史版本通过版本切换按钮访问）
+- `MessageItem.anchor_msg_id` 是回合 anchor，同一回合内 `user` / `tool_call` / `tool_result` / `assistant` 共享，`DisplayMessage` 也会带上方便后续重放 / 切换 / 删除使用
 - 解析逻辑在 `api.ts#parseMessage`：
   - `kind === 'user'` + `parsed.kind === 'request'` → 取 `user-prompt` 部分
   - `kind === 'assistant' | 'agent_response'` + `parsed.kind === 'response'` → 取 `text` 部分
@@ -183,14 +185,50 @@ Mermaid 渲染失败降级为可见的 error 卡片而不是白屏。
 - 消息复制：鼠标悬停 assistant 气泡左下显示复制按钮，带 1.5s 视觉反馈
 - 错误体 → 文案：`api.ts#getErrorMessage` 兼容 `ApiError` / `Error` / `{ detail: ... }` / `{ detail: { message } }`
 
+### 9. 重放 / 编辑 PROMPT / 版本切换 / 删除回合
+
+围绕回合 anchor（`anchor_msg_id`）做的一组互相配合的功能。后端模型用 `(anchor_msg_id, version)` 标识：`version=0` 是当前活跃版本，重放会把旧组整体推到 `version>=1`。
+
+**hover 工具栏**
+
+- assistant 气泡 hover 出现：复制 / 重放 / 上一版 / `当前位/总数` / 下一版
+- user 气泡 hover 出现：编辑后重放（铅笔）、删除此回合（红色垃圾桶）
+- streaming 期间所有按钮禁用
+
+**重放（不改 PROMPT）**
+
+- `regenerateChatMessage(sid, pid, anchor_msg_id, '', ...)` 第四参数为空 → 后端用 anchor 原 PROMPT
+- 客户端把当前活跃 assistant 气泡内容清空、置 pending，SSE delta 直接覆盖填回去
+- 完成后 `loadMessages()` 拉权威数据，重放出的新消息按 anchor 排在原回合位置
+
+**编辑 PROMPT 后重放**
+
+- `EditPromptDialog`：textarea 默认全选原 PROMPT，`Ctrl/⌘ + Enter` 提交，`Esc` 取消
+- 提交时调 `regenerateChatMessage(sid, pid, anchor_msg_id, newPrompt, ...)`，乐观把 user 气泡更新为新内容、assistant 气泡进入 pending
+- 后端写入新一组 `version=0` 共享同一 anchor，旧组（含旧 PROMPT）整体 `version+=1`
+
+**版本切换**
+
+- 仅当某 anchor 有多个版本时才显示左右箭头与 `当前位/总数`
+- 客户端用 `displayedPosByAnchor: Record<anchor, pos>` 维护视觉位置（1=最新，N=最早）；切换时调 `switchMessageVersion(target_msg_id)`，后端做整组 swap（user / tool / assistant 同步对调，避免错位）
+- 切换后 `loadMessages()` + 保留 displayedPos
+- 跨页刷新会重置位置为 1（这是后端 swap 模型的固有限制——swap 后 `version=0` 永远是当前活跃）
+
+**删除回合**
+
+- 红色垃圾桶 → `ConfirmDialog` 二次确认 → `deleteTurn(anchor_msg_id)`
+- 后端硬删 `anchor_msg_id = ? AND version = 0` 的整组（user 自身 + tool_call / tool_result / assistant）
+- 历史版本（`version>=1`）保留，可用版本切换按钮调出
+- 删完 `delete displayedPosByAnchor[anchor]` + `loadMessages()`
+
 ## 尚未实现 / 有意省略
 
-- 消息级 regenerate、版本切换（后端已支持 `/messages/{msg_id}/versions`、`/messages/{msg_id}/switch-version`，UI 未接）
 - 附件、图片、语音输入
 - 多客户端会话广播、通知
 - 侧边栏「文档 / 仪表盘 / 设置」按钮仅占位、禁用点击
 - 通用文件浏览器 UI（目前文件 API 仅被 Skill 管理使用）
 - 项目技能在对话框中增删后由 `useProjectSkills(pidRef)` composable 统一管理：ChatView 订阅 skills ref，App.vue 在对话框关闭时调 `refresh()`，无需额外事件总线
+- 「跨页刷新后保持版本切换位置」：当前 `displayedPosByAnchor` 仅活在内存里，跨页刷新会重置为 1。要做绝对定位需要后端引入稳定的 branch_id，本期未做
 
 ## 开发与运行
 
