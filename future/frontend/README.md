@@ -1,6 +1,6 @@
 # Teachi Frontend
 
-基于 Vue 3 + Vite + Tailwind 的 AI 聊天前端，对接 FastAPI 后端，支持账号鉴权、科目与会话管理、SSE 流式对话、Markdown/LaTeX/Mermaid 渲染，以及用户级 / 项目级技能（Skill）的管理和按需挂载。
+基于 Vue 3 + Vite + Tailwind 的 AI 聊天前端，对接 FastAPI 后端，支持账号鉴权、科目与会话管理、SSE 流式对话、Markdown/LaTeX/Mermaid 渲染、用户级 / 项目级技能（Skill）的管理和按需挂载，以及社区技能的发布、安装与删除。
 
 ## 目录结构
 
@@ -8,7 +8,7 @@
 frontend/
 ├─ index.html              Vite 入口 HTML，仅挂载 <div id="app">
 ├─ package.json            依赖与脚本（vite / vue / vue-router / tailwind / katex / mermaid / markdown-it 等）
-├─ vite.config.ts          开发代理：把 /auth /loop /users /projects /sessions /messages /tools /health 转发到后端
+├─ vite.config.ts          开发代理：把 /auth /loop /users /projects /sessions /messages /tools /community /health 转发到后端
 ├─ tsconfig.json
 ├─ postcss.config.js       Tailwind v4 PostCSS 插件配置
 └─ src/
@@ -28,7 +28,8 @@ frontend/
    ├─ views/
    │  ├─ OverviewView.vue  `/`：科目卡片总览 + 新建科目
    │  ├─ SubjectView.vue   `/projects/:pid`：该科目会话列表 + 首条消息创建会话
-   │  └─ ChatView.vue      `/projects/:pid/sessions/:sid`：消息流 + composer + SSE 主循环 + skill picker
+   │  ├─ ChatView.vue      `/projects/:pid/sessions/:sid`：消息流 + composer + SSE 主循环 + skill picker
+   │  └─ CommunityView.vue `/community`：社区技能列表、详情、安装与作者删除
    ├─ components/
    │  ├─ MessageContent.vue       Markdown 消息渲染与代码块复制、Mermaid 延迟渲染
    │  ├─ RenameInline.vue         行内重命名输入（回车提交 / Esc 取消）
@@ -58,8 +59,9 @@ main.ts
      └─ <RouterView>
          ├─ views/OverviewView.vue  ── useProjects / useLayout + Row/Rename/Confirm
          ├─ views/SubjectView.vue   ── useProjects / useLayout + listSessions/createSession/...
-         └─ views/ChatView.vue      ── useAuth(preparing) + useProjects + listSessions
+         ├─ views/ChatView.vue      ── useAuth(preparing) + useProjects + listSessions
                                         + sendChatMessage/stopChatGeneration + SkillPicker/Chips
+         └─ views/CommunityView.vue ── 社区 skill 列表 / 详情 / 安装 / 作者删除
 ```
 
 - `api.ts` 是所有后端通信的唯一出口，封装 `fetch` + 401 自动刷新、JWT 本地存储、SSE 帧解析、通用文件 API
@@ -75,12 +77,14 @@ main.ts
 | `/` | `OverviewView` | `科目总览` | 科目列表共享（`useProjects`） |
 | `/projects/:pid` | `SubjectView` | 动态（科目名） | 该项目会话列表；视图独占 |
 | `/projects/:pid/sessions/:sid` | `ChatView` | 动态（科目 / 会话） | 消息 / 草稿 / SSE 全部随视图卸载释放 |
+| `/community` | `CommunityView` | `社区` | 社区技能列表、详情、安装；视图独占 |
 | `/:pathMatch(.*)*` | — | — | 404 重定向到 `/` |
 
 - `ChatView` 用 `:key="${pid}:${sid}"` 强制按会话重建，避免切换 sid 时状态串联
 - SubjectView 创建首条消息时跳转到 `/projects/:pid/sessions/:sid?initial=<text>`，ChatView 挂载后消费 `initial`、调 `router.replace` 去掉 query 再发送
 - `document.title` 由 `router.afterEach`（静态）+ SubjectView / ChatView 的 watcher（动态）合力设置
 - `App.vue` 的面包屑和 header 按钮按 `$route.name` 分支显示；项目技能按钮在 `route.params.pid` 存在时显示（subject 与 chat 两个视图都可用）
+- 侧边栏标题区有「社区」入口，跳转到 `/community`
 
 ## 已完成的功能
 
@@ -145,6 +149,7 @@ Skill 在后端就是 `skills/<name>/SKILL.md` 的文件约定，前端完全通
 - 正文前端侧限制 128 KB
 - 旧文件 frontmatter 无法结构化解析时自动降级为「原始编辑」模式，保存前仍做 frontmatter 合法性兜底校验
 - `yaml.stringify` 生成 frontmatter，避免人工漏空格之类 YAML 陷阱
+- 用户级技能在已保存且无未保存修改时可「发布到社区」，调用 `POST /community/skills`，后端重新解析 `body_md` 中的 frontmatter
 
 「我的技能」（用户级）和「项目技能」（项目级）共用同一对话框，靠 `FileSpace` 判别：
 
@@ -156,7 +161,18 @@ type FileSpace =
 
 对应后端路径 `/users/{user_id}/files` 或 `/projects/{pid}/files`。
 
-### 6. Markdown / 代码 / 数学 / Mermaid 渲染
+### 6. 社区技能广场
+
+`/community` 由 `CommunityView.vue` 提供，入口在侧边栏标题区的「社区」按钮。
+
+- 列表调用 `GET /community/skills`，支持按 `keyword` 搜索技能名 / 描述，分页大小固定 20
+- 排序支持 `popular`（下载数降序）和 `newest`（发布时间降序）
+- 点击卡片后调用 `GET /community/skills/{id}` 打开详情弹层，展示描述、大小、发布时间、license、compatibility 和完整 `body_md`
+- 「安装到我的技能」调用 `POST /community/skills/{id}/install`，成功后写入用户级 `skills/<name>/SKILL.md` 并刷新下载数
+- 作者本人在详情弹层中可删除发布，调用 `DELETE /community/skills/{id}`
+- 发布入口不在社区页内，而在「我的技能」管理对话框里：选中已保存且未修改的用户级技能后显示「发布到社区」
+
+### 7. Markdown / 代码 / 数学 / Mermaid 渲染
 
 `MessageContent.vue` + `markdown/renderer.ts` 流水线：
 
@@ -170,7 +186,7 @@ type FileSpace =
 
 Mermaid 渲染失败降级为可见的 error 卡片而不是白屏。
 
-### 7. 消息历史
+### 8. 消息历史
 
 - `GET /sessions/{sid}/messages` 拉原始 PydanticAI `ModelMessage` 序列化数据
 - 前端只渲染 `version === 0` 的条目（活跃版本，历史版本通过版本切换按钮访问）
@@ -180,12 +196,12 @@ Mermaid 渲染失败降级为可见的 error 卡片而不是白屏。
   - `kind === 'assistant' | 'agent_response'` + `parsed.kind === 'response'` → 取 `text` 部分
   - 工具调用 / 返回类消息在前端不展示
 
-### 8. 其它
+### 9. 其它
 
 - 消息复制：鼠标悬停 assistant 气泡左下显示复制按钮，带 1.5s 视觉反馈
 - 错误体 → 文案：`api.ts#getErrorMessage` 兼容 `ApiError` / `Error` / `{ detail: ... }` / `{ detail: { message } }`
 
-### 9. 重放 / 编辑 PROMPT / 版本切换 / 删除回合
+### 10. 重放 / 编辑 PROMPT / 版本切换 / 删除回合
 
 围绕回合 anchor（`anchor_msg_id`）做的一组互相配合的功能。后端模型用 `(anchor_msg_id, version)` 标识：`version=0` 是当前活跃版本，重放会把旧组整体推到 `version>=1`。
 

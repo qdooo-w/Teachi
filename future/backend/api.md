@@ -10,6 +10,7 @@
 | Base URL | 后端未设置统一 API 前缀 |
 | Auth 路由前缀 | `/auth` |
 | Chat 路由前缀 | `/loop` |
+| Community 路由前缀 | `/community` |
 | CORS | 由 `CORS_ALLOW_ORIGINS` 环境变量控制 |
 | JSON 请求 | 除 SSE 流式响应外，请求和响应均按 JSON 处理 |
 | 时间字段 | `float`，Unix 时间戳，单位秒 |
@@ -22,7 +23,11 @@
 |---|---|---|---|
 | Header | `Authorization` | string | `Bearer <access_token>` |
 
-`/loop/{sid}` 还必须额外携带防重放请求头：
+以下接口还必须额外携带防重放请求头：
+
+- `POST /loop/{sid}`
+- `POST /community/skills`
+- `POST /community/skills/{skill_id}/install`
 
 | 位置 | 名称 | 类型 | 说明 |
 |---|---|---|---|
@@ -108,6 +113,47 @@ FastAPI 和后端当前可能返回两类错误体：
 | `created_at` | float | 记录创建时间 |
 | `anchor_msg_id` | string \| null | 回合（turn）锚点 msg_id。同一回合内 `user` / `tool_call` / `tool_result` / `assistant` / `agent_response` 共享此值。第一条 `user` 消息的 `anchor_msg_id` 等于自身 `msg_id`（self-reference）|
 | `version` | int | `0` 表示当前活跃版本；`>0` 表示历史版本（数字越大越早）。前端默认按 (anchor_msg_id, version=0) 编排活跃链 |
+
+### CommunitySkillSummary
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | string | 社区技能 ID |
+| `owner_uuid` | string | 发布者用户 ID |
+| `name` | string | Skill 名称，来自 `SKILL.md` frontmatter |
+| `description` | string | Skill 描述，来自 frontmatter |
+| `license` | string \| null | 可选 license |
+| `compatibility` | string \| null | 可选兼容性说明 |
+| `size_bytes` | int | `body_md` 的 UTF-8 字节数 |
+| `downloads` | int | 安装次数 |
+| `created_at` | float | 发布时间 |
+| `updated_at` | float | 更新时间 |
+
+### CommunitySkillDetail
+
+继承 `CommunitySkillSummary`，并额外包含：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `body_md` | string | 完整 `SKILL.md` 内容 |
+
+### CommunitySkillListResponse
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `skills` | `CommunitySkillSummary[]` | 当前页技能列表 |
+| `total` | int | 符合过滤条件的总数 |
+| `limit` | int | 当前分页 limit |
+| `offset` | int | 当前分页 offset |
+| `sort` | string | `popular` 或 `newest` |
+
+### InstallResponse
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `name` | string | 已安装技能名 |
+| `skill_id` | string | 社区技能 ID |
+| `downloads` | int | 安装后的下载计数 |
 
 ## 认证接口
 
@@ -217,6 +263,18 @@ FastAPI 和后端当前可能返回两类错误体：
 | 位置 | 名称 | 说明 |
 |---|---|---|
 | Header | `Set-Cookie` | 删除 refresh token Cookie |
+
+### GET `/auth/me`
+
+意义：获取当前已登录用户的基础信息。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+请求体：无。
+
+成功返回：`200 OK`
+
+返回体：`UserOut`
 
 ## 通用接口
 
@@ -573,6 +631,28 @@ FastAPI 和后端当前可能返回两类错误体：
 | 400 | `{ code: "SWITCH_FAILED", message: "Failed to switch version" }` | 目标消息不存在、不属于当前用户，或缺少 `anchor_msg_id` |
 | 422 | 参数校验错误 | 请求体缺少 `target_version_msg_id` |
 
+### DELETE `/messages/{anchor_msg_id}/turn`
+
+意义：删除某个回合当前活跃版本（`version=0`）的整组消息。历史版本（`version>=1`）保留，可后续通过版本切换调出。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `anchor_msg_id` | string | 是 | 回合 anchor msg_id |
+
+请求体：无。
+
+成功返回：`204 No Content`，无返回体。
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 404 | `{ code: "RESOURCE_NOT_FOUND", message: "Active turn not found" }` | 该 anchor 没有当前活跃版本，或不属于当前用户 |
+
 ## 工具接口
 
 ### GET `/tools/registry`
@@ -589,10 +669,127 @@ FastAPI 和后端当前可能返回两类错误体：
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `tools` | `string[]` | 已通过 `@register_tool` 注册的工具名，按字母排序 |
+| `tools` | `string[]` | 已通过 `@register_tool` 注册的工具名，按字母排序；当前为 `delete_skill`、`delete_skill_file`、`write_skill_file` |
 | `global_allowed_tools` | `string[]` | 当前实现与 `tools` 相同 |
 
-说明：当前 `backend.tool` 中没有任何被 `@register_tool` 装饰的具体工具函数，因此两个字段都会返回空数组。AI 模型在 `/loop/{sid}` 中调用的「技能」由 `SkillsCapability` 从三个 skills 目录加载，和该注册表不是同一个来源（参见下方「聊天循环接口」）。
+说明：这些注册表工具是 AI 可调用的工具，其中 `write_skill_file` / `delete_skill_file` / `delete_skill` 用于修改用户级或项目级 skill 目录。它们和模型在 `/loop/{sid}` 中通过 `SkillsCapability` 加载的「技能」不是同一个概念。
+
+这些工具使用带范围前缀的技能名作为参数：`project-<skill_name>` 表示当前项目级技能，`user-<skill_name>` 表示用户级技能。工具内部会移除前缀并写入对应的 `skills/<skill_name>/...` 目录；`global-<skill_name>` 只读，不允许通过工具修改。
+
+## 社区技能广场接口
+
+### GET `/community/skills`
+
+意义：查询社区技能列表，支持关键字过滤、分页和排序。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+查询参数：
+
+| 名称 | 类型 | 必填 | 默认值 | 说明 |
+|---|---|---|---|---|
+| `keyword` | string \| null | 否 | null | 关键字，匹配 `name` 或 `description` |
+| `limit` | int | 否 | 20 | 1-100 |
+| `offset` | int | 否 | 0 | 起始偏移 |
+| `sort` | string | 否 | `popular` | `popular` 或 `newest` |
+
+成功返回：`200 OK`
+
+返回体：`CommunitySkillListResponse`
+
+### GET `/community/skills/{skill_id}`
+
+意义：读取社区技能详情，包含完整 `SKILL.md`。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `skill_id` | string | 是 | 社区技能 ID |
+
+成功返回：`200 OK`
+
+返回体：`CommunitySkillDetail`
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 404 | `{ code: "RESOURCE_NOT_FOUND", message: "Community skill not found" }` | 技能不存在 |
+
+### POST `/community/skills`
+
+意义：将一份 `SKILL.md` 发布到社区。
+
+认证：需要 `Authorization: Bearer <access_token>`，并携带 nonce 请求头。
+
+请求体：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `body_md` | string | 是 | 完整 `SKILL.md` 内容 |
+
+成功返回：`201 Created`
+
+返回体：`CommunitySkillDetail`
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 422 | `{ code: "SKILL_PARSE_ERROR", message: ... }` | frontmatter 或字段校验失败，包含 name 非法 |
+| 413 | `{ code: "SKILL_TOO_LARGE", message: ... }` | `body_md` 超过 128KB |
+| 422 | 参数校验错误 | `body_md` 为空或请求体结构不对 |
+| 400/409 | nonce 相关错误 | 见上文 nonce 规则 |
+
+### POST `/community/skills/{skill_id}/install`
+
+意义：把社区技能安装到当前用户的私有 `skills/<name>/SKILL.md`。
+
+认证：需要 `Authorization: Bearer <access_token>`，并携带 nonce 请求头。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `skill_id` | string | 是 | 社区技能 ID |
+
+成功返回：`200 OK`
+
+返回体：`InstallResponse`
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 404 | `{ code: "RESOURCE_NOT_FOUND", message: "Community skill not found" }` | 技能不存在 |
+| 409 | `{ code: "LOCAL_SKILL_EXISTS", message: ... }` | 本地已存在同名技能目录 |
+| 400 | `{ code: "INVALID_SKILL_NAME", message: ... }` | 数据库中的 name 不安全或非法 |
+| 400 | `{ code: "FILE_ERROR", message: ... }` | 写入本地技能失败 |
+| 400/409 | nonce 相关错误 | 见上文 nonce 规则 |
+
+### DELETE `/community/skills/{skill_id}`
+
+意义：删除自己发布的社区技能。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `skill_id` | string | 是 | 社区技能 ID |
+
+成功返回：`204 No Content`
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 403 | `{ code: "FORBIDDEN", message: "Only the author can delete this skill" }` | 不是作者 |
+| 404 | `{ code: "RESOURCE_NOT_FOUND", message: "Community skill not found" }` | 技能不存在 |
 
 ## 聊天循环接口
 
@@ -712,7 +909,7 @@ SSE 数据帧格式：每帧为 `data: <JSON>`，以空行分隔。
 | 历史加载 | `send` 和 `regenerate` 从数据库加载当前会话最新消息历史 |
 | 消息保存 | 生成结束后保存本轮新产生的 Pydantic AI 消息，并更新会话 `timestamp` |
 | 技能目录 | 模型调用时加载全局、项目、用户三个 skills 目录 |
-| 工具限制 | `allowed_tools` 被传入运行上下文；当前代码没有调用 `build_tools` 构建注册表工具 |
+| 工具限制 | `allowed_tools` 被传入运行上下文，并用于过滤 `build_tools` 注入的注册表工具 |
 
 ## 文件接口
 
@@ -872,4 +1069,3 @@ SSE 数据帧格式：每帧为 `data: <JSON>`，以空行分隔。
 - 用户的 `skills` 目录（`data/{user_uuid}/skills`）
 
 因此前端的 Skill 管理只是文件 API 上的一层惯例，不需要独立的 Skill 路由。
-

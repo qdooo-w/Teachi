@@ -23,6 +23,7 @@ register_tool -> build_tools(allowed=...) -> Agent(tools=...) -> 工具函数执
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from pydantic_ai import RunContext
@@ -101,43 +102,72 @@ def build_tools(allowed: list[str] | None = None) -> list[Tool[Any]]:
 # ============================================================
 
 
-# ── Skill 文件操作工具 ───────────────────────────────────────
-# 设计：所有写操作都收敛在 backend.file.SkillFile 门面里，
-# 工具函数只负责把 ctx.deps 里的身份转成 SkillFile 实例并把异常转成结构化返回。
-# scope 必须由模型显式给出 ("user" 或 "project")，不做隐式默认，避免误写错位置。
-#
-# 读取类操作（list / load / read_resource）由 pydantic-ai-skills 自带工具承担，
-# 这里只暴露写/删能力，避免读取入口重复。
+_SKILL_TEXT_EXTENSIONS: frozenset[str] = frozenset({
+    ".md", ".txt", ".json", ".yaml", ".yml", ".csv", ".xml",
+})
 
 
-def _with_skill_fs(ctx: RunContext[Any], scope: str, fn) -> dict[str, Any]:
-    """构造 SkillFile 并执行 fn(fs)，统一把异常转为结构化返回。
+def _parse_skill_ref(skill_ref: str) -> tuple[str, str]:
+    """把 AI 看到的技能引用拆成 scope 和真实 skill_name。"""
+    from backend.skill_parser import validate_skill_name
 
-    fn: Callable[[SkillFile], Any]
-    """
+    if not isinstance(skill_ref, str) or not skill_ref:
+        raise ValueError("skill_ref must be a non-empty string")
+    if skill_ref.startswith("global-"):
+        raise ValueError("global skills are read-only")
+    if skill_ref.startswith("project-"):
+        skill_name = skill_ref.removeprefix("project-")
+        if not skill_name:
+            raise ValueError("skill_ref must include a project skill name")
+        if err := validate_skill_name(skill_name):
+            raise ValueError(f"invalid skill name: {err}")
+        return "project", skill_name
+    if skill_ref.startswith("user-"):
+        skill_name = skill_ref.removeprefix("user-")
+        if not skill_name:
+            raise ValueError("skill_ref must include a user skill name")
+        if err := validate_skill_name(skill_name):
+            raise ValueError(f"invalid skill name: {err}")
+        return "user", skill_name
+    raise ValueError("skill_ref must start with project- or user-")
+
+
+def _skill_rel_path(skill_name: str, file_path: str) -> str:
+    """生成 skills/<skill_name>/<file_path>，并阻止越界路径。"""
+    if not isinstance(file_path, str) or not file_path.strip():
+        raise ValueError("file_path must be a non-empty string")
+    if file_path.startswith("/") or file_path.startswith("\\"):
+        raise ValueError("file_path must be relative")
+    if "\x00" in file_path:
+        raise ValueError("file_path contains NUL byte")
+    parts = Path(file_path).parts
+    if any(part == ".." for part in parts):
+        raise ValueError("file_path must not contain '..'")
+    suffix = Path(file_path).suffix.lower()
+    if suffix not in _SKILL_TEXT_EXTENSIONS:
+        raise ValueError(f"unsupported file extension '{suffix}'")
+    return f"skills/{skill_name}/{file_path}"
+
+
+def _with_skill_fs(ctx: RunContext[Any], skill_ref: str, fn) -> dict[str, Any]:
+    """构造对应范围的文件门面并执行 fn(fs)，统一把异常转为结构化返回。"""
     from backend.context import ChatDeps  # 避免顶层循环依赖
     from backend.db import DatabaseFacade
     from backend.config import DATABASE_PATH
-    from backend.file import SkillFile, FileError
+    from backend.file import ProjectFile, UserFile, FileError
 
     if not isinstance(ctx.deps, ChatDeps):
         return {"status": "error", "error": "deps_missing"}
-    if scope not in ("user", "project"):
-        return {"status": "error", "error": f"invalid_scope: {scope}"}
 
     db = DatabaseFacade(DATABASE_PATH)
     try:
+        scope, _skill_name = _parse_skill_ref(skill_ref)
         if scope == "user":
-            fs = SkillFile(scope="user", user_uuid=ctx.deps.user_uuid, db_facade=db)
+            fs = UserFile(user_uuid=ctx.deps.user_uuid, db_facade=db)
         else:
-            fs = SkillFile(
-                scope="project",
-                user_uuid=ctx.deps.user_uuid,
-                db_facade=db,
-                pid=ctx.deps.pid,
-            )
+            fs = ProjectFile(pid=ctx.deps.pid, user_uuid=ctx.deps.user_uuid, db_facade=db)
         return {"status": "success", "result": fn(fs)}
-    except FileError as e:
+    except (FileError, ValueError) as e:
         return {"status": "error", "error": "file_operation_failed", "message": str(e)}
     except PermissionError as e:
         return {"status": "error", "error": "permission_denied", "message": str(e)}
@@ -148,8 +178,7 @@ def _with_skill_fs(ctx: RunContext[Any], scope: str, fn) -> dict[str, Any]:
 @register_tool
 async def write_skill_file(
     ctx: RunContext[Any],
-    scope: str,
-    skill_name: str,
+    skill_ref: str,
     file_path: str,
     content: str,
 ) -> dict[str, Any]:
@@ -159,9 +188,12 @@ async def write_skill_file(
     Do NOT use it to read existing skills — use the built-in `list_skills`,
     `load_skill`, or `read_skill_resource` tools instead.
 
-    A Skill is a folder under `<scope>/skills/<skill_name>/` containing at minimum
-    a `SKILL.md` file. The folder name MUST equal the `name` field in the SKILL.md
-    frontmatter.
+    The model should pass the skill reference it sees in context:
+    - `project-<skill_name>` for the current project's skills
+    - `user-<skill_name>` for the user's private skills
+
+    The tool strips that prefix internally and writes to the matching scope.
+    `global-*` skills are read-only and will be rejected.
 
     SKILL.md format (required for every skill):
 
@@ -192,7 +224,8 @@ async def write_skill_file(
       Body of SKILL.md should stay short; push detail into `references/`.
 
     Recommended workflow when creating a new skill:
-      1. Pick `skill_name` (kebab-case).
+      1. Pick `skill_name` (kebab-case) and call it through `project-<skill_name>`
+         or `user-<skill_name>`.
       2. Call this tool once with `file_path="SKILL.md"` and the full
          frontmatter + body.
       3. Optionally call again with `file_path="references/<topic>.md"`
@@ -203,17 +236,12 @@ async def write_skill_file(
     Constraints (will return a structured error otherwise):
       - `file_path` extension must be one of:
         .md / .txt / .json / .yaml / .yml / .csv / .xml
-      - `content` length ≤ 262144 chars (256KB).
       - `file_path` must be relative and stay inside the skill folder
         (no `..`, no leading `/`).
 
     Args:
-        scope: `"user"` for the user's private skills, `"project"` for
-            the current project's skills. Pick `"project"` when the skill
-            is specific to this project's domain; pick `"user"` when it's
-            the user's personal toolkit reusable across projects.
-        skill_name: kebab-case name, matches both the folder name and the
-            `name` field in SKILL.md frontmatter.
+        skill_ref: scoped skill name shown to the model, e.g. `project-math-helper`
+            or `user-writing-style`.
         file_path: relative path inside the skill folder, e.g. `"SKILL.md"`,
             `"references/notes.md"`, `"assets/data.json"`.
         content: full UTF-8 text content. For `SKILL.md`, MUST start with
@@ -223,16 +251,27 @@ async def write_skill_file(
         On success: `{"status": "success", "result": {"rel_path", "size", "updated_at"}}`.
         On failure: `{"status": "error", "error": <code>, "message": <detail>}`
         with `error` one of `permission_denied` / `file_operation_failed` /
-        `invalid_scope` / `deps_missing` / `internal_error`.
+        `deps_missing` / `internal_error`.
     """
-    return _with_skill_fs(ctx, scope, lambda fs: fs.write(skill_name, file_path, content))
+    def _write(fs: Any) -> Any:
+        _scope, skill_name = _parse_skill_ref(skill_ref)
+        rel_path = _skill_rel_path(skill_name, file_path)
+        fs.create_file(rel_path, content)
+        target = fs._safe_path(rel_path)
+        stat = target.stat()
+        return {
+            "rel_path": rel_path,
+            "size": stat.st_size,
+            "updated_at": stat.st_mtime,
+        }
+
+    return _with_skill_fs(ctx, skill_ref, _write)
 
 
 @register_tool
 async def delete_skill_file(
     ctx: RunContext[Any],
-    scope: str,
-    skill_name: str,
+    skill_ref: str,
     file_path: str,
 ) -> dict[str, Any]:
     """Delete a single text file inside a skill directory. Does not remove directories.
@@ -243,8 +282,7 @@ async def delete_skill_file(
     but leaves an invalid skill folder — usually you want `delete_skill`.
 
     Args:
-        scope: `"user"` or `"project"`.
-        skill_name: kebab-case skill name (the folder under `skills/`).
+        skill_ref: scoped skill name shown to the model, e.g. `project-math-helper`.
         file_path: relative path inside the skill folder. Extension must be
             in the text whitelist (.md/.txt/.json/.yaml/.yml/.csv/.xml).
 
@@ -252,19 +290,27 @@ async def delete_skill_file(
         On success: `{"status": "success", "result": "deleted: <skill>/<file>"}`.
         On failure: `{"status": "error", "error": <code>, "message": <detail>}`.
     """
-    return _with_skill_fs(ctx, scope, lambda fs: fs.delete(skill_name, file_path))
+    def _delete(fs: Any) -> Any:
+        _scope, skill_name = _parse_skill_ref(skill_ref)
+        rel_path = _skill_rel_path(skill_name, file_path)
+        fs.delete_file(rel_path)
+        return f"deleted: {skill_name}/{file_path}"
+
+    return _with_skill_fs(ctx, skill_ref, _delete)
 
 
 @register_tool
 async def delete_skill(
     ctx: RunContext[Any],
-    scope: str,
-    skill_name: str,
+    skill_ref: str,
 ) -> dict[str, Any]:
     """Recursively delete an entire skill directory. DESTRUCTIVE — confirm with the user first.
 
-    Removes the folder `<scope>/skills/<skill_name>/` and everything in it,
+    Removes the folder for the referenced skill and everything in it,
     including `SKILL.md` and all resources. There is no undo.
+
+    Pass `project-<skill_name>` for project skills or `user-<skill_name>` for
+    user skills. `global-*` skills are read-only.
 
     Only call when the user has clearly asked to delete the whole skill.
     For removing a single file inside a skill, use `delete_skill_file`.
@@ -272,12 +318,16 @@ async def delete_skill(
     no need to delete first.
 
     Args:
-        scope: `"user"` or `"project"`.
-        skill_name: kebab-case skill name to delete.
+        skill_ref: scoped skill name shown to the model, e.g. `project-math-helper`.
 
     Returns:
         On success: `{"status": "success", "result": "skill deleted: <skill>"}`.
         On failure: `{"status": "error", "error": <code>, "message": <detail>}`.
     """
-    return _with_skill_fs(ctx, scope, lambda fs: fs.delete_skill(skill_name))
+    def _delete_skill(fs: Any) -> Any:
+        _scope, skill_name = _parse_skill_ref(skill_ref)
+        rel_path = f"skills/{skill_name}"
+        fs.delete_dir(rel_path)
+        return f"skill deleted: {skill_name}"
 
+    return _with_skill_fs(ctx, skill_ref, _delete_skill)
