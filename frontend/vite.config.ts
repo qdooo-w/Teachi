@@ -32,6 +32,7 @@ export default defineConfig(({ mode }) => {
         '/messages': backendTarget,
         '/tools': backendTarget,
         '/health': backendTarget,
+        '/community': spaFallback,
       },
     },
   }

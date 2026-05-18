@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.auth import router as auth_router
 from backend.config import APP_NAME, CORS_ALLOW_ORIGINS, DATABASE_PATH, LOG_LEVEL, LOG_REQUESTS
+from backend.community import router as community_router
 from backend.data import router as data_router
 from backend.db import DatabaseFacade
 from backend.logging import configure_logging
@@ -66,3 +67,6 @@ app.include_router(data_router)
 
 # 聊天主循环路由，包含会话消息发送与 regenerate。
 app.include_router(loop_router)
+
+# 社区技能广场：上传/下载/搜索/删除。
+app.include_router(community_router)

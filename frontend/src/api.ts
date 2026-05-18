@@ -608,6 +608,85 @@ export async function deleteFile(space: FileSpace, path: string): Promise<void> 
   return request<void>(`${base}?path=${encodeURIComponent(path)}`, { method: 'DELETE' })
 }
 
+// ── 社区技能广场 ────────────────────────────────────────────────────────────────
+
+export type CommunitySort = 'popular' | 'newest'
+
+export interface CommunitySkillSummary {
+  id: string
+  owner_uuid: string
+  name: string
+  description: string
+  license: string | null
+  compatibility: string | null
+  size_bytes: number
+  downloads: number
+  created_at: number
+  updated_at: number
+}
+
+export interface CommunitySkillDetail extends CommunitySkillSummary {
+  body_md: string
+}
+
+export interface CommunitySkillListResponse {
+  skills: CommunitySkillSummary[]
+  total: number
+  limit: number
+  offset: number
+  sort: CommunitySort
+}
+
+export interface InstallResponse {
+  name: string
+  skill_id: string
+  downloads: number
+}
+
+function nonceHeaders(): Record<string, string> {
+  return {
+    'X-Nonce': crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    'X-Nonce-Timestamp': String(Date.now() / 1000),
+  }
+}
+
+export async function listCommunitySkills(params: {
+  keyword?: string
+  limit?: number
+  offset?: number
+  sort?: CommunitySort
+} = {}): Promise<CommunitySkillListResponse> {
+  const search = new URLSearchParams()
+  if (params.keyword) search.set('keyword', params.keyword)
+  if (params.limit !== undefined) search.set('limit', String(params.limit))
+  if (params.offset !== undefined) search.set('offset', String(params.offset))
+  search.set('sort', params.sort ?? 'popular')
+  return request<CommunitySkillListResponse>(`/community/skills?${search.toString()}`)
+}
+
+export async function getCommunitySkill(id: string): Promise<CommunitySkillDetail> {
+  return request<CommunitySkillDetail>(`/community/skills/${encodeURIComponent(id)}`)
+}
+
+export async function publishCommunitySkill(bodyMd: string): Promise<CommunitySkillDetail> {
+  return request<CommunitySkillDetail>('/community/skills', {
+    method: 'POST',
+    headers: nonceHeaders(),
+    body: JSON.stringify({ body_md: bodyMd }),
+  })
+}
+
+export async function installCommunitySkill(id: string): Promise<InstallResponse> {
+  return request<InstallResponse>(`/community/skills/${encodeURIComponent(id)}/install`, {
+    method: 'POST',
+    headers: nonceHeaders(),
+  })
+}
+
+export async function deleteCommunitySkill(id: string): Promise<void> {
+  await request<void>(`/community/skills/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
 // ── 错误处理 ────────────────────────────────────────────────────────────────────
 
 export function getErrorMessage(error: unknown, fallback = '请求失败，请稍后重试。'): string {
