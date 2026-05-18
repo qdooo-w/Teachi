@@ -233,6 +233,10 @@ export async function logout(): Promise<void> {
   }
 }
 
+export async function getCurrentUser(): Promise<UserOut> {
+  return request<UserOut>('/auth/me')
+}
+
 export async function listProjects(userId: string): Promise<ProjectItem[]> {
   const response = await request<ProjectListResponse>(`/users/${encodeURIComponent(userId)}/projects`)
   return response.projects
