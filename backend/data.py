@@ -21,7 +21,17 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
 from backend.auth import get_current_user, verify_nonce
-from backend.config import APP_NAME, BASE_DIR, DATABASE_PATH
+from backend.config import (
+    APP_NAME,
+    BASE_DIR,
+    DATABASE_PATH,
+    SKILL_FILE_MAX_CHARS,
+    SKILL_RESOURCE_DIRS,
+    SKILL_TEXT_EXTENSIONS,
+    SKILL_ZIP_ALLOWED_CONTENT_TYPES,
+    SKILL_ZIP_MAX_BYTES,
+    SKILL_ZIP_RESOURCE_DIR_ALIASES,
+)
 from backend.db import DatabaseFacade
 from backend.file import FileBase, ProjectFile, UserFile, FileError, _TEXT_FILE_EXTENSIONS, validate_skill_storage_path
 from backend.skill_parser import SkillFields, SkillParseError, parse_skill_file
@@ -558,7 +568,7 @@ class WriteFileRequest(BaseModel):
     """写文件请求"""
 
     path: str
-    content: str = Field(..., max_length=256 * 1024)
+    content: str = Field(..., max_length=SKILL_FILE_MAX_CHARS)
 
 
 class CreateDirectoryRequest(BaseModel):
@@ -573,6 +583,7 @@ class CommunitySkillDetail(BaseModel):
     id: str
     owner_uuid: str
     name: str
+    display_name: str | None = None
     description: str
     license: str | None = None
     compatibility: str | None = None
@@ -584,27 +595,12 @@ class CommunitySkillDetail(BaseModel):
 
 # ── 辅助函数 ────────────────────────────────────────────────────────────────────
 
-COMMUNITY_SKILL_ZIP_MAX_BYTES = 10 * 1024 * 1024
-COMMUNITY_SKILL_ZIP_ALLOWED_CONTENT_TYPES = frozenset({
-    "application/zip",
-    "application/x-zip-compressed",
-    "application/octet-stream",
-})
-COMMUNITY_SKILL_ZIP_TEXT_EXTENSIONS = frozenset({
-    ".md", ".txt", ".json", ".yaml", ".yml",
-})
-COMMUNITY_SKILL_ZIP_RESOURCE_DIR_ALIASES = {
-    "reference": "references",
-    "references": "references",
-    "assets": "assets",
-}
-
-
 def _community_skill_detail(record: dict[str, Any]) -> CommunitySkillDetail:
     return CommunitySkillDetail(
         id=str(record["id"]),
         owner_uuid=str(record["owner_uuid"]),
         name=str(record["name"]),
+        display_name=record.get("display_name"),
         description=str(record["description"]),
         license=record.get("license"),
         compatibility=record.get("compatibility"),
@@ -644,6 +640,11 @@ def _zip_validation_error(message: str, status_code: int = status.HTTP_422_UNPRO
     )
 
 
+def _community_zip_size_label() -> str:
+    mb = SKILL_ZIP_MAX_BYTES / (1024 * 1024)
+    return f"{mb:g} MB"
+
+
 def _zip_entry_parts(raw_name: str) -> tuple[str, ...]:
     if not raw_name or "\x00" in raw_name:
         _zip_validation_error("Zip entry path is empty or contains NUL byte.")
@@ -666,16 +667,16 @@ def _validate_skill_zip_relpath(parts: tuple[str, ...]) -> tuple[str, ...]:
         return parts
 
     if len(parts) == 1:
-        if Path(parts[0]).suffix.lower() not in COMMUNITY_SKILL_ZIP_TEXT_EXTENSIONS:
+        if Path(parts[0]).suffix.lower() not in SKILL_TEXT_EXTENSIONS:
             _zip_validation_error("Skill zip root files must be md, txt, json, yaml, or yml text files.")
         return parts
 
     if len(parts) == 2:
         folder, filename = parts
-        normalized_folder = COMMUNITY_SKILL_ZIP_RESOURCE_DIR_ALIASES.get(folder)
+        normalized_folder = SKILL_ZIP_RESOURCE_DIR_ALIASES.get(folder)
         if normalized_folder is None:
             _zip_validation_error("Skill zip folders can only be reference(s)/ or assets/.")
-        if Path(filename).suffix.lower() not in COMMUNITY_SKILL_ZIP_TEXT_EXTENSIONS:
+        if Path(filename).suffix.lower() not in SKILL_TEXT_EXTENSIONS:
             _zip_validation_error("Skill zip resource files must be md, txt, json, yaml, or yml text files.")
         return (normalized_folder, filename)
 
@@ -702,9 +703,9 @@ def _validate_community_skill_zip(
             dir_entries.append((info, parts))
             continue
         total_uncompressed += int(info.file_size)
-        if total_uncompressed > COMMUNITY_SKILL_ZIP_MAX_BYTES:
+        if total_uncompressed > SKILL_ZIP_MAX_BYTES:
             _zip_validation_error(
-                "Uncompressed zip content must not exceed 40 MB.",
+                f"Uncompressed zip content must not exceed {_community_zip_size_label()}.",
                 status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             )
         file_entries.append((info, parts))
@@ -727,7 +728,7 @@ def _validate_community_skill_zip(
         rel_parts = parts[len(strip_root):] if strip_root else parts
         if not rel_parts:
             continue
-        if len(rel_parts) != 1 or rel_parts[0] not in COMMUNITY_SKILL_ZIP_RESOURCE_DIR_ALIASES:
+        if len(rel_parts) != 1 or rel_parts[0] not in SKILL_ZIP_RESOURCE_DIR_ALIASES:
             _zip_validation_error("Skill zip directories can only be reference(s)/ or assets/.")
 
     for info, parts in file_entries:
@@ -785,8 +786,11 @@ async def _read_limited_zip_body(request: Request) -> bytes:
     content_length = request.headers.get("content-length")
     if content_length is not None:
         try:
-            if int(content_length) > COMMUNITY_SKILL_ZIP_MAX_BYTES:
-                _zip_validation_error("Zip file must not exceed 40 MB.", status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
+            if int(content_length) > SKILL_ZIP_MAX_BYTES:
+                _zip_validation_error(
+                    f"Zip file must not exceed {_community_zip_size_label()}.",
+                    status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                )
         except ValueError as e:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -797,8 +801,11 @@ async def _read_limited_zip_body(request: Request) -> bytes:
     received = 0
     async for chunk in request.stream():
         received += len(chunk)
-        if received > COMMUNITY_SKILL_ZIP_MAX_BYTES:
-            _zip_validation_error("Zip file must not exceed 40 MB.", status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
+        if received > SKILL_ZIP_MAX_BYTES:
+            _zip_validation_error(
+                f"Zip file must not exceed {_community_zip_size_label()}.",
+                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            )
         chunks.append(chunk)
 
     body = b"".join(chunks)
@@ -857,7 +864,7 @@ def _validate_file_directory_path(path: str) -> None:
             detail={"code": "FILE_ERROR", "message": str(e)},
         ) from e
     parts = Path(path).parts
-    if len(parts) != 3 or parts[0] != "skills" or parts[2] not in {"references", "assets"}:
+    if len(parts) != 3 or parts[0] != "skills" or parts[2] not in SKILL_RESOURCE_DIRS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
@@ -886,7 +893,7 @@ async def upload_community_skill_zip(
     - zip 根目录只有一个顶层文件夹，文件夹内包含 SKILL.md
     """
     content_type = (request.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
-    if content_type and content_type not in COMMUNITY_SKILL_ZIP_ALLOWED_CONTENT_TYPES:
+    if content_type and content_type not in SKILL_ZIP_ALLOWED_CONTENT_TYPES:
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             detail={"code": "UNSUPPORTED_FILE_TYPE", "message": "Only zip uploads are supported"},
@@ -910,6 +917,7 @@ async def upload_community_skill_zip(
             skill_id=skill_id,
             owner_uuid=owner_uuid,
             name=fields.name,
+            display_name=fields.display_name,
             description=fields.description,
             archive_path=archive_rel_path,
             size_bytes=_directory_size(archive_dir),

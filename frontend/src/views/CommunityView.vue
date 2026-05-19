@@ -48,6 +48,10 @@ const totalPages = computed(() => Math.max(1, Math.ceil(total.value / limit)))
 const currentPage = computed(() => Math.floor(offset.value / limit) + 1)
 const isAuthor = computed(() => selected.value?.owner_uuid === currentUserId.value)
 
+function skillTitle(skill: { name: string; display_name?: string | null }): string {
+  return skill.display_name || skill.name
+}
+
 async function load(): Promise<void> {
   loading.value = true
   errorMsg.value = ''
@@ -121,7 +125,7 @@ async function doInstallProject(): Promise<void> {
 
 async function doDelete(): Promise<void> {
   if (!selected.value) return
-  if (!confirm(`确定要删除社区中的 "${selected.value.name}" 吗？此操作不可撤销。`)) return
+  if (!confirm(`确定要删除社区中的 "${skillTitle(selected.value)}" 吗？此操作不可撤销。`)) return
   deleting.value = true
   try {
     await deleteCommunitySkill(selected.value.id)
@@ -162,7 +166,7 @@ async function handleZipUpload(event: Event): Promise<void> {
   uploading.value = true
   try {
     const published = await uploadCommunitySkillZip(file)
-    uploadMsg.value = `已上传并发布：${published.name}`
+    uploadMsg.value = `已上传并发布：${skillTitle(published)}`
     uploadMsgKind.value = 'success'
     offset.value = 0
     await load()
@@ -320,7 +324,7 @@ onMounted(() => {
           @click="openDetail(s.id)"
         >
           <div class="flex items-start justify-between gap-2">
-            <span class="truncate text-sm font-semibold text-[#1f2937]">{{ s.name }}</span>
+            <span class="truncate text-sm font-semibold text-[#1f2937]">{{ skillTitle(s) }}</span>
             <span class="flex flex-shrink-0 items-center gap-1 rounded-full bg-[#f3f4f6] px-2 py-0.5 text-[10px] tabular-nums text-[#6b7280]">
               <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v14m-7-7l7 7 7-7" />
@@ -365,7 +369,7 @@ onMounted(() => {
       <div class="flex h-[640px] w-[760px] max-w-[95vw] flex-col rounded-xl bg-white shadow-xl">
         <div class="flex h-14 flex-shrink-0 items-center justify-between border-b border-[#e5e7eb] px-5">
           <div class="flex items-center gap-3">
-            <span class="font-semibold text-[#1f2937]">{{ selected?.name ?? '加载中...' }}</span>
+            <span class="font-semibold text-[#1f2937]">{{ selected ? skillTitle(selected) : '加载中...' }}</span>
             <span
               v-if="selected"
               class="flex items-center gap-1 rounded-full bg-[#f3f4f6] px-2 py-0.5 text-[10px] tabular-nums text-[#6b7280]"
@@ -390,6 +394,7 @@ onMounted(() => {
         <template v-else>
           <div class="min-h-0 flex-1 overflow-y-auto px-5 py-4">
             <div class="mb-4 grid grid-cols-2 gap-4 text-xs text-[#6b7280]">
+              <div><span class="text-[#9ca3af]">标识：</span>{{ selected.name }}</div>
               <div><span class="text-[#9ca3af]">大小：</span>{{ formatBytes(selected.size_bytes) }}</div>
               <div><span class="text-[#9ca3af]">发布于：</span>{{ formatDate(selected.created_at) }}</div>
               <div v-if="selected.license"><span class="text-[#9ca3af]">license：</span>{{ selected.license }}</div>

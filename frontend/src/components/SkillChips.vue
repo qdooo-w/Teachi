@@ -17,7 +17,7 @@ const emit = defineEmits<{
       :key="skill.name"
       class="flex items-center gap-1 rounded-full bg-[#e6f4ee] px-2.5 py-0.5 text-xs font-medium text-[#1f6f5b]"
     >
-      {{ skill.name }}
+      {{ skill.display_name || skill.name }}
       <button
         class="flex h-3.5 w-3.5 items-center justify-center rounded-full hover:bg-[#1f6f5b]/20"
         type="button"

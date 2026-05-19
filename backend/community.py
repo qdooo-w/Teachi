@@ -22,7 +22,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from backend.auth import get_current_user, verify_nonce
-from backend.config import BASE_DIR, DATABASE_PATH
+from backend.config import (
+    BASE_DIR,
+    DATABASE_PATH,
+    PAGE_DEFAULT_LIMIT,
+    PAGE_MAX_LIMIT,
+    SORT_DEFAULT,
+)
 from backend.db import DatabaseFacade
 from backend.file import FileBase, FileError, ProjectFile, UserFile
 from backend.skill_parser import (
@@ -44,6 +50,7 @@ class CommunitySkillSummary(BaseModel):
     id: str
     owner_uuid: str
     name: str
+    display_name: str | None = None
     description: str
     license: str | None = None
     compatibility: str | None = None
@@ -90,6 +97,7 @@ def _to_summary(record: dict) -> CommunitySkillSummary:
         id=record["id"],
         owner_uuid=record["owner_uuid"],
         name=record["name"],
+        display_name=record.get("display_name"),
         description=record["description"],
         license=record.get("license"),
         compatibility=record.get("compatibility"),
@@ -169,9 +177,9 @@ def _install_target_fs(
 @router.get("/skills", response_model=CommunitySkillListResponse)
 def list_community_skills(
     keyword: str | None = Query(None, max_length=200),
-    limit: int = Query(20, ge=1, le=100),
+    limit: int = Query(PAGE_DEFAULT_LIMIT, ge=1, le=PAGE_MAX_LIMIT),
     offset: int = Query(0, ge=0),
-    sort: Literal["popular", "newest"] = Query("popular"),
+    sort: Literal["popular", "newest"] = Query(SORT_DEFAULT),
     _user: dict[str, Any] = Depends(get_current_user),
 ) -> CommunitySkillListResponse:
     """社区列表。默认按 downloads 降序（并列时 created_at 兜底）。"""
@@ -283,6 +291,7 @@ def publish_community_skill(
             skill_id=skill_id,
             owner_uuid=owner_uuid,
             name=fields.name,
+            display_name=fields.display_name,
             description=fields.description,
             archive_path=archive_rel_path,
             size_bytes=_directory_size(archive_dir),
