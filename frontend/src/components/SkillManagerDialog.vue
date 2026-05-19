@@ -25,6 +25,11 @@ import {
   writeSkillFile,
 } from '../skills'
 import { getErrorMessage, publishCommunitySkill } from '../api'
+import {
+  SKILL_COMPATIBILITY_MAX,
+  SKILL_DESCRIPTION_MAX,
+  SKILL_DISPLAY_NAME_MAX,
+} from '../config'
 
 const props = defineProps<{
   space: FileSpace
@@ -67,9 +72,9 @@ const rawContent = ref('')
 const parseWarning = ref('')
 const plainContent = ref('')
 
-const DESCRIPTION_MAX = 1024
-const DISPLAY_NAME_MAX = 80
-const COMPATIBILITY_MAX = 500
+const DESCRIPTION_MAX = SKILL_DESCRIPTION_MAX
+const DISPLAY_NAME_MAX = SKILL_DISPLAY_NAME_MAX
+const COMPATIBILITY_MAX = SKILL_COMPATIBILITY_MAX
 
 const nameError = computed(() => {
   if (!isNew.value) return null

@@ -12,8 +12,7 @@ import {
   getErrorMessage,
   type UserOut,
 } from '../api'
-
-const LAST_EMAIL_KEY = 'teachi.last_email'
+import { LAST_EMAIL_KEY } from '../config'
 
 const token = ref<string | null>(getStoredToken())
 const currentUser = ref<UserOut | null>(null)

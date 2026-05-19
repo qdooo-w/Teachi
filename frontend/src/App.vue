@@ -19,6 +19,7 @@ import { useAuth } from './composables/useAuth'
 import { useProjects } from './composables/useProjects'
 import { useLayout } from './composables/useLayout'
 import { useProjectSkills } from './composables/useProjectSkills'
+import { PREVIEW_PROJECT_LIMIT } from './config'
 
 // ── 认证（状态 / 行为均来自 composable，模板继续使用同名 ref） ───────────────
 const {
@@ -45,7 +46,7 @@ const route = useRoute()
 const { projects, loadProjects, resetProjects, upsertProject, removeProject } = useProjects()
 const { sidebarOpen, isMobile, handleResize, closeSidebarOnMobile } = useLayout()
 
-const previewProjects = computed(() => projects.value.slice(0, 10))
+const previewProjects = computed(() => projects.value.slice(0, PREVIEW_PROJECT_LIMIT))
 
 const subjectProject = computed(() => {
   const pid = route.params.pid as string | undefined

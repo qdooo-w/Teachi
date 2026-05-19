@@ -1,5 +1,22 @@
 import yaml from 'yaml'
 import { type FileEntry, type FileSpace, listFiles, readFile, writeFile, deleteFile, createDirectory } from './api'
+import {
+  PROJECT_DESC_SKILL,
+  SKILL_NAME_MAX,
+  SKILL_NAME_PATTERN,
+  SKILL_RESERVED,
+  SKILL_RESOURCE_DIRS,
+  SKILL_TEXT_EXTENSIONS,
+} from './config'
+
+export {
+  PROJECT_DESC_SKILL,
+  SKILL_NAME_MAX,
+  SKILL_NAME_PATTERN,
+  SKILL_RESERVED,
+  SKILL_RESOURCE_DIRS,
+  SKILL_TEXT_EXTENSIONS,
+}
 
 export type { FileSpace }
 
@@ -10,12 +27,6 @@ export interface SkillMeta {
   size: number
   updated_at: number
 }
-
-export const SKILL_NAME_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/
-export const SKILL_NAME_MAX = 64
-export const SKILL_RESERVED = new Set(['anthropic', 'claude'])
-export const SKILL_RESOURCE_DIRS = ['references', 'assets'] as const
-export const SKILL_TEXT_EXTENSIONS = ['.md', '.txt', '.json', '.yaml', '.yml'] as const
 
 export type SkillResourceDir = typeof SKILL_RESOURCE_DIRS[number]
 export type SkillEditorKind = 'skill' | 'markdown' | 'json' | 'yaml' | 'text'
@@ -351,8 +362,6 @@ export async function createSkillDirectory(space: FileSpace, name: string, dir: 
 }
 
 // ── 项目简介 skill ────────────────────────────────────────────────────────────
-
-export const PROJECT_DESC_SKILL = 'project-description'
 
 /**
  * 生成项目简介 skill 文件内容。

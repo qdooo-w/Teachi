@@ -17,6 +17,7 @@ frontend/
    ├─ vite-env.d.ts        Vite 环境类型声明
    ├─ App.vue              应用外壳：登录条件渲染 + 侧边栏 + header + <RouterView>
    ├─ api.ts               后端 HTTP 客户端：鉴权、资源 CRUD、SSE、文件 API
+  ├─ config/              前端固定参数（API/技能/聊天/社区/UI 时间等）集中配置
    ├─ skills.ts            Skill 领域逻辑：frontmatter 校验、结构化读写、SKILL.md 模板
    ├─ router/
    │  └─ index.ts          路由表 + afterEach 设 document.title（静态 title）
@@ -50,11 +51,12 @@ frontend/
 ```
 main.ts
  └─ App.vue (外壳)
-     ├─ composables/useAuth         ── token / bootstrapping / preparing / onTokenReady
+    ├─ composables/useAuth         ── token / bootstrapping / preparing / onTokenReady
      ├─ composables/useProjects     ── projects 列表单例（跨视图共享）
      ├─ composables/useLayout       ── sidebarOpen / isMobile
      ├─ router/index.ts             ── 路由表 + document.title 默认值
      ├─ api.ts                      所有后端调用的统一出口
+    ├─ config/                     固定参数集中出口（api/skills/chat/community 等）
      ├─ skills.ts                   ── 依赖 api.ts 的通用文件 API
      └─ <RouterView>
          ├─ views/OverviewView.vue  ── useProjects / useLayout + Row/Rename/Confirm
@@ -283,9 +285,10 @@ npm run preview
 ## 关键约定
 
 - 所有后端调用必须经 `api.ts`，不要在组件里裸写 `fetch`
+- 固定参数统一放在 `src/config/`，业务代码不要硬编码 magic number / magic string
 - 跨视图共享状态走 `composables/*` 单例（模块级 `ref`），新增共享状态优先落在 composable 里；视图独占状态（messages / draft / streaming 等）留在视图组件 `<script setup>` 内，组件卸载即释放
 - 新增路由：在 `router/index.ts` 的 `routes` 里加记录；静态 title 通过 `meta.title` 提供，动态 title 在视图内 `watch` 直接写 `document.title`
 - 登录态保持条件渲染在 `App.vue` 顶层，不用路由守卫劫持；未登录访问受限路由时 URL 不变、登录后原地激活
-- 技能名的正则和长度限制在 `skills.ts` 顶部，后端改约束时两边同步
+- 技能名的正则和长度限制在 `config/skills.ts`（`skills.ts` 会继续导出），后端改约束时两边同步
 - 新增 SSE 事件类型：在 `api.ts#streamLoop` 的 `parseSseFrame` 分支里处理，并把类型加入 `StreamEvent`
 - Markdown 里新的自定义 fence 语言：改 `markdown/renderer.ts#md.renderer.rules.fence`，并在 `DOMPurify` 的 `ADD_TAGS` / `ADD_ATTR` 白名单里补齐

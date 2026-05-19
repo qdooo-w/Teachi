@@ -13,6 +13,7 @@ import {
   getCurrentUserId,
   getErrorMessage,
 } from '../api'
+import { COMMUNITY_MAX_UPLOAD_BYTES, COMMUNITY_PAGE_LIMIT } from '../config'
 import { useProjects } from '../composables/useProjects'
 
 const router = useRouter()
@@ -27,7 +28,7 @@ const errorMsg = ref('')
 
 const keyword = ref('')
 const sort = ref<CommunitySort>('popular')
-const limit = 20
+const limit = COMMUNITY_PAGE_LIMIT
 const offset = ref(0)
 
 const selected = ref<CommunitySkillDetail | null>(null)
@@ -42,7 +43,7 @@ const uploading = ref(false)
 const uploadMsg = ref('')
 const uploadMsgKind = ref<'success' | 'error'>('success')
 
-const MAX_UPLOAD_ZIP_BYTES = 40 * 1024 * 1024
+const MAX_UPLOAD_ZIP_BYTES = COMMUNITY_MAX_UPLOAD_BYTES
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / limit)))
 const currentPage = computed(() => Math.floor(offset.value / limit) + 1)

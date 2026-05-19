@@ -16,6 +16,7 @@ import {
 import { useProjects } from '../composables/useProjects'
 import { useLayout } from '../composables/useLayout'
 import { readSkill, PROJECT_DESC_SKILL, parseSkillFile } from '../skills'
+import { SUBJECT_DESC_COLLAPSE_LIMIT } from '../config'
 
 const route = useRoute()
 const router = useRouter()
@@ -51,7 +52,7 @@ function closeCreatePanel(): void {
 }
 
 // ── 项目简介 ──────────────────────────────────────────────────────────────────
-const DESC_COLLAPSE_LIMIT = 150
+const DESC_COLLAPSE_LIMIT = SUBJECT_DESC_COLLAPSE_LIMIT
 const projectDesc = ref('')
 const descExpanded = ref(false)
 
