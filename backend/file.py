@@ -2,7 +2,7 @@ import logging
 import re
 import shutil
 from pathlib import Path
-from typing import Union, List, Dict, Optional
+from typing import Union, List, Dict
 
 from backend.config import BASE_DIR
 
@@ -152,11 +152,10 @@ _SKILL_NAME_RESERVED: frozenset[str] = frozenset({"anthropic", "claude"})
 
 # 文本文件扩展名白名单（独立于 _TEXT_FILE_EXTENSIONS，避免被无关接口扩散影响）
 _SKILL_TEXT_EXTENSIONS: frozenset[str] = frozenset({
-    ".md", ".txt", ".json", ".yaml", ".yml", ".csv", ".xml",
+    ".md", ".txt", ".json", ".yaml", ".yml",
 })
 
-# 单文件内容上限（字符数，与 HTTP 文件接口对齐）
-_SKILL_FILE_MAX_CHARS = 256 * 1024
+_SKILL_RESOURCE_DIRS: frozenset[str] = frozenset({"references", "assets"})
 
 
 def _validate_skill_name(skill_name: str) -> None:
@@ -195,129 +194,55 @@ def _validate_skill_relpath(rel_path: str) -> None:
         )
 
 
-class SkillFile(FileBase):
-    """skill 文件门面：把可写区域锁死到 <scope_root>/skills/。
+def validate_skill_storage_path(path: str, *, allow_skill_dir: bool = False) -> None:
+    """Validate paths under ``skills/`` against the Skill folder structure.
 
-    scope:
-      - "user":    base = data/{user_uuid}/skills
-      - "project": base = data/{user_uuid}/{pid}/skills
+    Non-skill paths are intentionally ignored so the generic file API can keep
+    serving other callers. Skill paths are constrained to:
 
-    全局 skill (SKILL_STORAGE_DIR) 不通过本门面暴露给 AI，仅服务端可写。
-
-    单次操作面：
-      1) 路径必须形如 "<skill_name>/<file_rel>"，不能直接落在 skills/ 根下；
-      2) skill_name 受 _validate_skill_name 限制；
-      3) file_rel 扩展名必须在 _SKILL_TEXT_EXTENSIONS 白名单内；
-      4) 写入内容长度受 _SKILL_FILE_MAX_CHARS 限制；
-      5) FileBase._safe_path 兜底防止 .. 穿越。
+    - skills/<name>/SKILL.md
+    - skills/<name>/<text-file>
+    - skills/<name>/references/<text-file>
+    - skills/<name>/assets/<text-file>
+    - optional directory paths for references/assets and whole skill delete
     """
+    if not isinstance(path, str) or not path.strip():
+        raise FileError("path must be a non-empty string")
+    if "\x00" in path:
+        raise FileError("path contains NUL byte")
+    if path.startswith("/") or path.startswith("\\"):
+        raise FileError("path must be relative, not absolute")
 
-    def __init__(self, scope: str, user_uuid: str, db_facade, pid: Optional[str] = None):
-        if scope == "user":
-            user = db_facade.users.get_by_uuid(user_uuid)
-            if not user:
-                raise PermissionError(f"Access Denied: User {user_uuid} not found")
-            base = BASE_DIR / "data" / user_uuid / "skills"
-        elif scope == "project":
-            if not pid:
-                raise PermissionError("project scope requires pid")
-            project = db_facade.projects.get_for_user(pid=pid, user_uuid=user_uuid)
-            if not project:
-                raise PermissionError(
-                    f"Access Denied: Project {pid} does not belong to user {user_uuid}"
-                )
-            base = BASE_DIR / "data" / user_uuid / pid / "skills"
-        else:
-            raise PermissionError(f"unknown skill scope: {scope}")
-        super().__init__(base)
-        self.scope = scope
+    parts = Path(path).parts
+    if not parts or parts[0] != "skills":
+        return
+    if any(part in {"", ".", ".."} for part in parts):
+        raise FileError("skill path must not contain empty, '.', or '..' segments")
+    if len(parts) < 2:
+        raise FileError("skill path must include a skill name")
 
-    # ── 内部工具 ──
+    skill_name = parts[1]
+    _validate_skill_name(skill_name)
 
-    def _resolve(self, skill_name: str, file_rel: str) -> Path:
-        """统一校验后返回绝对路径。"""
-        _validate_skill_name(skill_name)
-        _validate_skill_relpath(file_rel)
-        # 拼成 <skill>/<file>，再走 _safe_path 兜底
-        return self._safe_path(f"{skill_name}/{file_rel}")
+    rel_parts = parts[2:]
+    if not rel_parts:
+        if allow_skill_dir:
+            return
+        raise FileError("skill root directory cannot be written as a file")
 
-    # ── 对外操作 ──
+    if len(rel_parts) == 1:
+        item = rel_parts[0]
+        if item in _SKILL_RESOURCE_DIRS:
+            return
+        _validate_skill_relpath(item)
+        return
 
-    def write(self, skill_name: str, file_rel: str, content: str) -> Dict[str, Union[str, int, float]]:
-        """写入或覆盖 skill 内文本文件，父目录不存在时自动创建。"""
-        if not isinstance(content, str):
-            raise FileError("content must be a string")
-        if len(content) > _SKILL_FILE_MAX_CHARS:
-            raise FileError(
-                f"content too long: {len(content)} > {_SKILL_FILE_MAX_CHARS} chars"
-            )
-        target = self._resolve(skill_name, file_rel)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
-        stat = target.stat()
-        return {
-            "rel_path": str(target.relative_to(self.base_path)),
-            "size": stat.st_size,
-            "updated_at": stat.st_mtime,
-        }
+    if len(rel_parts) == 2:
+        folder, filename = rel_parts
+        if folder not in _SKILL_RESOURCE_DIRS:
+            raise FileError("skill folders can only be 'references' or 'assets'")
+        _validate_skill_relpath(filename)
+        return
 
-    def delete(self, skill_name: str, file_rel: str) -> str:
-        """删除 skill 内某个文件。仅删除文件，不递归删目录。"""
-        target = self._resolve(skill_name, file_rel)
-        if not target.is_file():
-            raise FileError(f"file not found: {skill_name}/{file_rel}")
-        target.unlink()
-        return f"deleted: {skill_name}/{file_rel}"
+    raise FileError("nested directories inside skill folders are not supported")
 
-    def delete_skill(self, skill_name: str) -> str:
-        """递归删除整个 skill 目录。危险操作，AI 工具层会单独把控。"""
-        _validate_skill_name(skill_name)
-        target = self._safe_path(skill_name)
-        if not target.is_dir():
-            raise FileError(f"skill not found: {skill_name}")
-        shutil.rmtree(target)
-        return f"skill deleted: {skill_name}"
-
-
-
-def File_Handler(
-    method: str,
-    args: dict,
-    pid: Optional[str] = None,
-    user_uuid: Optional[str] = None
-) -> dict:
-    """
-    通用文件系统工具处理器，供 tool.py 引用。
-    根据参数决定是 ProjectFile 还是 UserFile。
-    """
-    try:
-        from backend.db import DatabaseFacade
-        from backend.config import DATABASE_PATH
-        db = DatabaseFacade(DATABASE_PATH)
-
-        if pid:
-            if not user_uuid:
-                return {"error": "user_uuid_required_for_project_access"}
-            fs = ProjectFile(pid=pid, user_uuid=user_uuid, db_facade=db)
-        elif user_uuid:
-            fs = UserFile(user_uuid=user_uuid, db_facade=db)
-        else:
-            return {"error": "identity_context_missing"}
-
-        # 调用方法映射
-        if method not in _ALLOWED_FS_METHODS:
-            return {"error": f"invalid_method: {method}"}
-        func = getattr(fs, method)
-
-        result = func(**args)
-        return {"status": "success", "result": result}
-
-    except PermissionError as e:
-        logger.warning("file_permission_denied method=%s pid=%s user=%s", method, pid, user_uuid)
-        return {"status": "error", "error": "permission_denied", "message": str(e)}
-    except FileError as e:
-        logger.warning("file_operation_failed method=%s pid=%s user=%s", method, pid, user_uuid)
-        return {"status": "error", "error": "file_operation_failed", "message": str(e)}
-    except Exception as e:
-        logger.exception("file_internal_error method=%s pid=%s user=%s", method, pid, user_uuid)
-        return {"status": "error", "error": "internal_error", "message": str(e)}

@@ -2,7 +2,7 @@
 SKILL.md frontmatter 解析与校验。
 
 后端独立实现一份解析逻辑，不信任前端传来的 name/description，
-始终以 body_md 中实际解析出来的字段为准（与 frontend/src/skills.ts 等价）。
+始终以 SKILL.md 中实际解析出来的字段为准（与 frontend/src/skills.ts 等价）。
 """
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ import yaml
 SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 SKILL_NAME_MAX = 64
 SKILL_RESERVED = ("anthropic", "claude")
-SKILL_MAX_BYTES = 128 * 1024
 DESCRIPTION_MAX = 1024
 COMPATIBILITY_MAX = 500
 

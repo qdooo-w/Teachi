@@ -1,6 +1,6 @@
 # Teachi Frontend
 
-基于 Vue 3 + Vite + Tailwind 的 AI 聊天前端，对接 FastAPI 后端，支持账号鉴权、科目与会话管理、SSE 流式对话、Markdown/LaTeX/Mermaid 渲染，以及用户级 / 项目级技能（Skill）的管理和按需挂载。
+基于 Vue 3 + Vite + Tailwind 的 AI 聊天前端，对接 FastAPI 后端，支持账号鉴权、科目与会话管理、SSE 流式对话、Markdown/LaTeX/Mermaid 渲染、用户级 / 项目级技能（Skill）的管理和按需挂载，以及社区技能的 ZIP 上传发布、安装与删除。
 
 ## 目录结构
 
@@ -8,7 +8,7 @@
 frontend/
 ├─ index.html              Vite 入口 HTML，仅挂载 <div id="app">
 ├─ package.json            依赖与脚本（vite / vue / vue-router / tailwind / katex / mermaid / markdown-it 等）
-├─ vite.config.ts          开发代理：把 /auth /loop /users /projects /sessions /messages /tools /health 转发到后端
+├─ vite.config.ts          开发代理：把 /auth /loop /users /projects /sessions /messages /tools /community /health 转发到后端
 ├─ tsconfig.json
 ├─ postcss.config.js       Tailwind v4 PostCSS 插件配置
 └─ src/
@@ -28,7 +28,8 @@ frontend/
    ├─ views/
    │  ├─ OverviewView.vue  `/`：科目卡片总览 + 新建科目
    │  ├─ SubjectView.vue   `/projects/:pid`：该科目会话列表 + 首条消息创建会话
-   │  └─ ChatView.vue      `/projects/:pid/sessions/:sid`：消息流 + composer + SSE 主循环 + skill picker
+   │  ├─ ChatView.vue      `/projects/:pid/sessions/:sid`：消息流 + composer + SSE 主循环 + skill picker
+   │  └─ CommunityView.vue `/community`：社区技能列表、ZIP 上传、详情、安装与作者删除
    ├─ components/
    │  ├─ MessageContent.vue       Markdown 消息渲染与代码块复制、Mermaid 延迟渲染
    │  ├─ RenameInline.vue         行内重命名输入（回车提交 / Esc 取消）
@@ -58,12 +59,13 @@ main.ts
      └─ <RouterView>
          ├─ views/OverviewView.vue  ── useProjects / useLayout + Row/Rename/Confirm
          ├─ views/SubjectView.vue   ── useProjects / useLayout + listSessions/createSession/...
-         └─ views/ChatView.vue      ── useAuth(preparing) + useProjects + listSessions
+         ├─ views/ChatView.vue      ── useAuth(preparing) + useProjects + listSessions
                                         + sendChatMessage/stopChatGeneration + SkillPicker/Chips
+         └─ views/CommunityView.vue ── 社区 skill 列表 / ZIP 上传 / 详情 / 安装 / 作者删除
 ```
 
 - `api.ts` 是所有后端通信的唯一出口，封装 `fetch` + 401 自动刷新、JWT 本地存储、SSE 帧解析、通用文件 API
-- `skills.ts` 把 Skill 视为「`skills/<name>/SKILL.md` 文件」，业务层全部走 `api.ts` 的通用文件 API
+- `skills.ts` 把 Skill 视为「`skills/<name>/` 文件夹，入口为 `SKILL.md`」，业务层全部走 `api.ts` 的通用文件 API
 - `markdown/` 三个文件是纯渲染层，不依赖后端
 - 不引入 Pinia：跨视图共享状态走 composable 单例（模块级 `ref`），视图独占状态（messages/draft/streaming 等）在各自视图的 `<script setup>` 里
 - 登录态是条件渲染，不进路由：`App.vue` 顶层 `v-if="bootstrapping || !isAuthenticated"` 先渲染登录卡片，`v-else` 里才挂 `<RouterView>`，因此未登录访问任何 URL 都会看到登录表单，登录后原 URL 继续生效
@@ -75,12 +77,14 @@ main.ts
 | `/` | `OverviewView` | `科目总览` | 科目列表共享（`useProjects`） |
 | `/projects/:pid` | `SubjectView` | 动态（科目名） | 该项目会话列表；视图独占 |
 | `/projects/:pid/sessions/:sid` | `ChatView` | 动态（科目 / 会话） | 消息 / 草稿 / SSE 全部随视图卸载释放 |
+| `/community` | `CommunityView` | `社区` | 社区技能列表、ZIP 上传、详情、安装；视图独占 |
 | `/:pathMatch(.*)*` | — | — | 404 重定向到 `/` |
 
 - `ChatView` 用 `:key="${pid}:${sid}"` 强制按会话重建，避免切换 sid 时状态串联
 - SubjectView 创建首条消息时跳转到 `/projects/:pid/sessions/:sid?initial=<text>`，ChatView 挂载后消费 `initial`、调 `router.replace` 去掉 query 再发送
 - `document.title` 由 `router.afterEach`（静态）+ SubjectView / ChatView 的 watcher（动态）合力设置
 - `App.vue` 的面包屑和 header 按钮按 `$route.name` 分支显示；项目技能按钮在 `route.params.pid` 存在时显示（subject 与 chat 两个视图都可用）
+- 侧边栏标题区有「社区」入口，跳转到 `/community`
 
 ## 已完成的功能
 
@@ -132,19 +136,28 @@ main.ts
 
 ### 5. 技能管理（Skill）
 
-Skill 在后端就是 `skills/<name>/SKILL.md` 的文件约定，前端完全通过通用文件 API 读写。
+Skill 在后端是 `skills/<name>/` 文件夹约定，核心入口为 `SKILL.md`，可含 `references/`、`assets/` 等子目录。前端完全通过通用文件 API 读写。
 
 `SkillManagerDialog` 支持：
 
 - 左栏列表 + 「新建技能」按钮
-- 右栏结构化表单：
+- 中栏文件树：点击技能后打开整个 `skills/<name>/` 文件夹，默认选中 `SKILL.md`
+  - 固定展示入口文件 `SKILL.md`
+  - 默认展示虚拟 `references/`、`assets/` 文件夹，只有创建目录或在其中创建文件时才落盘
+  - 文件树面板和文件夹行提供新建文件 / 新建文件夹按钮；文件夹只允许 `references` / `assets`
+  - 新建文件只允许 `.md`、`.txt`、`.json`、`.yaml`、`.yml`，暂不支持嵌套目录
+- 右栏编辑器：
+  - `SKILL.md` 使用结构化表单
   - `name`（受限 `^[a-z0-9]+(-[a-z0-9]+)*$`，长度 ≤ 64，不含保留词 `anthropic` / `claude`）
   - `description`（≤ 1024）
   - `license`、`compatibility`（≤ 500）作为高级字段折叠
   - `body` 仅提示字符 / 行数，不做硬限制
-- 正文前端侧限制 128 KB
+- 其它 `.md` 用普通 Markdown 文本编辑器，仅在存在 frontmatter 时检查 YAML 语法
+- `.json` / `.yaml` / `.yml` 保存前做语法解析，`.txt` 不做格式校验
 - 旧文件 frontmatter 无法结构化解析时自动降级为「原始编辑」模式，保存前仍做 frontmatter 合法性兜底校验
 - `yaml.stringify` 生成 frontmatter，避免人工漏空格之类 YAML 陷阱
+- 用户级技能在已保存且无未保存修改时可「发布到社区」，调用 `POST /community/skills` 并传 `skill_name`，后端复制整个 `skills/<name>/` 文件夹到 `archived_skill/{id}/`，再解析其中 `SKILL.md` 的 frontmatter 生成社区元信息
+- 社区页也支持直接上传 Skill ZIP 发布，调用 `POST /community/skills/upload`，前端只接受 `.zip`，并在发送前拦截超过 40MB 的单个文件
 
 「我的技能」（用户级）和「项目技能」（项目级）共用同一对话框，靠 `FileSpace` 判别：
 
@@ -156,7 +169,21 @@ type FileSpace =
 
 对应后端路径 `/users/{user_id}/files` 或 `/projects/{pid}/files`。
 
-### 6. Markdown / 代码 / 数学 / Mermaid 渲染
+### 6. 社区技能广场
+
+`/community` 由 `CommunityView.vue` 提供，入口在侧边栏标题区的「社区」按钮。
+
+- 列表调用 `GET /community/skills`，支持按 `keyword` 搜索技能名 / 描述，分页大小固定 20
+- 排序支持 `popular`（下载数降序）和 `newest`（发布时间降序）
+- 顶部「上传 ZIP」按钮打开本地文件选择器，调用 `uploadCommunitySkillZip(file)` 上传原始 zip body 到 `POST /community/skills/upload`
+- 上传前前端检查文件名后缀必须是 `.zip`，单个 zip 文件大小必须 ≤ 40MB；后端继续校验 zip 格式、目录结构、`SKILL.md` frontmatter、路径安全和解压后总大小；zip 内 `reference/` 与 `references/` 都接受并统一归档为 `references/`
+- 点击卡片后调用 `GET /community/skills/{id}` 打开详情弹层，展示描述、大小、发布时间、license 和 compatibility
+- 「安装到我的技能」调用 `POST /community/skills/{id}/install`，成功后把归档目录复制到用户级 `skills/<name>/` 并刷新下载数
+- 「安装到项目」调用同一接口并传 `{ target: "project", pid }`，成功后把归档目录复制到项目级 `skills/<name>/`
+- 作者本人在详情弹层中可删除发布，调用 `DELETE /community/skills/{id}`
+- 从已有用户级技能发布仍在「我的技能」管理对话框里：选中已保存且未修改的用户级技能后显示「发布到社区」
+
+### 7. Markdown / 代码 / 数学 / Mermaid 渲染
 
 `MessageContent.vue` + `markdown/renderer.ts` 流水线：
 
@@ -170,7 +197,7 @@ type FileSpace =
 
 Mermaid 渲染失败降级为可见的 error 卡片而不是白屏。
 
-### 7. 消息历史
+### 8. 消息历史
 
 - `GET /sessions/{sid}/messages` 拉原始 PydanticAI `ModelMessage` 序列化数据
 - 前端只渲染 `version === 0` 的条目（活跃版本，历史版本通过版本切换按钮访问）
@@ -180,12 +207,12 @@ Mermaid 渲染失败降级为可见的 error 卡片而不是白屏。
   - `kind === 'assistant' | 'agent_response'` + `parsed.kind === 'response'` → 取 `text` 部分
   - 工具调用 / 返回类消息在前端不展示
 
-### 8. 其它
+### 9. 其它
 
 - 消息复制：鼠标悬停 assistant 气泡左下显示复制按钮，带 1.5s 视觉反馈
 - 错误体 → 文案：`api.ts#getErrorMessage` 兼容 `ApiError` / `Error` / `{ detail: ... }` / `{ detail: { message } }`
 
-### 9. 重放 / 编辑 PROMPT / 版本切换 / 删除回合
+### 10. 重放 / 编辑 PROMPT / 版本切换 / 删除回合
 
 围绕回合 anchor（`anchor_msg_id`）做的一组互相配合的功能。后端模型用 `(anchor_msg_id, version)` 标识：`version=0` 是当前活跃版本，重放会把旧组整体推到 `version>=1`。
 

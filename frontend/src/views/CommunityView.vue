@@ -9,11 +9,14 @@ import {
   getCommunitySkill,
   installCommunitySkill,
   deleteCommunitySkill,
+  uploadCommunitySkillZip,
   getCurrentUserId,
   getErrorMessage,
 } from '../api'
+import { useProjects } from '../composables/useProjects'
 
 const router = useRouter()
+const { projects, loadProjects } = useProjects()
 
 const currentUserId = ref<string | null>(getCurrentUserId())
 
@@ -30,8 +33,16 @@ const offset = ref(0)
 const selected = ref<CommunitySkillDetail | null>(null)
 const detailLoading = ref(false)
 const installing = ref(false)
+const installingProject = ref(false)
+const selectedProjectId = ref('')
 const deleting = ref(false)
 const flashMsg = ref('')
+const uploadInput = ref<HTMLInputElement | null>(null)
+const uploading = ref(false)
+const uploadMsg = ref('')
+const uploadMsgKind = ref<'success' | 'error'>('success')
+
+const MAX_UPLOAD_ZIP_BYTES = 40 * 1024 * 1024
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / limit)))
 const currentPage = computed(() => Math.floor(offset.value / limit) + 1)
@@ -90,6 +101,24 @@ async function doInstall(): Promise<void> {
   }
 }
 
+async function doInstallProject(): Promise<void> {
+  if (!selected.value || !selectedProjectId.value) return
+  installingProject.value = true
+  flashMsg.value = ''
+  try {
+    const r = await installCommunitySkill(selected.value.id, { target: 'project', pid: selectedProjectId.value })
+    selected.value.downloads = r.downloads
+    const inList = skills.value.find((s) => s.id === selected.value!.id)
+    if (inList) inList.downloads = r.downloads
+    const project = projects.value.find((p) => p.pid === selectedProjectId.value)
+    flashMsg.value = `已安装到项目 ${project?.projectname ?? selectedProjectId.value}：${r.name}`
+  } catch (e) {
+    flashMsg.value = getErrorMessage(e)
+  } finally {
+    installingProject.value = false
+  }
+}
+
 async function doDelete(): Promise<void> {
   if (!selected.value) return
   if (!confirm(`确定要删除社区中的 "${selected.value.name}" 吗？此操作不可撤销。`)) return
@@ -102,6 +131,47 @@ async function doDelete(): Promise<void> {
     errorMsg.value = getErrorMessage(e)
   } finally {
     deleting.value = false
+  }
+}
+
+function openUploadPicker(): void {
+  uploadMsg.value = ''
+  uploadMsgKind.value = 'success'
+  uploadInput.value?.click()
+}
+
+async function handleZipUpload(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+
+  uploadMsg.value = ''
+  uploadMsgKind.value = 'success'
+  if (!file.name.toLowerCase().endsWith('.zip')) {
+    uploadMsg.value = '只允许上传 zip 文件。'
+    uploadMsgKind.value = 'error'
+    return
+  }
+  if (file.size > MAX_UPLOAD_ZIP_BYTES) {
+    uploadMsg.value = '单个 zip 包不能超过 40MB。'
+    uploadMsgKind.value = 'error'
+    return
+  }
+
+  uploading.value = true
+  try {
+    const published = await uploadCommunitySkillZip(file)
+    uploadMsg.value = `已上传并发布：${published.name}`
+    uploadMsgKind.value = 'success'
+    offset.value = 0
+    await load()
+    await openDetail(published.id)
+  } catch (e) {
+    uploadMsg.value = getErrorMessage(e)
+    uploadMsgKind.value = 'error'
+  } finally {
+    uploading.value = false
   }
 }
 
@@ -136,6 +206,7 @@ function gotoPage(page: number): void {
 onMounted(() => {
   document.title = '社区 · Teachi'
   void load()
+  void loadProjects()
 })
 </script>
 
@@ -156,6 +227,22 @@ onMounted(() => {
         <h1 class="text-lg font-semibold text-[#1f2937]">技能社区</h1>
       </div>
       <div class="flex items-center gap-2">
+        <input
+          ref="uploadInput"
+          class="hidden"
+          accept=".zip,application/zip,application/x-zip-compressed"
+          type="file"
+          @change="handleZipUpload"
+        />
+        <button
+          class="h-9 rounded-md border border-[#d1d5db] px-3 text-sm text-[#374151] transition hover:border-[#1f6f5b]/50 hover:bg-[#f9fafb] disabled:cursor-not-allowed disabled:opacity-50"
+          :disabled="uploading"
+          type="button"
+          title="上传技能 zip"
+          @click="openUploadPicker"
+        >
+          {{ uploading ? '上传中...' : '上传 ZIP' }}
+        </button>
         <input
           v-model="keyword"
           class="h-9 w-64 rounded-md border border-[#d1d5db] px-3 text-sm outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
@@ -206,6 +293,17 @@ onMounted(() => {
         class="mb-4 rounded-md border border-[#efb3a7] bg-[#fff7ed] px-3 py-2 text-sm text-[#9a3412]"
       >
         {{ errorMsg }}
+      </p>
+      <p
+        v-if="uploadMsg"
+        :class="[
+          'mb-4 rounded-md border px-3 py-2 text-sm',
+          uploadMsgKind === 'success'
+            ? 'border-[#bbf7d0] bg-[#f0fdf4] text-[#166534]'
+            : 'border-[#efb3a7] bg-[#fff7ed] text-[#9a3412]',
+        ]"
+      >
+        {{ uploadMsg }}
       </p>
 
       <div v-if="loading" class="py-16 text-center text-sm text-[#9ca3af]">加载中...</div>
@@ -302,7 +400,6 @@ onMounted(() => {
             <p class="mb-4 rounded-md bg-[#f9fafb] px-3 py-2 text-sm text-[#374151]">
               {{ selected.description }}
             </p>
-            <pre class="whitespace-pre-wrap rounded-md border border-[#e5e7eb] bg-[#fafafa] p-3 font-mono text-xs leading-relaxed text-[#374151]">{{ selected.body_md }}</pre>
           </div>
 
           <div class="flex-shrink-0 border-t border-[#e5e7eb] bg-white px-5 py-3">
@@ -323,14 +420,33 @@ onMounted(() => {
                 {{ deleting ? '删除中...' : '删除发布' }}
               </button>
               <div v-else />
-              <button
-                class="rounded-md bg-[#1f6f5b] px-4 py-1.5 text-sm text-white transition hover:bg-[#1a5b4a] disabled:cursor-not-allowed disabled:bg-[#9ca3af]"
-                :disabled="installing"
-                type="button"
-                @click="doInstall"
-              >
-                {{ installing ? '安装中...' : '安装到我的技能' }}
-              </button>
+              <div class="flex items-center gap-2">
+                <select
+                  v-model="selectedProjectId"
+                  class="h-8 rounded-md border border-[#d1d5db] bg-white px-2 text-sm text-[#374151] outline-none focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
+                >
+                  <option value="">选择项目</option>
+                  <option v-for="project in projects" :key="project.pid" :value="project.pid">
+                    {{ project.projectname }}
+                  </option>
+                </select>
+                <button
+                  class="rounded-md border border-[#1f6f5b] px-3 py-1.5 text-sm text-[#1f6f5b] transition hover:bg-[#e6f4ee] disabled:cursor-not-allowed disabled:opacity-50"
+                  :disabled="installingProject || !selectedProjectId"
+                  type="button"
+                  @click="doInstallProject"
+                >
+                  {{ installingProject ? '安装中...' : '安装到项目' }}
+                </button>
+                <button
+                  class="rounded-md bg-[#1f6f5b] px-4 py-1.5 text-sm text-white transition hover:bg-[#1a5b4a] disabled:cursor-not-allowed disabled:bg-[#9ca3af]"
+                  :disabled="installing"
+                  type="button"
+                  @click="doInstall"
+                >
+                  {{ installing ? '安装中...' : '安装到我的技能' }}
+                </button>
+              </div>
             </div>
           </div>
         </template>

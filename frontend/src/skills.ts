@@ -1,5 +1,5 @@
 import yaml from 'yaml'
-import { type FileSpace, listFiles, readFile, writeFile, deleteFile } from './api'
+import { type FileEntry, type FileSpace, listFiles, readFile, writeFile, deleteFile, createDirectory } from './api'
 
 export type { FileSpace }
 
@@ -13,7 +13,21 @@ export interface SkillMeta {
 export const SKILL_NAME_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/
 export const SKILL_NAME_MAX = 64
 export const SKILL_RESERVED = new Set(['anthropic', 'claude'])
-export const SKILL_MAX_BYTES = 128 * 1024
+export const SKILL_RESOURCE_DIRS = ['references', 'assets'] as const
+export const SKILL_TEXT_EXTENSIONS = ['.md', '.txt', '.json', '.yaml', '.yml'] as const
+
+export type SkillResourceDir = typeof SKILL_RESOURCE_DIRS[number]
+export type SkillEditorKind = 'skill' | 'markdown' | 'json' | 'yaml' | 'text'
+
+export interface SkillTreeEntry {
+  name: string
+  relPath: string
+  isDir: boolean
+  virtual: boolean
+  parent: '' | SkillResourceDir
+  size: number
+  updated_at: number
+}
 
 export function validateSkillName(name: string): string | null {
   if (!name) return '名称不能为空'
@@ -23,6 +37,96 @@ export function validateSkillName(name: string): string | null {
     if (name.includes(reserved)) return `名称不能包含保留词 "${reserved}"`
   }
   return null
+}
+
+function normalizeParts(path: string): string[] {
+  return path.split('/').filter(Boolean)
+}
+
+function extensionOf(filename: string): string {
+  const dot = filename.lastIndexOf('.')
+  return dot >= 0 ? filename.slice(dot).toLowerCase() : ''
+}
+
+function isAllowedTextFile(filename: string): boolean {
+  return (SKILL_TEXT_EXTENSIONS as readonly string[]).includes(extensionOf(filename))
+}
+
+function isResourceDir(value: string): value is SkillResourceDir {
+  return (SKILL_RESOURCE_DIRS as readonly string[]).includes(value)
+}
+
+export function validateSkillRelativePath(path: string, allowDirectory = false): string | null {
+  if (!path.trim()) return '路径不能为空'
+  if (path.includes('\0')) return '路径不能包含 NUL 字符'
+  if (path.startsWith('/') || path.startsWith('\\')) return '路径必须是相对路径'
+
+  const parts = normalizeParts(path.replace(/\\/g, '/'))
+  if (parts.length === 0) return '路径不能为空'
+  if (parts.some((part) => part === '.' || part === '..')) return '路径不能包含 . 或 ..'
+  if (parts.length === 1 && parts[0] === 'SKILL.md') return null
+
+  if (parts.length === 1) {
+    const [name] = parts
+    if (allowDirectory && isResourceDir(name)) return null
+    if (!isAllowedTextFile(name)) return '只允许 md、txt、json、yaml、yml 文本文件'
+    return null
+  }
+
+  if (parts.length === 2) {
+    const [folder, filename] = parts
+    if (!isResourceDir(folder)) return '只能使用 references 或 assets 文件夹'
+    if (!isAllowedTextFile(filename)) return '只允许 md、txt、json、yaml、yml 文本文件'
+    return null
+  }
+
+  return '暂不支持嵌套目录'
+}
+
+export function skillFileEditorKind(relPath: string): SkillEditorKind {
+  if (relPath === 'SKILL.md') return 'skill'
+  const ext = extensionOf(relPath)
+  if (ext === '.md') return 'markdown'
+  if (ext === '.json') return 'json'
+  if (ext === '.yaml' || ext === '.yml') return 'yaml'
+  return 'text'
+}
+
+export function validatePlainSkillFileContent(relPath: string, content: string): string | null {
+  const kind = skillFileEditorKind(relPath)
+  if (kind === 'markdown') {
+    if (!content.startsWith('---')) return null
+    const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/)
+    if (!match) return 'Markdown frontmatter 未闭合。'
+    try {
+      yaml.parse(match[1])
+    } catch (e) {
+      return `Markdown frontmatter YAML 语法错误：${(e as Error).message}`
+    }
+    return null
+  }
+  if (kind === 'json') {
+    try {
+      JSON.parse(content)
+    } catch (e) {
+      return `JSON 语法错误：${(e as Error).message}`
+    }
+    return null
+  }
+  if (kind === 'yaml') {
+    try {
+      yaml.parse(content)
+    } catch (e) {
+      return `YAML 语法错误：${(e as Error).message}`
+    }
+  }
+  return null
+}
+
+export function initialSkillFileContent(filename: string): string {
+  const kind = skillFileEditorKind(filename)
+  if (kind === 'json') return '{}\n'
+  return ''
 }
 
 export interface FrontmatterResult {
@@ -120,10 +224,6 @@ export async function readSkill(space: FileSpace, name: string): Promise<{ conte
 }
 
 export async function writeSkill(space: FileSpace, name: string, content: string): Promise<void> {
-  const encoder = new TextEncoder()
-  if (encoder.encode(content).length > SKILL_MAX_BYTES) {
-    throw new Error(`内容超过 ${SKILL_MAX_BYTES / 1024} KB 限制`)
-  }
   await writeFile(space, `skills/${name}/SKILL.md`, content)
 }
 
@@ -133,6 +233,112 @@ export async function deleteSkill(space: FileSpace, name: string): Promise<void>
 
 export function buildSkillTemplate(name: string): string {
   return `---\nname: ${name}\ndescription: \n---\n\n# 技能说明\n\n`
+}
+
+function toTreeFile(entry: FileEntry, parent: '' | SkillResourceDir): SkillTreeEntry | null {
+  if (entry.is_dir || validateSkillRelativePath(parent ? `${parent}/${entry.name}` : entry.name) !== null) {
+    return null
+  }
+  return {
+    name: entry.name,
+    relPath: parent ? `${parent}/${entry.name}` : entry.name,
+    isDir: false,
+    virtual: false,
+    parent,
+    size: entry.size,
+    updated_at: entry.updated_at,
+  }
+}
+
+export async function listSkillTree(space: FileSpace, name: string): Promise<SkillTreeEntry[]> {
+  const nameError = validateSkillName(name)
+  if (nameError) throw new Error(nameError)
+
+  const rootEntries = await listFiles(space, `skills/${name}`)
+  const rootFiles = rootEntries
+    .map((entry) => toTreeFile(entry, ''))
+    .filter((entry): entry is SkillTreeEntry => entry !== null)
+    .sort((a, b) => {
+      if (a.name === 'SKILL.md') return -1
+      if (b.name === 'SKILL.md') return 1
+      return a.name.localeCompare(b.name)
+    })
+
+  const tree: SkillTreeEntry[] = [...rootFiles]
+  const rootDirNames = new Set(rootEntries.filter((entry) => entry.is_dir).map((entry) => entry.name))
+
+  for (const dir of SKILL_RESOURCE_DIRS) {
+    const isVirtual = !rootDirNames.has(dir)
+    tree.push({
+      name: dir,
+      relPath: dir,
+      isDir: true,
+      virtual: isVirtual,
+      parent: '',
+      size: 0,
+      updated_at: 0,
+    })
+
+    if (!isVirtual) {
+      let children: FileEntry[] = []
+      try {
+        children = await listFiles(space, `skills/${name}/${dir}`)
+      } catch {
+        children = []
+      }
+      tree.push(
+        ...children
+          .map((entry) => toTreeFile(entry, dir))
+          .filter((entry): entry is SkillTreeEntry => entry !== null)
+          .sort((a, b) => a.name.localeCompare(b.name)),
+      )
+    }
+  }
+
+  return tree
+}
+
+export async function readSkillFile(
+  space: FileSpace,
+  name: string,
+  relPath: string,
+): Promise<{ content: string; size: number; updated_at: number }> {
+  const pathError = validateSkillRelativePath(relPath)
+  if (pathError) throw new Error(pathError)
+  const file = await readFile(space, `skills/${name}/${relPath}`)
+  return { content: file.content, size: file.size, updated_at: file.updated_at }
+}
+
+export async function writeSkillFile(
+  space: FileSpace,
+  name: string,
+  relPath: string,
+  content: string,
+): Promise<void> {
+  const pathError = validateSkillRelativePath(relPath)
+  if (pathError) throw new Error(pathError)
+  const contentError = validatePlainSkillFileContent(relPath, content)
+  if (contentError) throw new Error(contentError)
+  await writeFile(space, `skills/${name}/${relPath}`, content)
+}
+
+export async function createSkillFile(
+  space: FileSpace,
+  name: string,
+  relPath: string,
+): Promise<void> {
+  await writeSkillFile(space, name, relPath, initialSkillFileContent(relPath))
+}
+
+export async function deleteSkillFile(space: FileSpace, name: string, relPath: string): Promise<void> {
+  if (relPath === 'SKILL.md') throw new Error('不能删除 SKILL.md，请删除整个技能。')
+  const pathError = validateSkillRelativePath(relPath, true)
+  if (pathError) throw new Error(pathError)
+  await deleteFile(space, `skills/${name}/${relPath}`)
+}
+
+export async function createSkillDirectory(space: FileSpace, name: string, dir: SkillResourceDir): Promise<void> {
+  await createDirectory(space, `skills/${name}/${dir}`)
 }
 
 // ── 项目简介 skill ────────────────────────────────────────────────────────────

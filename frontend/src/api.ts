@@ -615,6 +615,14 @@ export async function deleteFile(space: FileSpace, path: string): Promise<void> 
   return request<void>(`${base}?path=${encodeURIComponent(path)}`, { method: 'DELETE' })
 }
 
+export async function createDirectory(space: FileSpace, path: string): Promise<void> {
+  const base = fileBasePath(space)
+  return request<void>(`${base}/directories`, {
+    method: 'POST',
+    body: JSON.stringify({ path }),
+  })
+}
+
 // ── 社区技能广场 ────────────────────────────────────────────────────────────────
 
 export type CommunitySort = 'popular' | 'newest'
@@ -632,9 +640,7 @@ export interface CommunitySkillSummary {
   updated_at: number
 }
 
-export interface CommunitySkillDetail extends CommunitySkillSummary {
-  body_md: string
-}
+export type CommunitySkillDetail = CommunitySkillSummary
 
 export interface CommunitySkillListResponse {
   skills: CommunitySkillSummary[]
@@ -648,6 +654,11 @@ export interface InstallResponse {
   name: string
   skill_id: string
   downloads: number
+}
+
+export interface InstallSkillRequest {
+  target: 'user' | 'project'
+  pid?: string
 }
 
 function nonceHeaders(): Record<string, string> {
@@ -675,18 +686,30 @@ export async function getCommunitySkill(id: string): Promise<CommunitySkillDetai
   return request<CommunitySkillDetail>(`/community/skills/${encodeURIComponent(id)}`)
 }
 
-export async function publishCommunitySkill(bodyMd: string): Promise<CommunitySkillDetail> {
+export async function publishCommunitySkill(skillName: string): Promise<CommunitySkillDetail> {
   return request<CommunitySkillDetail>('/community/skills', {
     method: 'POST',
     headers: nonceHeaders(),
-    body: JSON.stringify({ body_md: bodyMd }),
+    body: JSON.stringify({ skill_name: skillName }),
   })
 }
 
-export async function installCommunitySkill(id: string): Promise<InstallResponse> {
+export async function uploadCommunitySkillZip(file: File): Promise<CommunitySkillDetail> {
+  return request<CommunitySkillDetail>('/community/skills/upload', {
+    method: 'POST',
+    headers: {
+      ...nonceHeaders(),
+      'Content-Type': 'application/zip',
+    },
+    body: file,
+  })
+}
+
+export async function installCommunitySkill(id: string, payload?: InstallSkillRequest): Promise<InstallResponse> {
   return request<InstallResponse>(`/community/skills/${encodeURIComponent(id)}/install`, {
     method: 'POST',
     headers: nonceHeaders(),
+    body: payload ? JSON.stringify(payload) : undefined,
   })
 }
 
