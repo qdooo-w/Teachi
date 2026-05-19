@@ -176,7 +176,7 @@ type FileSpace =
 - 列表调用 `GET /community/skills`，支持按 `keyword` 搜索技能名 / 描述，分页大小固定 20
 - 排序支持 `popular`（下载数降序）和 `newest`（发布时间降序）
 - 顶部「上传 ZIP」按钮打开本地文件选择器，调用 `uploadCommunitySkillZip(file)` 上传原始 zip body 到 `POST /community/skills/upload`
-- 上传前前端检查文件名后缀必须是 `.zip`，单个 zip 文件大小必须 ≤ 40MB；后端继续校验 zip 格式、目录结构、`SKILL.md` frontmatter、路径安全和解压后总大小；zip 内 `reference/` 与 `references/` 都接受并统一归档为 `references/`
+- 上传前前端检查文件名后缀必须是 `.zip`，单个 zip 文件大小必须 ≤ 40MB；后端继续校验 zip 格式、目录结构、`SKILL.md` frontmatter、路径安全和解压后总大小；zip 内 `reference/` 与 `references/` 都接受并统一归档为 `references/`；发布名称只看 `SKILL.md` 的 `frontmatter.name`，不看 zip 文件名或顶层文件夹名
 - 点击卡片后调用 `GET /community/skills/{id}` 打开详情弹层，展示描述、大小、发布时间、license 和 compatibility
 - 「安装到我的技能」调用 `POST /community/skills/{id}/install`，成功后把归档目录复制到用户级 `skills/<name>/` 并刷新下载数
 - 「安装到项目」调用同一接口并传 `{ target: "project", pid }`，成功后把归档目录复制到项目级 `skills/<name>/`
