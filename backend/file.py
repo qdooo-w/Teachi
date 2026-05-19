@@ -1,10 +1,10 @@
 import logging
-import re
 import shutil
 from pathlib import Path
 from typing import Union, List, Dict
 
 from backend.config import BASE_DIR
+from backend.config.skill import SKILL_RESOURCE_DIRS, SKILL_TEXT_EXTENSIONS, validate_skill_name
 
 logger = logging.getLogger(__name__)
 
@@ -145,29 +145,12 @@ class UserFile(FileBase):
 # 设计目标：让 AI 在人类指令下读写 skill 目录中的文本文件，
 # 但操作面被严格收敛，不能逃出 skills/ 子目录、不能写非文本文件、不能超大。
 
-# 与 frontend/src/skills.ts 保持一致的 skill 名称约束（kebab-case，≤64）
-_SKILL_NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
-_SKILL_NAME_MAX = 64
-_SKILL_NAME_RESERVED: frozenset[str] = frozenset({"anthropic", "claude"})
-
-# 文本文件扩展名白名单（独立于 _TEXT_FILE_EXTENSIONS，避免被无关接口扩散影响）
-_SKILL_TEXT_EXTENSIONS: frozenset[str] = frozenset({
-    ".md", ".txt", ".json", ".yaml", ".yml",
-})
-
-_SKILL_RESOURCE_DIRS: frozenset[str] = frozenset({"references", "assets"})
-
-
 def _validate_skill_name(skill_name: str) -> None:
     """校验 skill 名：kebab-case、长度 ≤64、不在保留词内。"""
     if not isinstance(skill_name, str) or not skill_name:
         raise FileError("skill name must be a non-empty string")
-    if len(skill_name) > _SKILL_NAME_MAX:
-        raise FileError(f"skill name too long (>{_SKILL_NAME_MAX} chars)")
-    if not _SKILL_NAME_RE.match(skill_name):
-        raise FileError("skill name must match ^[a-z0-9]+(-[a-z0-9]+)*$")
-    if skill_name in _SKILL_NAME_RESERVED:
-        raise FileError(f"skill name '{skill_name}' is reserved")
+    if err := validate_skill_name(skill_name):
+        raise FileError(f"invalid skill name: {err}")
 
 
 def _validate_skill_relpath(rel_path: str) -> None:
@@ -187,10 +170,10 @@ def _validate_skill_relpath(rel_path: str) -> None:
     if any(p == ".." for p in parts):
         raise FileError("path must not contain '..' segments")
     suffix = Path(rel_path).suffix.lower()
-    if suffix not in _SKILL_TEXT_EXTENSIONS:
+    if suffix not in SKILL_TEXT_EXTENSIONS:
         raise FileError(
             f"unsupported file extension '{suffix}'. allowed: "
-            f"{sorted(_SKILL_TEXT_EXTENSIONS)}"
+            f"{sorted(SKILL_TEXT_EXTENSIONS)}"
         )
 
 
@@ -232,17 +215,16 @@ def validate_skill_storage_path(path: str, *, allow_skill_dir: bool = False) -> 
 
     if len(rel_parts) == 1:
         item = rel_parts[0]
-        if item in _SKILL_RESOURCE_DIRS:
+        if item in SKILL_RESOURCE_DIRS:
             return
         _validate_skill_relpath(item)
         return
 
     if len(rel_parts) == 2:
         folder, filename = rel_parts
-        if folder not in _SKILL_RESOURCE_DIRS:
+        if folder not in SKILL_RESOURCE_DIRS:
             raise FileError("skill folders can only be 'references' or 'assets'")
         _validate_skill_relpath(filename)
         return
 
     raise FileError("nested directories inside skill folders are not supported")
-

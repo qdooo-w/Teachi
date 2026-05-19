@@ -631,6 +631,7 @@ export interface CommunitySkillSummary {
   id: string
   owner_uuid: string
   name: string
+  display_name: string | null
   description: string
   license: string | null
   compatibility: string | null

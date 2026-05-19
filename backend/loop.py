@@ -19,6 +19,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from backend.auth import get_current_user, verify_nonce
+from backend.config import LOOP_MAX_RETRIES
 from backend.context import (
     ActionKind,
     LoopContext,
@@ -31,10 +32,6 @@ from backend.context import (
 import backend.node as node  # noqa: F401
 
 logger = logging.getLogger(__name__)
-
-# ── 常量 ──
-
-MAX_RETRIES = 3
 
 # ── 用户锁 & 运行中任务 ──
 
@@ -65,11 +62,11 @@ def _no_error(ctx: LoopContext) -> bool:
 
 
 def _can_retry(ctx: LoopContext) -> bool:
-    return ctx.error is not None and ctx.retries < MAX_RETRIES
+    return ctx.error is not None and ctx.retries < LOOP_MAX_RETRIES
 
 
 def _has_error(ctx: LoopContext) -> bool:
-    return ctx.error is not None and ctx.retries >= MAX_RETRIES
+    return ctx.error is not None and ctx.retries >= LOOP_MAX_RETRIES
 
 
 def _action_is(*actions: str):

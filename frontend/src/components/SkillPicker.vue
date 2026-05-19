@@ -19,7 +19,13 @@ const inputEl = ref<HTMLInputElement | null>(null)
 
 const filtered = computed(() => {
   const q = query.value.trim().toLowerCase()
-  return q ? props.skills.filter((s) => s.name.includes(q) || s.description.toLowerCase().includes(q)) : props.skills
+  return q
+    ? props.skills.filter((s) =>
+        s.name.includes(q)
+        || (s.display_name ?? '').toLowerCase().includes(q)
+        || s.description.toLowerCase().includes(q),
+      )
+    : props.skills
 })
 
 watch(filtered, () => { activeIndex.value = 0 })
@@ -106,7 +112,7 @@ nextTick(() => { inputEl.value?.focus() })
           </svg>
         </span>
         <div class="min-w-0 flex-1">
-          <div class="truncate text-sm font-medium text-[#1f2937]">{{ skill.name }}</div>
+          <div class="truncate text-sm font-medium text-[#1f2937]">{{ skill.display_name || skill.name }}</div>
           <div class="truncate text-xs text-[#6b7280]">{{ skill.description || '无描述' }}</div>
         </div>
       </button>

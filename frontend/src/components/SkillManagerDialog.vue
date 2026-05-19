@@ -55,6 +55,7 @@ const cleanSnapshot = ref<string | null>(null)
 
 const form = ref<SkillFields>({
   name: '',
+  display_name: '',
   description: '',
   license: '',
   compatibility: '',
@@ -67,6 +68,7 @@ const parseWarning = ref('')
 const plainContent = ref('')
 
 const DESCRIPTION_MAX = 1024
+const DISPLAY_NAME_MAX = 80
 const COMPATIBILITY_MAX = 500
 
 const nameError = computed(() => {
@@ -78,6 +80,12 @@ const descriptionError = computed(() => {
   const d = form.value.description
   if (!d.trim()) return '描述不能为空（会作为技能对模型的说明）'
   if (d.length > DESCRIPTION_MAX) return `描述不能超过 ${DESCRIPTION_MAX} 字符（当前 ${d.length}）`
+  return null
+})
+
+const displayNameError = computed(() => {
+  const displayName = form.value.display_name ?? ''
+  if (displayName.length > DISPLAY_NAME_MAX) return `展示名不能超过 ${DISPLAY_NAME_MAX} 字符（当前 ${displayName.length}）`
   return null
 })
 
@@ -111,6 +119,7 @@ const canSave = computed(() => {
   if (selectedEditorKind.value === 'skill') {
     if (rawMode.value) return rawContent.value.trim().length > 0
     if (isNew.value && nameError.value) return false
+    if (displayNameError.value) return false
     if (descriptionError.value) return false
     if (compatibilityError.value) return false
     return true
@@ -131,7 +140,7 @@ function markClean(): void {
 }
 
 function resetEditor(): void {
-  form.value = { name: '', description: '', license: '', compatibility: '', body: '' }
+  form.value = { name: '', display_name: '', description: '', license: '', compatibility: '', body: '' }
   showAdvanced.value = false
   rawMode.value = false
   rawContent.value = ''
@@ -173,6 +182,7 @@ function loadSkillForm(content: string, folderName: string): void {
   if (parsed.ok && parsed.fields) {
     form.value = {
       name: parsed.fields.name,
+      display_name: parsed.fields.display_name ?? '',
       description: parsed.fields.description,
       license: parsed.fields.license ?? '',
       compatibility: parsed.fields.compatibility ?? '',
@@ -253,6 +263,7 @@ function switchToStructured(): void {
   if (parsed.ok && parsed.fields) {
     form.value = {
       name: selectedName.value ?? parsed.fields.name,
+      display_name: parsed.fields.display_name ?? '',
       description: parsed.fields.description,
       license: parsed.fields.license ?? '',
       compatibility: parsed.fields.compatibility ?? '',
@@ -269,6 +280,7 @@ function switchToStructured(): void {
 function structuredSkillContent(name: string): string {
   return buildSkillFile({
     name,
+    display_name: form.value.display_name?.trim() || undefined,
     description: form.value.description.trim(),
     license: form.value.license?.trim() || undefined,
     compatibility: form.value.compatibility?.trim() || undefined,
@@ -287,6 +299,7 @@ function editorSnapshot(): string {
     return JSON.stringify({
       kind: 'skill-structured',
       name: isNew.value ? form.value.name : (selectedName.value ?? form.value.name),
+      display_name: form.value.display_name ?? '',
       description: form.value.description,
       license: form.value.license ?? '',
       compatibility: form.value.compatibility ?? '',
@@ -325,6 +338,10 @@ async function saveSkillFile(): Promise<boolean> {
       errorMsg.value = descriptionError.value
       return false
     }
+    if (displayNameError.value) {
+      errorMsg.value = displayNameError.value
+      return false
+    }
     if (compatibilityError.value) {
       errorMsg.value = compatibilityError.value
       return false
@@ -358,6 +375,10 @@ async function save(): Promise<void> {
     }
     if (descriptionError.value) {
       errorMsg.value = descriptionError.value
+      return
+    }
+    if (displayNameError.value) {
+      errorMsg.value = displayNameError.value
       return
     }
   }
@@ -499,7 +520,7 @@ async function publishToCommunity(): Promise<void> {
   publishMsg.value = ''
   try {
     const published = await publishCommunitySkill(selectedName.value)
-    publishMsg.value = `已发布到社区：${published.name}`
+    publishMsg.value = `已发布到社区：${published.display_name || published.name}`
   } catch (e) {
     errorMsg.value = getErrorMessage(e)
   } finally {
@@ -563,7 +584,8 @@ onBeforeUnmount(() => {
               type="button"
               @click="selectSkill(skill.name)"
             >
-              <div class="truncate text-sm font-medium">{{ skill.name }}</div>
+              <div class="truncate text-sm font-medium">{{ skill.display_name || skill.name }}</div>
+              <div v-if="skill.display_name" class="truncate text-[10px] text-[#9ca3af]">{{ skill.name }}</div>
               <div class="truncate text-xs text-[#9ca3af]">{{ skill.description || '无描述' }}</div>
             </button>
           </div>
@@ -704,6 +726,28 @@ onBeforeUnmount(() => {
                     </div>
                     <p v-if="nameError" class="mt-1 text-xs text-[#9a3412]">{{ nameError }}</p>
                     <p v-if="parseWarning && !rawMode" class="mt-1 text-xs text-[#92400e]">{{ parseWarning }}</p>
+                  </div>
+
+                  <div class="mb-4">
+                    <div class="mb-1 flex items-baseline justify-between">
+                      <label class="block text-xs font-medium text-[#6b7280]">展示名</label>
+                      <span
+                        :class="[
+                          'text-[10px] tabular-nums',
+                          (form.display_name ?? '').length > DISPLAY_NAME_MAX ? 'text-[#9a3412]' : 'text-[#9ca3af]',
+                        ]"
+                      >
+                        {{ (form.display_name ?? '').length }} / {{ DISPLAY_NAME_MAX }}
+                      </span>
+                    </div>
+                    <input
+                      v-model="form.display_name"
+                      :maxlength="DISPLAY_NAME_MAX"
+                      class="h-9 w-full rounded-md border border-[#d1d5db] px-3 text-sm outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
+                      placeholder="例如：数学解题助手"
+                      type="text"
+                    />
+                    <p v-if="displayNameError" class="mt-1 text-xs text-[#9a3412]">{{ displayNameError }}</p>
                   </div>
 
                   <div class="mb-4">

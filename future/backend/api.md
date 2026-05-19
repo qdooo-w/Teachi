@@ -766,7 +766,7 @@ zip 约束：
 | 文件类型 | 只允许 `.md .txt .json .yaml .yml` 文本文件 |
 | 目录 | 只允许根目录文件、`reference(s)/` 和 `assets/` 下的一层文件；上传时 `reference/` 会被规范化成 `references/` |
 | 安全 | 不允许绝对路径、`.`、`..`、空路径段、NUL 字符、重复路径、符号链接和加密 zip entry |
-| 元信息 | 后端重新读取 `SKILL.md` 并解析 frontmatter，要求 `name` / `description` 等规则与普通 Skill 发布一致；若 zip 有顶层文件夹，文件夹名必须等于 `frontmatter.name` |
+| 元信息 | 后端重新读取 `SKILL.md` 并解析 frontmatter，要求 `name` / `description` 等规则与普通 Skill 发布一致；发布名称只看 `frontmatter.name`，不看 zip 文件名或顶层文件夹名 |
 
 成功返回：`201 Created`
 

@@ -1,7 +1,6 @@
 #后续可能需要处理好旧refreshtoken的吊销
 import hashlib
 import hmac
-import os
 import secrets
 import time
 import random
@@ -19,6 +18,12 @@ from backend.config import (
     DATABASE_PATH,
     JWT_ALGORITHM,
     JWT_SECRET,
+    NONCE_CLEANUP_PROBABILITY,
+    NONCE_EXPIRY_SECONDS,
+    REFRESH_COOKIE_NAME,
+    REFRESH_COOKIE_PATH,
+    REFRESH_COOKIE_SAMESITE,
+    REFRESH_COOKIE_SECURE,
     REFRESH_TOKEN_EXPIRE_DAYS,
 )
 from backend.db import DatabaseFacade
@@ -28,27 +33,9 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 security = HTTPBearer(auto_error=False)
 db = DatabaseFacade(db_path=DATABASE_PATH)
 
-REFRESH_COOKIE_NAME = os.getenv("REFRESH_COOKIE_NAME", "refresh_token")
-REFRESH_COOKIE_PATH = os.getenv("REFRESH_COOKIE_PATH", "/auth")
-REFRESH_COOKIE_SECURE = os.getenv("REFRESH_COOKIE_SECURE", "false").lower() == "true"#是否仅通过 HTTPS 传输刷新令牌 Cookie，生产环境建议设置为 true。
-
-# 防重放配置：Nonce 有效期（秒）
-NONCE_EXPIRY_SECONDS = 300
-
 
 # 令牌类型：访问令牌和刷新令牌。
 TokenType = Literal["access", "refresh"]
-SameSiteType = Literal["lax", "strict", "none"]
-
-
-def _normalize_samesite(raw_value: str) -> SameSiteType:
-    value = raw_value.strip().lower()
-    if value in ("lax", "strict", "none"):
-        return cast(SameSiteType, value)
-    return "lax"
-
-
-REFRESH_COOKIE_SAMESITE = _normalize_samesite(os.getenv("REFRESH_COOKIE_SAMESITE", "lax"))
 
 
 class UserRecord(TypedDict):
@@ -247,7 +234,7 @@ def verify_nonce(
         )
 
     # 随机触发过期 Nonce 的清理（约 5% 的请求会触发）
-    if random.random() < 0.05:
+    if random.random() < NONCE_CLEANUP_PROBABILITY:
         expiry_threshold = now - NONCE_EXPIRY_SECONDS * 2
         db.nonces.clean_old_nonces(expiry_threshold)
 

@@ -728,7 +728,7 @@ class CommunitySkillsFacade(_DataBase):
     """
 
     _COLUMNS = (
-        "id, owner_uuid, name, description, archive_path, license, compatibility, "
+        "id, owner_uuid, name, display_name, description, archive_path, license, compatibility, "
         "size_bytes, downloads, created_at, updated_at"
     )
 
@@ -737,6 +737,7 @@ class CommunitySkillsFacade(_DataBase):
         *,
         owner_uuid: str,
         name: str,
+        display_name: str | None = None,
         description: str,
         archive_path: str,
         size_bytes: int,
@@ -751,13 +752,14 @@ class CommunitySkillsFacade(_DataBase):
             table_columns = {row["name"] for row in cursor.fetchall()}
             if "body_md" in table_columns:
                 insert_columns = (
-                    "id, owner_uuid, name, description, archive_path, body_md, "
+                    "id, owner_uuid, name, display_name, description, archive_path, body_md, "
                     "license, compatibility, size_bytes, downloads, created_at, updated_at"
                 )
                 values = (
                     skill_id,
                     owner_uuid,
                     name,
+                    display_name,
                     description,
                     archive_path,
                     "",
@@ -774,6 +776,7 @@ class CommunitySkillsFacade(_DataBase):
                     skill_id,
                     owner_uuid,
                     name,
+                    display_name,
                     description,
                     archive_path,
                     license,
@@ -814,7 +817,7 @@ class CommunitySkillsFacade(_DataBase):
         sort:
             - "popular"（默认）：downloads DESC, created_at DESC
             - "newest"        ：created_at DESC
-        keyword 不为空时，按 name LIKE OR description LIKE 过滤（大小写不敏感）。
+        keyword 不为空时，按 name/display_name/description 过滤（大小写不敏感）。
         """
         if sort == "newest":
             order_clause = "ORDER BY created_at DESC"
@@ -825,8 +828,8 @@ class CommunitySkillsFacade(_DataBase):
         where_clause = ""
         if keyword:
             like = f"%{keyword.strip()}%"
-            where_clause = "WHERE (name LIKE ? OR description LIKE ?)"
-            params.extend([like, like])
+            where_clause = "WHERE (name LIKE ? OR display_name LIKE ? OR description LIKE ?)"
+            params.extend([like, like, like])
         params.extend([int(limit), int(offset)])
 
         sql = (
@@ -843,8 +846,8 @@ class CommunitySkillsFacade(_DataBase):
         where_clause = ""
         if keyword:
             like = f"%{keyword.strip()}%"
-            where_clause = "WHERE (name LIKE ? OR description LIKE ?)"
-            params.extend([like, like])
+            where_clause = "WHERE (name LIKE ? OR display_name LIKE ? OR description LIKE ?)"
+            params.extend([like, like, like])
 
         with self._cursor() as cursor:
             cursor.execute(
@@ -1010,6 +1013,7 @@ class DatabaseFacade:
                 id TEXT PRIMARY KEY,
                 owner_uuid TEXT NOT NULL,
                 name TEXT NOT NULL,
+                display_name TEXT,
                 description TEXT NOT NULL,
                 archive_path TEXT NOT NULL,
                 license TEXT,
@@ -1032,6 +1036,8 @@ class DatabaseFacade:
                 cursor.execute(
                     "ALTER TABLE community_skills ADD COLUMN archive_path TEXT NOT NULL DEFAULT ''"
                 )
+            if "display_name" not in columns:
+                cursor.execute("ALTER TABLE community_skills ADD COLUMN display_name TEXT")
             self._migrate_legacy_community_skill_bodies(cursor)
 
         logger.info("Database setup completed")

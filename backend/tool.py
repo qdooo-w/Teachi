@@ -29,6 +29,8 @@ from typing import Any
 from pydantic_ai import RunContext
 from pydantic_ai.tools import Tool
 
+from backend.config.skill import SKILL_TEXT_EXTENSIONS, validate_skill_name
+
 # 已注册工具名称集合，用于快速查找和权限校验
 _REGISTERED_TOOL_NAMES: set[str] = set()
 
@@ -102,15 +104,8 @@ def build_tools(allowed: list[str] | None = None) -> list[Tool[Any]]:
 # ============================================================
 
 
-_SKILL_TEXT_EXTENSIONS: frozenset[str] = frozenset({
-    ".md", ".txt", ".json", ".yaml", ".yml", ".csv", ".xml",
-})
-
-
 def _parse_skill_ref(skill_ref: str) -> tuple[str, str]:
     """把 AI 看到的技能引用拆成 scope 和真实 skill_name。"""
-    from backend.skill_parser import validate_skill_name
-
     if not isinstance(skill_ref, str) or not skill_ref:
         raise ValueError("skill_ref must be a non-empty string")
     if skill_ref.startswith("global-"):
@@ -144,7 +139,7 @@ def _skill_rel_path(skill_name: str, file_path: str) -> str:
     if any(part == ".." for part in parts):
         raise ValueError("file_path must not contain '..'")
     suffix = Path(file_path).suffix.lower()
-    if suffix not in _SKILL_TEXT_EXTENSIONS:
+    if suffix not in SKILL_TEXT_EXTENSIONS:
         raise ValueError(f"unsupported file extension '{suffix}'")
     return f"skills/{skill_name}/{file_path}"
 

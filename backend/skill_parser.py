@@ -11,12 +11,7 @@ from dataclasses import dataclass
 
 import yaml
 
-
-SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
-SKILL_NAME_MAX = 64
-SKILL_RESERVED = ("anthropic", "claude")
-DESCRIPTION_MAX = 1024
-COMPATIBILITY_MAX = 500
+from backend.config.skill import COMPATIBILITY_MAX, DESCRIPTION_MAX, DISPLAY_NAME_MAX, validate_skill_name
 
 _FRONTMATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---\r?\n?(.*)$", re.DOTALL)
 
@@ -28,25 +23,11 @@ class SkillParseError(ValueError):
 @dataclass(frozen=True)
 class SkillFields:
     name: str
+    display_name: str | None
     description: str
     license: str | None
     compatibility: str | None
     body: str
-
-
-def validate_skill_name(name: str) -> str | None:
-    """返回错误信息字符串，合法返回 None（与前端 validateSkillName 等价）。"""
-    if not name:
-        return "名称不能为空"
-    if len(name) > SKILL_NAME_MAX:
-        return f"名称不能超过 {SKILL_NAME_MAX} 个字符"
-    if not SKILL_NAME_PATTERN.match(name):
-        return "名称只能包含小写字母、数字和连字符，且不能以连字符开头或结尾"
-    for reserved in SKILL_RESERVED:
-        if reserved in name:
-            return f"名称不能包含保留词 {reserved!r}"
-    return None
-
 
 def parse_skill_file(content: str) -> SkillFields:
     """严格解析 SKILL.md，失败抛 SkillParseError。
@@ -93,6 +74,13 @@ def parse_skill_file(content: str) -> SkillFields:
     if name_err:
         raise SkillParseError(f"frontmatter.name 不合法：{name_err}")
 
+    display_name_val = raw.get("display_name", raw.get("display-name"))
+    if display_name_val is not None and not isinstance(display_name_val, str):
+        raise SkillParseError("display_name 必须是字符串。")
+    display_name = display_name_val.strip() if isinstance(display_name_val, str) and display_name_val.strip() else None
+    if display_name is not None and len(display_name) > DISPLAY_NAME_MAX:
+        raise SkillParseError(f"display_name 不能超过 {DISPLAY_NAME_MAX} 字符（当前 {len(display_name)}）。")
+
     license_val = raw.get("license")
     license_str = license_val.strip() if isinstance(license_val, str) and license_val.strip() else None
 
@@ -105,6 +93,7 @@ def parse_skill_file(content: str) -> SkillFields:
 
     return SkillFields(
         name=name,
+        display_name=display_name,
         description=description,
         license=license_str,
         compatibility=compat_str,

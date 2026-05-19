@@ -5,6 +5,7 @@ export type { FileSpace }
 
 export interface SkillMeta {
   name: string
+  display_name?: string
   description: string
   size: number
   updated_at: number
@@ -133,6 +134,7 @@ export interface FrontmatterResult {
   ok: boolean
   error?: string
   name?: string
+  display_name?: string
   description?: string
   raw?: Record<string, unknown>
 }
@@ -178,9 +180,15 @@ export function parseSkillFrontmatter(content: string): FrontmatterResult {
     return { ok: false, error: 'frontmatter 必须包含非空字符串字段 `description`。' }
   }
 
+  const displayName = obj.display_name ?? obj['display-name']
+  if (displayName !== undefined && typeof displayName !== 'string') {
+    return { ok: false, error: 'frontmatter 字段 `display_name` 必须是字符串。' }
+  }
+
   return {
     ok: true,
     name: obj.name.trim(),
+    display_name: typeof displayName === 'string' && displayName.trim() ? displayName.trim() : undefined,
     description: obj.description.trim(),
     raw: obj,
   }
@@ -197,12 +205,13 @@ export async function listSkills(space: FileSpace): Promise<SkillMeta[]> {
   const dirs = entries.filter((e) => e.is_dir)
 
   const results = await Promise.all(
-    dirs.map(async (dir) => {
+    dirs.map(async (dir): Promise<SkillMeta | null> => {
       try {
         const file = await readFile(space, `skills/${dir.name}/SKILL.md`)
         const fm = parseSkillFrontmatter(file.content)
         return {
           name: dir.name,
+          display_name: fm?.display_name,
           description: fm?.description ?? '',
           size: file.size,
           updated_at: file.updated_at,
@@ -361,6 +370,7 @@ export function buildProjectDescSkill(summary: string, body: string): string {
 
 export interface SkillFields {
   name: string
+  display_name?: string
   description: string
   license?: string
   compatibility?: string
@@ -394,6 +404,7 @@ export function parseSkillFile(content: string): ParseSkillFileResult {
     ok: true,
     fields: {
       name: fm.name!,
+      display_name: fm.display_name,
       description: fm.description!,
       license: typeof raw.license === 'string' ? raw.license : undefined,
       compatibility: typeof raw.compatibility === 'string' ? raw.compatibility : undefined,
@@ -411,6 +422,7 @@ export function buildSkillFile(fields: SkillFields): string {
     name: fields.name,
     description: fields.description,
   }
+  if (fields.display_name && fields.display_name.trim()) meta.display_name = fields.display_name.trim()
   if (fields.license && fields.license.trim()) meta.license = fields.license.trim()
   if (fields.compatibility && fields.compatibility.trim()) meta.compatibility = fields.compatibility.trim()
 
