@@ -694,6 +694,17 @@ export async function publishCommunitySkill(skillName: string): Promise<Communit
   })
 }
 
+export async function uploadCommunitySkillZip(file: File): Promise<CommunitySkillDetail> {
+  return request<CommunitySkillDetail>('/community/skills/upload', {
+    method: 'POST',
+    headers: {
+      ...nonceHeaders(),
+      'Content-Type': 'application/zip',
+    },
+    body: file,
+  })
+}
+
 export async function installCommunitySkill(id: string, payload?: InstallSkillRequest): Promise<InstallResponse> {
   return request<InstallResponse>(`/community/skills/${encodeURIComponent(id)}/install`, {
     method: 'POST',

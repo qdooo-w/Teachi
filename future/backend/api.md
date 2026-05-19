@@ -27,6 +27,7 @@
 
 - `POST /loop/{sid}`
 - `POST /community/skills`
+- `POST /community/skills/upload`
 - `POST /community/skills/{skill_id}/install`
 
 | 位置 | 名称 | 类型 | 说明 |
@@ -738,6 +739,48 @@ FastAPI 和后端当前可能返回两类错误体：
 | 404 | `{ code: "RESOURCE_NOT_FOUND", message: "Skill folder not found" }` | 当前用户没有该技能文件夹 |
 | 422 | `{ code: "SKILL_PARSE_ERROR", message: ... }` | `SKILL.md` 缺失、frontmatter 或字段校验失败，包含 name 非法 |
 | 422 | 参数校验错误 | `skill_name` 为空或请求体结构不对 |
+| 400/409 | nonce 相关错误 | 见上文 nonce 规则 |
+
+### POST `/community/skills/upload`
+
+意义：上传一个符合 Skill 目录规范的 zip 包并发布到社区。文件上传相关路由实现放在 `backend/data.py`，归档仍写入项目根目录 `archived_skill/{id}/`，数据库只保存归档路径和展示元信息。
+
+认证：需要 `Authorization: Bearer <access_token>`，并携带 nonce 请求头。
+
+请求体：原始 zip 二进制 body，不使用 multipart。
+
+请求头：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `Content-Type` | string | 建议 | `application/zip`；也接受 `application/x-zip-compressed` 与 `application/octet-stream` |
+| `Content-Length` | int | 否 | 若存在且超过 40MB 会直接拒绝 |
+
+zip 约束：
+
+| 约束 | 说明 |
+|---|---|
+| 大小 | 单个 zip 包压缩后不超过 40MB；解压后的文件总大小也不超过 40MB |
+| 入口 | 必须包含 `SKILL.md` |
+| 结构 | 支持 `SKILL.md` 位于 zip 根目录，或 zip 根目录只有一个顶层技能文件夹且该文件夹内包含 `SKILL.md` |
+| 文件类型 | 只允许 `.md .txt .json .yaml .yml` 文本文件 |
+| 目录 | 只允许根目录文件、`reference(s)/` 和 `assets/` 下的一层文件；上传时 `reference/` 会被规范化成 `references/` |
+| 安全 | 不允许绝对路径、`.`、`..`、空路径段、NUL 字符、重复路径、符号链接和加密 zip entry |
+| 元信息 | 后端重新读取 `SKILL.md` 并解析 frontmatter，要求 `name` / `description` 等规则与普通 Skill 发布一致；若 zip 有顶层文件夹，文件夹名必须等于 `frontmatter.name` |
+
+成功返回：`201 Created`
+
+返回体：`CommunitySkillDetail`
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 400 | `{ code: "ZIP_VALIDATION_ERROR", message: ... }` | zip 格式损坏、解包失败等 |
+| 413 | `{ code: "ZIP_VALIDATION_ERROR", message: ... }` | zip 包或解压后总大小超过 40MB |
+| 415 | `{ code: "UNSUPPORTED_FILE_TYPE", message: "Only zip uploads are supported" }` | `Content-Type` 明确不是 zip |
+| 422 | `{ code: "ZIP_VALIDATION_ERROR", message: ... }` | zip 结构或文件路径不符合要求 |
+| 422 | `{ code: "SKILL_PARSE_ERROR", message: ... }` | `SKILL.md` 缺失、非 UTF-8、frontmatter 或字段校验失败 |
 | 400/409 | nonce 相关错误 | 见上文 nonce 规则 |
 
 ### POST `/community/skills/{skill_id}/install`

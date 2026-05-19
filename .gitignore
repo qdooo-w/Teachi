@@ -24,6 +24,7 @@ users
 .claude
 docs
 data
-tests
+tests/*
+!tests/test_community_zip_upload.py
 AGENTS.md
 archived_skill

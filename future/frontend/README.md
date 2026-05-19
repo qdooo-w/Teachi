@@ -1,6 +1,6 @@
 # Teachi Frontend
 
-基于 Vue 3 + Vite + Tailwind 的 AI 聊天前端，对接 FastAPI 后端，支持账号鉴权、科目与会话管理、SSE 流式对话、Markdown/LaTeX/Mermaid 渲染、用户级 / 项目级技能（Skill）的管理和按需挂载，以及社区技能的发布、安装与删除。
+基于 Vue 3 + Vite + Tailwind 的 AI 聊天前端，对接 FastAPI 后端，支持账号鉴权、科目与会话管理、SSE 流式对话、Markdown/LaTeX/Mermaid 渲染、用户级 / 项目级技能（Skill）的管理和按需挂载，以及社区技能的 ZIP 上传发布、安装与删除。
 
 ## 目录结构
 
@@ -29,7 +29,7 @@ frontend/
    │  ├─ OverviewView.vue  `/`：科目卡片总览 + 新建科目
    │  ├─ SubjectView.vue   `/projects/:pid`：该科目会话列表 + 首条消息创建会话
    │  ├─ ChatView.vue      `/projects/:pid/sessions/:sid`：消息流 + composer + SSE 主循环 + skill picker
-   │  └─ CommunityView.vue `/community`：社区技能列表、详情、安装与作者删除
+   │  └─ CommunityView.vue `/community`：社区技能列表、ZIP 上传、详情、安装与作者删除
    ├─ components/
    │  ├─ MessageContent.vue       Markdown 消息渲染与代码块复制、Mermaid 延迟渲染
    │  ├─ RenameInline.vue         行内重命名输入（回车提交 / Esc 取消）
@@ -61,7 +61,7 @@ main.ts
          ├─ views/SubjectView.vue   ── useProjects / useLayout + listSessions/createSession/...
          ├─ views/ChatView.vue      ── useAuth(preparing) + useProjects + listSessions
                                         + sendChatMessage/stopChatGeneration + SkillPicker/Chips
-         └─ views/CommunityView.vue ── 社区 skill 列表 / 详情 / 安装 / 作者删除
+         └─ views/CommunityView.vue ── 社区 skill 列表 / ZIP 上传 / 详情 / 安装 / 作者删除
 ```
 
 - `api.ts` 是所有后端通信的唯一出口，封装 `fetch` + 401 自动刷新、JWT 本地存储、SSE 帧解析、通用文件 API
@@ -77,7 +77,7 @@ main.ts
 | `/` | `OverviewView` | `科目总览` | 科目列表共享（`useProjects`） |
 | `/projects/:pid` | `SubjectView` | 动态（科目名） | 该项目会话列表；视图独占 |
 | `/projects/:pid/sessions/:sid` | `ChatView` | 动态（科目 / 会话） | 消息 / 草稿 / SSE 全部随视图卸载释放 |
-| `/community` | `CommunityView` | `社区` | 社区技能列表、详情、安装；视图独占 |
+| `/community` | `CommunityView` | `社区` | 社区技能列表、ZIP 上传、详情、安装；视图独占 |
 | `/:pathMatch(.*)*` | — | — | 404 重定向到 `/` |
 
 - `ChatView` 用 `:key="${pid}:${sid}"` 强制按会话重建，避免切换 sid 时状态串联
@@ -157,6 +157,7 @@ Skill 在后端是 `skills/<name>/` 文件夹约定，核心入口为 `SKILL.md`
 - 旧文件 frontmatter 无法结构化解析时自动降级为「原始编辑」模式，保存前仍做 frontmatter 合法性兜底校验
 - `yaml.stringify` 生成 frontmatter，避免人工漏空格之类 YAML 陷阱
 - 用户级技能在已保存且无未保存修改时可「发布到社区」，调用 `POST /community/skills` 并传 `skill_name`，后端复制整个 `skills/<name>/` 文件夹到 `archived_skill/{id}/`，再解析其中 `SKILL.md` 的 frontmatter 生成社区元信息
+- 社区页也支持直接上传 Skill ZIP 发布，调用 `POST /community/skills/upload`，前端只接受 `.zip`，并在发送前拦截超过 40MB 的单个文件
 
 「我的技能」（用户级）和「项目技能」（项目级）共用同一对话框，靠 `FileSpace` 判别：
 
@@ -174,11 +175,13 @@ type FileSpace =
 
 - 列表调用 `GET /community/skills`，支持按 `keyword` 搜索技能名 / 描述，分页大小固定 20
 - 排序支持 `popular`（下载数降序）和 `newest`（发布时间降序）
+- 顶部「上传 ZIP」按钮打开本地文件选择器，调用 `uploadCommunitySkillZip(file)` 上传原始 zip body 到 `POST /community/skills/upload`
+- 上传前前端检查文件名后缀必须是 `.zip`，单个 zip 文件大小必须 ≤ 40MB；后端继续校验 zip 格式、目录结构、`SKILL.md` frontmatter、路径安全和解压后总大小；zip 内 `reference/` 与 `references/` 都接受并统一归档为 `references/`
 - 点击卡片后调用 `GET /community/skills/{id}` 打开详情弹层，展示描述、大小、发布时间、license 和 compatibility
 - 「安装到我的技能」调用 `POST /community/skills/{id}/install`，成功后把归档目录复制到用户级 `skills/<name>/` 并刷新下载数
 - 「安装到项目」调用同一接口并传 `{ target: "project", pid }`，成功后把归档目录复制到项目级 `skills/<name>/`
 - 作者本人在详情弹层中可删除发布，调用 `DELETE /community/skills/{id}`
-- 发布入口不在社区页内，而在「我的技能」管理对话框里：选中已保存且未修改的用户级技能后显示「发布到社区」
+- 从已有用户级技能发布仍在「我的技能」管理对话框里：选中已保存且未修改的用户级技能后显示「发布到社区」
 
 ### 7. Markdown / 代码 / 数学 / Mermaid 渲染
 

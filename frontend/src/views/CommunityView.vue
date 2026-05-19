@@ -9,6 +9,7 @@ import {
   getCommunitySkill,
   installCommunitySkill,
   deleteCommunitySkill,
+  uploadCommunitySkillZip,
   getCurrentUserId,
   getErrorMessage,
 } from '../api'
@@ -36,6 +37,12 @@ const installingProject = ref(false)
 const selectedProjectId = ref('')
 const deleting = ref(false)
 const flashMsg = ref('')
+const uploadInput = ref<HTMLInputElement | null>(null)
+const uploading = ref(false)
+const uploadMsg = ref('')
+const uploadMsgKind = ref<'success' | 'error'>('success')
+
+const MAX_UPLOAD_ZIP_BYTES = 40 * 1024 * 1024
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / limit)))
 const currentPage = computed(() => Math.floor(offset.value / limit) + 1)
@@ -127,6 +134,47 @@ async function doDelete(): Promise<void> {
   }
 }
 
+function openUploadPicker(): void {
+  uploadMsg.value = ''
+  uploadMsgKind.value = 'success'
+  uploadInput.value?.click()
+}
+
+async function handleZipUpload(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+
+  uploadMsg.value = ''
+  uploadMsgKind.value = 'success'
+  if (!file.name.toLowerCase().endsWith('.zip')) {
+    uploadMsg.value = '只允许上传 zip 文件。'
+    uploadMsgKind.value = 'error'
+    return
+  }
+  if (file.size > MAX_UPLOAD_ZIP_BYTES) {
+    uploadMsg.value = '单个 zip 包不能超过 40MB。'
+    uploadMsgKind.value = 'error'
+    return
+  }
+
+  uploading.value = true
+  try {
+    const published = await uploadCommunitySkillZip(file)
+    uploadMsg.value = `已上传并发布：${published.name}`
+    uploadMsgKind.value = 'success'
+    offset.value = 0
+    await load()
+    await openDetail(published.id)
+  } catch (e) {
+    uploadMsg.value = getErrorMessage(e)
+    uploadMsgKind.value = 'error'
+  } finally {
+    uploading.value = false
+  }
+}
+
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
@@ -180,6 +228,22 @@ onMounted(() => {
       </div>
       <div class="flex items-center gap-2">
         <input
+          ref="uploadInput"
+          class="hidden"
+          accept=".zip,application/zip,application/x-zip-compressed"
+          type="file"
+          @change="handleZipUpload"
+        />
+        <button
+          class="h-9 rounded-md border border-[#d1d5db] px-3 text-sm text-[#374151] transition hover:border-[#1f6f5b]/50 hover:bg-[#f9fafb] disabled:cursor-not-allowed disabled:opacity-50"
+          :disabled="uploading"
+          type="button"
+          title="上传技能 zip"
+          @click="openUploadPicker"
+        >
+          {{ uploading ? '上传中...' : '上传 ZIP' }}
+        </button>
+        <input
           v-model="keyword"
           class="h-9 w-64 rounded-md border border-[#d1d5db] px-3 text-sm outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
           placeholder="搜索技能名或描述"
@@ -229,6 +293,17 @@ onMounted(() => {
         class="mb-4 rounded-md border border-[#efb3a7] bg-[#fff7ed] px-3 py-2 text-sm text-[#9a3412]"
       >
         {{ errorMsg }}
+      </p>
+      <p
+        v-if="uploadMsg"
+        :class="[
+          'mb-4 rounded-md border px-3 py-2 text-sm',
+          uploadMsgKind === 'success'
+            ? 'border-[#bbf7d0] bg-[#f0fdf4] text-[#166534]'
+            : 'border-[#efb3a7] bg-[#fff7ed] text-[#9a3412]',
+        ]"
+      >
+        {{ uploadMsg }}
       </p>
 
       <div v-if="loading" class="py-16 text-center text-sm text-[#9ca3af]">加载中...</div>
