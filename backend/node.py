@@ -288,7 +288,30 @@ async def call_model_node(ctx: LoopContext) -> NodeOutput:
 
     # 注入注册表中的工具（含 skill 文件读写工具），按 ctx.allowed_tools 过滤
     tools = build_tools(allowed=ctx.allowed_tools)
-    agent = GetAgent(tools=tools, capabilities=[skills_capability])
+
+    # 查询用户激活的模型配置，优先使用用户自定义配置
+    agent_kwargs: dict = {"tools": tools, "capabilities": [skills_capability]}
+    user_config = db.model_configs.get_active_for_user(ctx.user_uuid)
+    model_settings: dict = {}
+    if user_config:
+        if user_config.get("api_key"):
+            agent_kwargs["api_key"] = user_config["api_key"]
+        if user_config.get("base_url"):
+            agent_kwargs["base_url"] = user_config["base_url"]
+        if user_config.get("model_name"):
+            agent_kwargs["model_name"] = user_config["model_name"]
+        if user_config.get("system_instruction"):
+            agent_kwargs["system_instruction"] = user_config["system_instruction"]
+        # temperature 和 max_tokens 通过 model_settings 传递
+        if user_config.get("temperature") is not None:
+            model_settings["temperature"] = user_config["temperature"]
+        if user_config.get("max_tokens") is not None:
+            model_settings["max_tokens"] = user_config["max_tokens"]
+
+    if model_settings:
+        agent_kwargs["model_settings"] = model_settings
+
+    agent = GetAgent(**agent_kwargs)
     ctx.response_text = ""
     # 新一轮调用开始，清除上一轮的临时错误状态
     ctx.error = None
