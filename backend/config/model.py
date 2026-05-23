@@ -55,11 +55,14 @@ def GetAgent(
     base_url: str | None = None,
     model_name: str | None = None,
     system_instruction: str | None = None,
+    model_settings: dict | None = None,
 ) -> Agent[ChatDeps, str]:
     """创建一个可复用的 Pydantic AI Agent。每次调用都创建新实例，注入工具和能力。
 
     优先使用传入的模型配置参数（api_key, base_url, model_name, system_instruction），
     未提供时回退到环境变量默认值。
+
+    model_settings 用于传递 temperature、max_tokens 等运行时参数。
     """
     from backend.context import ChatDeps
 
@@ -69,6 +72,7 @@ def GetAgent(
         tools=tools or [],
         capabilities=capabilities or [],
         deps_type=ChatDeps,
+        model_settings=model_settings,
     )
 
 
@@ -85,12 +89,13 @@ async def test_connection(
     try:
         model = GetProvider(api_key=api_key, base_url=base_url, model_name=model_name)
         # 使用 openai 异步客户端发送极简请求，避免 pydantic-ai Agent 的复杂依赖
+        # 注意：max_tokens 不能设太小，部分模型（如思考模型）有最低 token 限制
         client = model.client  # AsyncOpenAI 客户端
         response = await asyncio.wait_for(
             client.chat.completions.create(
                 model=model.model_name,
                 messages=[{"role": "user", "content": "Hi"}],
-                max_tokens=1,
+                max_tokens=64,
             ),
             timeout=TEST_CONNECTION_TIMEOUT,
         )

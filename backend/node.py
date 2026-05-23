@@ -292,6 +292,7 @@ async def call_model_node(ctx: LoopContext) -> NodeOutput:
     # 查询用户激活的模型配置，优先使用用户自定义配置
     agent_kwargs: dict = {"tools": tools, "capabilities": [skills_capability]}
     user_config = db.model_configs.get_active_for_user(ctx.user_uuid)
+    model_settings: dict = {}
     if user_config:
         if user_config.get("api_key"):
             agent_kwargs["api_key"] = user_config["api_key"]
@@ -301,6 +302,14 @@ async def call_model_node(ctx: LoopContext) -> NodeOutput:
             agent_kwargs["model_name"] = user_config["model_name"]
         if user_config.get("system_instruction"):
             agent_kwargs["system_instruction"] = user_config["system_instruction"]
+        # temperature 和 max_tokens 通过 model_settings 传递
+        if user_config.get("temperature") is not None:
+            model_settings["temperature"] = user_config["temperature"]
+        if user_config.get("max_tokens") is not None:
+            model_settings["max_tokens"] = user_config["max_tokens"]
+
+    if model_settings:
+        agent_kwargs["model_settings"] = model_settings
 
     agent = GetAgent(**agent_kwargs)
     ctx.response_text = ""
