@@ -623,6 +623,113 @@ export async function createDirectory(space: FileSpace, path: string): Promise<v
   })
 }
 
+// ── 用户模型配置 ────────────────────────────────────────────────────────────────
+
+export interface ModelConfigItem {
+  config_id: string
+  config_name: string
+  api_key: string
+  base_url: string
+  model_name: string
+  system_instruction: string
+  temperature: number | null
+  max_tokens: number | null
+  is_active: boolean
+  created_at: number
+  updated_at: number
+}
+
+export interface ModelConfigListResponse {
+  configs: ModelConfigItem[]
+}
+
+export interface CreateModelConfigRequest {
+  config_name: string
+  api_key?: string
+  base_url?: string
+  model_name?: string
+  system_instruction?: string
+  temperature?: number | null
+  max_tokens?: number | null
+  is_active?: boolean
+}
+
+export interface UpdateModelConfigRequest {
+  config_name?: string
+  api_key?: string
+  base_url?: string
+  model_name?: string
+  system_instruction?: string
+  temperature?: number | null
+  max_tokens?: number | null
+}
+
+export interface ActiveConfigResponse {
+  config: ModelConfigItem | null
+}
+
+export interface TestConnectionRequest {
+  api_key?: string
+  base_url?: string
+  model_name?: string
+}
+
+export interface TestConnectionResponse {
+  success: boolean
+  message: string
+  model: string | null
+}
+
+export async function listModelConfigs(): Promise<ModelConfigItem[]> {
+  const response = await request<ModelConfigListResponse>('/settings/model-configs')
+  return response.configs
+}
+
+export async function createModelConfig(payload: CreateModelConfigRequest): Promise<ModelConfigItem> {
+  return request<ModelConfigItem>('/settings/model-configs', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function getActiveModelConfig(): Promise<ActiveConfigResponse> {
+  return request<ActiveConfigResponse>('/settings/model-configs/active')
+}
+
+export async function updateModelConfig(configId: string, payload: UpdateModelConfigRequest): Promise<ModelConfigItem> {
+  return request<ModelConfigItem>(`/settings/model-configs/${encodeURIComponent(configId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function activateModelConfig(configId: string): Promise<ModelConfigItem> {
+  return request<ModelConfigItem>(`/settings/model-configs/${encodeURIComponent(configId)}/activate`, {
+    method: 'POST',
+  })
+}
+
+export async function deactivateAllModelConfigs(): Promise<void> {
+  await request<void>('/settings/model-configs/deactivate', { method: 'POST' })
+}
+
+export async function deleteModelConfig(configId: string): Promise<void> {
+  await request<void>(`/settings/model-configs/${encodeURIComponent(configId)}`, { method: 'DELETE' })
+}
+
+export async function testConnectionWithParams(payload: TestConnectionRequest): Promise<TestConnectionResponse> {
+  return request<TestConnectionResponse>('/settings/model-configs/test-connection', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function testConnectionWithConfig(configId: string): Promise<TestConnectionResponse> {
+  return request<TestConnectionResponse>(`/settings/model-configs/${encodeURIComponent(configId)}/test-connection`, {
+    method: 'POST',
+  })
+}
+
 // ── 社区技能广场 ────────────────────────────────────────────────────────────────
 
 export type CommunitySort = 'popular' | 'newest'

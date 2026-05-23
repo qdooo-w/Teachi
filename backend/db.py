@@ -718,6 +718,192 @@ class NoncesFacade(_DataBase):
         return affected
 
 
+class ModelConfigsFacade(_DataBase):
+    """用户模型配置管理。
+
+    每个用户可以配置自己的模型参数（API Key、Base URL、模型名称、系统指令、温度等），
+    也可以使用全局默认配置。用户配置优先级高于环境变量默认值。
+    """
+
+    _COLUMNS = (
+        "config_id, user_uuid, config_name, api_key, base_url, model_name, "
+        "system_instruction, temperature, max_tokens, is_active, created_at, updated_at"
+    )
+
+    def create(
+        self,
+        user_uuid: str,
+        config_name: str,
+        api_key: str = "",
+        base_url: str = "",
+        model_name: str = "",
+        system_instruction: str = "",
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        is_active: bool = False,
+    ) -> dict:
+        config_id = str(uuid.uuid4())
+        now_ts = self._now_timestamp()
+        with self._cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO user_model_configs
+                    (config_id, user_uuid, config_name, api_key, base_url, model_name,
+                     system_instruction, temperature, max_tokens, is_active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    config_id, user_uuid, config_name, api_key, base_url, model_name,
+                    system_instruction, temperature, max_tokens,
+                    1 if is_active else 0,
+                    now_ts, now_ts,
+                ),
+            )
+        config = self.get_by_id(config_id)
+        if config is None:
+            raise RuntimeError("Model config was inserted but could not be loaded.")
+        return config
+
+    def get_by_id(self, config_id: str) -> dict | None:
+        with self._cursor() as cursor:
+            cursor.execute(
+                f"SELECT {self._COLUMNS} FROM user_model_configs WHERE config_id = ?",
+                (config_id,),
+            )
+            row = cursor.fetchone()
+        return self._row_to_dict(row)
+
+    def get_for_user(self, config_id: str, user_uuid: str) -> dict | None:
+        with self._cursor() as cursor:
+            cursor.execute(
+                f"SELECT {self._COLUMNS} FROM user_model_configs WHERE config_id = ? AND user_uuid = ?",
+                (config_id, user_uuid),
+            )
+            row = cursor.fetchone()
+        return self._row_to_dict(row)
+
+    def list_by_user(self, user_uuid: str) -> list[dict]:
+        with self._cursor() as cursor:
+            cursor.execute(
+                f"SELECT {self._COLUMNS} FROM user_model_configs WHERE user_uuid = ? ORDER BY created_at ASC",
+                (user_uuid,),
+            )
+            rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+
+    def get_active_for_user(self, user_uuid: str) -> dict | None:
+        """获取用户当前激活的模型配置。如果没有激活配置则返回 None。"""
+        with self._cursor() as cursor:
+            cursor.execute(
+                f"SELECT {self._COLUMNS} FROM user_model_configs WHERE user_uuid = ? AND is_active = 1 LIMIT 1",
+                (user_uuid,),
+            )
+            row = cursor.fetchone()
+        return self._row_to_dict(row)
+
+    def update_for_user(
+        self,
+        config_id: str,
+        user_uuid: str,
+        *,
+        config_name: str | None = None,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        model_name: str | None = None,
+        system_instruction: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+    ) -> dict | None:
+        """更新模型配置，仅更新非 None 的字段。"""
+        updates: list[str] = []
+        params: list = []
+
+        if config_name is not None:
+            updates.append("config_name = ?")
+            params.append(config_name)
+        if api_key is not None:
+            updates.append("api_key = ?")
+            params.append(api_key)
+        if base_url is not None:
+            updates.append("base_url = ?")
+            params.append(base_url)
+        if model_name is not None:
+            updates.append("model_name = ?")
+            params.append(model_name)
+        if system_instruction is not None:
+            updates.append("system_instruction = ?")
+            params.append(system_instruction)
+        if temperature is not None:
+            updates.append("temperature = ?")
+            params.append(temperature)
+        if max_tokens is not None:
+            updates.append("max_tokens = ?")
+            params.append(max_tokens)
+
+        if not updates:
+            return self.get_for_user(config_id, user_uuid)
+
+        updates.append("updated_at = ?")
+        params.append(self._now_timestamp())
+        params.extend([config_id, user_uuid])
+
+        set_clause = ", ".join(updates)
+        with self._cursor() as cursor:
+            cursor.execute(
+                f"UPDATE user_model_configs SET {set_clause} WHERE config_id = ? AND user_uuid = ?",
+                params,
+            )
+            if cursor.rowcount == 0:
+                return None
+        return self.get_for_user(config_id, user_uuid)
+
+    def set_active_for_user(self, config_id: str, user_uuid: str) -> dict | None:
+        """将指定配置设为激活状态，同时取消该用户其他配置的激活状态。
+
+        使用 CASE WHEN 单条 SQL 原子完成切换，避免两条 UPDATE 之间的并发窗口。
+        若目标不存在或不属于该用户，不执行任何写入，直接返回 None。
+        """
+        # 先验证目标配置存在且属于该用户
+        target = self.get_for_user(config_id, user_uuid)
+        if target is None:
+            return None
+
+        now_ts = self._now_timestamp()
+        with self._cursor() as cursor:
+            # 单条 SQL 原子操作：属于该用户的所有配置，目标设为 1，其余设为 0
+            cursor.execute(
+                """
+                UPDATE user_model_configs
+                SET is_active = CASE WHEN config_id = ? THEN 1 ELSE 0 END,
+                    updated_at = ?
+                WHERE user_uuid = ?
+                  AND (is_active = 1 OR config_id = ?)
+                """,
+                (config_id, now_ts, user_uuid, config_id),
+            )
+        return self.get_for_user(config_id, user_uuid)
+
+    def deactivate_all_for_user(self, user_uuid: str) -> bool:
+        """取消用户所有配置的激活状态（回到全局默认配置）。"""
+        now_ts = self._now_timestamp()
+        with self._cursor() as cursor:
+            cursor.execute(
+                "UPDATE user_model_configs SET is_active = 0, updated_at = ? WHERE user_uuid = ? AND is_active = 1",
+                (now_ts, user_uuid),
+            )
+            affected = cursor.rowcount
+        return affected > 0
+
+    def delete_for_user(self, config_id: str, user_uuid: str) -> bool:
+        with self._cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM user_model_configs WHERE config_id = ? AND user_uuid = ?",
+                (config_id, user_uuid),
+            )
+            affected = cursor.rowcount
+        return affected > 0
+
+
 class CommunitySkillsFacade(_DataBase):
     """社区技能广场。每条记录指向一份归档 skill 文件夹。
 
@@ -888,6 +1074,7 @@ class DatabaseFacade:
         self.messages = MessagesFacade(self)
         self.access = AccessFacade(self)
         self.nonces = NoncesFacade(self)
+        self.model_configs = ModelConfigsFacade(self)
         self.community = CommunitySkillsFacade(self)
 
     @staticmethod
@@ -1028,6 +1215,23 @@ class DatabaseFacade:
             CREATE INDEX IF NOT EXISTS idx_community_skills_downloads ON community_skills(downloads);
             CREATE INDEX IF NOT EXISTS idx_community_skills_owner ON community_skills(owner_uuid);
             CREATE INDEX IF NOT EXISTS idx_community_skills_name ON community_skills(name);
+            CREATE TABLE IF NOT EXISTS user_model_configs (
+                config_id TEXT PRIMARY KEY,
+                user_uuid TEXT NOT NULL,
+                config_name TEXT NOT NULL,
+                api_key TEXT NOT NULL DEFAULT '',
+                base_url TEXT NOT NULL DEFAULT '',
+                model_name TEXT NOT NULL DEFAULT '',
+                system_instruction TEXT NOT NULL DEFAULT '',
+                temperature REAL,
+                max_tokens INTEGER,
+                is_active INTEGER NOT NULL DEFAULT 0,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                FOREIGN KEY (user_uuid) REFERENCES users(uuid) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_model_configs_user ON user_model_configs(user_uuid);
+            CREATE INDEX IF NOT EXISTS idx_model_configs_active ON user_model_configs(user_uuid, is_active);
             """
             cursor.executescript(schema)
             cursor.execute("PRAGMA table_info(community_skills)")
