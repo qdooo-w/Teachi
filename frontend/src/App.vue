@@ -347,8 +347,8 @@ onBeforeUnmount(() => {
               <span class="text-2xl font-bold tracking-tight">Teachi</span>
             </button>
             <button
-              class="flex h-7 items-center gap-1 rounded-full border border-[#e5e7eb] px-2.5 text-xs text-[#4b5563] transition-colors hover:border-[#1f6f5b]/40 hover:bg-[#e6f4ee] hover:text-[#1f6f5b]"
-              :class="{ 'border-[#1f6f5b]/40 bg-[#e6f4ee] text-[#1f6f5b]': $route.name === 'community' }"
+              class="flex h-7 items-center gap-1 rounded-full border border-[#e5e7eb] px-2.5 text-xs text-[#4b5563] transition-colors hover:border-[#d1d5db] hover:bg-[#f3f4f6] hover:text-[#4b5563]"
+              :class="{ 'border-[#d1d5db] bg-[#f3f4f6] text-[#4b5563]': $route.name === 'community' }"
               type="button"
               title="技能社区"
               @click="closeSidebarOnMobile(); router.push({ name: 'community' })"
