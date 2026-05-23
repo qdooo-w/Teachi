@@ -12,6 +12,7 @@ from backend.data import router as data_router
 from backend.db import DatabaseFacade
 from backend.logging import configure_logging
 from backend.loop import router as loop_router
+from backend.settings import router as settings_router
 
 
 configure_logging(LOG_LEVEL)
@@ -70,3 +71,6 @@ app.include_router(loop_router)
 
 # 社区技能广场：上传/下载/搜索/删除。
 app.include_router(community_router)
+
+# 用户模型配置：创建/更新/激活/删除。
+app.include_router(settings_router)
