@@ -42,6 +42,8 @@ LOOP_MAX_RETRIES = _loop.LOOP_MAX_RETRIES
 GetAgent = _model.GetAgent
 GetProvider = _model.GetProvider
 INSTUCTION = _model.INSTUCTION
+load_instruction = _model.load_instruction
+load_prompt = _model.load_prompt
 MODEL_BASE_URL = _model.MODEL_BASE_URL
 MODEL_NAME = _model.MODEL_NAME
 MODEL_PROVIDER_API_KEY = _model.MODEL_PROVIDER_API_KEY
@@ -77,6 +79,8 @@ __all__ = [
     "GetAgent",
     "GetProvider",
     "INSTUCTION",
+    "load_instruction",
+    "load_prompt",
     "JWT_ALGORITHM",
     "JWT_SECRET",
     "LOG_LEVEL",

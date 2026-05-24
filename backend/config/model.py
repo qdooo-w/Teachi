@@ -3,12 +3,30 @@ from __future__ import annotations
 import asyncio
 import os
 
-from pydantic_ai import Agent
+from pydantic_ai import Agent, ModelSettings
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
+from pathlib import Path
+from typing import Callable
 
-INSTUCTION = os.getenv("SYSTEM_INSTRUCTION", "")
+from backend.context import ChatDeps
+
+def load_instruction() -> str:
+    """加载系统提示词。当前从环境变量读取，后期可改为从文件加载。"""
+    return os.getenv("SYSTEM_INSTRUCTION", "")
+
+
+def load_prompt(filename: str) -> Callable[[], str]:
+    """返回一个从 backend/config/prompts/<filename> 读取提示词的函数。"""
+    def _loader() -> str:
+        path = Path(__file__).parent / "prompts" / filename
+        return path.read_text(encoding="utf-8")
+    return _loader
+
+
+# 保留常量以兼容现有引用
+INSTUCTION = load_instruction()
 
 MODEL_PROVIDER_API_KEY = os.getenv("MODEL_PROVIDER_API_KEY", "")
 MODEL_BASE_URL = os.getenv("MODEL_BASE_URL", "")
@@ -54,21 +72,18 @@ def GetAgent(
     api_key: str | None = None,
     base_url: str | None = None,
     model_name: str | None = None,
-    system_instruction: str | None = None,
-    model_settings: dict | None = None,
+    model_settings: ModelSettings | None = None,
 ) -> Agent[ChatDeps, str]:
-    """创建一个可复用的 Pydantic AI Agent。每次调用都创建新实例，注入工具和能力。
+    """创建一个可复用的 Pydantic AI Agent。每次调用都创建新实例，注入工具 and 能力。
 
-    优先使用传入的模型配置参数（api_key, base_url, model_name, system_instruction），
+    优先使用传入的模型配置参数（api_key, base_url, model_name），
     未提供时回退到环境变量默认值。
 
     model_settings 用于传递 temperature、max_tokens 等运行时参数。
     """
-    from backend.context import ChatDeps
-
     return Agent(
         GetProvider(api_key=api_key, base_url=base_url, model_name=model_name),
-        instructions=instructions or system_instruction or INSTUCTION,
+        instructions=instructions if instructions is not None else load_instruction(),
         tools=tools or [],
         capabilities=capabilities or [],
         deps_type=ChatDeps,

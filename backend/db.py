@@ -721,13 +721,13 @@ class NoncesFacade(_DataBase):
 class ModelConfigsFacade(_DataBase):
     """用户模型配置管理。
 
-    每个用户可以配置自己的模型参数（API Key、Base URL、模型名称、系统指令、温度等），
+    每个用户可以配置自己的模型参数（API Key、Base URL、模型名称、温度等），
     也可以使用全局默认配置。用户配置优先级高于环境变量默认值。
     """
 
     _COLUMNS = (
         "config_id, user_uuid, config_name, api_key, base_url, model_name, "
-        "system_instruction, temperature, max_tokens, is_active, created_at, updated_at"
+        "temperature, max_tokens, is_active, created_at, updated_at"
     )
 
     def create(
@@ -737,7 +737,6 @@ class ModelConfigsFacade(_DataBase):
         api_key: str = "",
         base_url: str = "",
         model_name: str = "",
-        system_instruction: str = "",
         temperature: float | None = None,
         max_tokens: int | None = None,
         is_active: bool = False,
@@ -749,12 +748,12 @@ class ModelConfigsFacade(_DataBase):
                 """
                 INSERT INTO user_model_configs
                     (config_id, user_uuid, config_name, api_key, base_url, model_name,
-                     system_instruction, temperature, max_tokens, is_active, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     user_instruction, temperature, max_tokens, is_active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?)
                 """,
                 (
                     config_id, user_uuid, config_name, api_key, base_url, model_name,
-                    system_instruction, temperature, max_tokens,
+                    temperature, max_tokens,
                     1 if is_active else 0,
                     now_ts, now_ts,
                 ),
@@ -810,7 +809,6 @@ class ModelConfigsFacade(_DataBase):
         api_key: str | None = None,
         base_url: str | None = None,
         model_name: str | None = None,
-        system_instruction: str | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> dict | None:
@@ -830,9 +828,6 @@ class ModelConfigsFacade(_DataBase):
         if model_name is not None:
             updates.append("model_name = ?")
             params.append(model_name)
-        if system_instruction is not None:
-            updates.append("system_instruction = ?")
-            params.append(system_instruction)
         if temperature is not None:
             updates.append("temperature = ?")
             params.append(temperature)
@@ -1222,7 +1217,7 @@ class DatabaseFacade:
                 api_key TEXT NOT NULL DEFAULT '',
                 base_url TEXT NOT NULL DEFAULT '',
                 model_name TEXT NOT NULL DEFAULT '',
-                system_instruction TEXT NOT NULL DEFAULT '',
+                user_instruction TEXT NOT NULL DEFAULT '',
                 temperature REAL,
                 max_tokens INTEGER,
                 is_active INTEGER NOT NULL DEFAULT 0,

@@ -629,7 +629,6 @@ export interface ModelConfigItem {
   api_key: string
   base_url: string
   model_name: string
-  system_instruction: string
   temperature: number | null
   max_tokens: number | null
   is_active: boolean
@@ -646,7 +645,6 @@ export interface CreateModelConfigRequest {
   api_key?: string
   base_url?: string
   model_name?: string
-  system_instruction?: string
   temperature?: number | null
   max_tokens?: number | null
   is_active?: boolean
@@ -657,7 +655,6 @@ export interface UpdateModelConfigRequest {
   api_key?: string
   base_url?: string
   model_name?: string
-  system_instruction?: string
   temperature?: number | null
   max_tokens?: number | null
 }

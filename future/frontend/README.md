@@ -15,9 +15,9 @@ frontend/
    ├─ main.ts              createApp(App).use(router).mount('#app')
    ├─ style.css            全局样式：Tailwind + KaTeX + highlight.js 主题 + 自定义 .markdown-body 作用域
    ├─ vite-env.d.ts        Vite 环境类型声明
-   ├─ App.vue              应用外壳：登录条件渲染 + 侧边栏 + header + <RouterView>
-   ├─ api.ts               后端 HTTP 客户端：鉴权、资源 CRUD、SSE、文件 API
-  ├─ config/              前端固定参数（API/技能/聊天/社区/UI 时间等）集中配置
+   ├─ App.vue              应用外壳：登录条件渲染 + 侧边栏 + header + <RouterView> + AIConfigDialog
+   ├─ api.ts               后端 HTTP 客户端：鉴权、资源 CRUD、SSE、文件 API、模型配置 API
+   ├─ config/              前端固定参数（API/技能/聊天/社区/UI 时间等）集中配置
    ├─ skills.ts            Skill 领域逻辑：frontmatter 校验、结构化读写、SKILL.md 模板
    ├─ router/
    │  └─ index.ts          路由表 + afterEach 设 document.title（静态 title）
@@ -39,7 +39,8 @@ frontend/
    │  ├─ EditPromptDialog.vue     编辑后重放：textarea + Ctrl/⌘+Enter 提交 / Esc 取消
    │  ├─ SkillChips.vue           已选技能的 chip 行（发送时随消息带走）
    │  ├─ SkillPicker.vue          @ 触发的技能下拉选择器，支持搜索与键盘导航
-   │  └─ SkillManagerDialog.vue   用户级 / 项目级技能管理对话框（结构化表单 + 原始兜底）
+   │  ├─ SkillManagerDialog.vue   用户级 / 项目级技能管理对话框（结构化表单 + 原始兜底）
+   │  └─ AIConfigDialog.vue       用户模型配置管理对话框（CRUD、连通性测试、激活控制）
    └─ markdown/
       ├─ renderer.ts       markdown-it 单例 + KaTeX + 代码块 / 链接 / mermaid 自定义渲染 + DOMPurify
       ├─ highlight.ts      highlight.js 按需注册语言
@@ -51,6 +52,7 @@ frontend/
 ```
 main.ts
  └─ App.vue (外壳)
+    ├─ components/AIConfigDialog.vue ── 用户模型配置管理（连通性测试 + 激活状态）
     ├─ composables/useAuth         ── token / bootstrapping / preparing / onTokenReady
      ├─ composables/useProjects     ── projects 列表单例（跨视图共享）
      ├─ composables/useLayout       ── sidebarOpen / isMobile
@@ -250,11 +252,19 @@ Mermaid 渲染失败降级为可见的 error 卡片而不是白屏。
 - 历史版本（`version>=1`）保留，可用版本切换按钮调出
 - 删完 `delete displayedPosByAnchor[anchor]` + `loadMessages()`
 
+### 11. AI 模型配置
+
+- 侧边栏「设置」按钮点击可打开 `AIConfigDialog`（已解除原有的禁用状态）。
+- 支持列出当前用户创建的所有自定义模型配置。
+- 支持创建、更新、删除模型配置，表单参数包括配置名称、API Key、Base URL、Model Name、系统指令、Temperature 和 Max Tokens。
+- 支持激活/取消激活模型配置，实现对当前活跃配置的原子性切换。
+- 支持一键连通性测试（Test Connection），可针对已保存的配置或临时填写的参数发送极简测试请求，验证 API 连通性。
+
 ## 尚未实现 / 有意省略
 
 - 附件、图片、语音输入
 - 多客户端会话广播、通知
-- 侧边栏「文档 / 仪表盘 / 设置」按钮仅占位、禁用点击
+- 侧边栏「文档 / 仪表盘」按钮仅占位、禁用点击（「设置」已激活用于 AI 模型配置）
 - 通用文件浏览器 UI（目前文件 API 仅被 Skill 管理使用）
 - 项目技能在对话框中增删后由 `useProjectSkills(pidRef)` composable 统一管理：ChatView 订阅 skills ref，App.vue 在对话框关闭时调 `refresh()`，无需额外事件总线
 - 「跨页刷新后保持版本切换位置」：当前 `displayedPosByAnchor` 仅活在内存里，跨页刷新会重置为 1。要做绝对定位需要后端引入稳定的 branch_id，本期未做

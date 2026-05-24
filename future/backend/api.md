@@ -4,6 +4,8 @@
 
 ## 近期变更
 
+- 2026-05-23（第二次）：状态机新增 `BUILD_MODEL` 节点（位于 `BUILD_MESSAGES` 与 `CALL_MODEL` 之间），负责构建 PydanticAI Agent 实例并存入 `ctx.agent`；构建失败立即跳转 `STREAM_ERROR`，错误码为 `MODEL_BUILD_FAILED`。系统提示词加载改为 `load_instruction()` 函数形式，当前仍从环境变量读取，后期可改为从文件加载。
+- 2026-05-23：新增用户模型配置相关 API 接口（`/settings`），允许用户自定义 API Key、Base URL、Model Name、System Instruction、Temperature 和 Max Tokens，并实现连通性测试与配置激活机制。
 - 2026-05-19：后端 API 无变更（前端参数整理不影响后端接口）。
 
 ## 基础约定
@@ -155,6 +157,41 @@ FastAPI 和后端当前可能返回两类错误体：
 | `name` | string | 已安装技能名 |
 | `skill_id` | string | 社区技能 ID |
 | `downloads` | int | 安装后的下载计数 |
+
+### ModelConfigItem
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `config_id` | string | 配置 ID |
+| `config_name` | string | 配置名称 |
+| `api_key` | string | API Key (已脱敏，仅显示末 4 位或短 key 的末 2 位；空 key 则为空字符串) |
+| `base_url` | string | API Base URL |
+| `model_name` | string | 模型名称 |
+| `temperature` | float \| null | 温度参数，默认值为 null |
+| `max_tokens` | int \| null | 最大 token 数，默认值为 null |
+| `is_active` | bool | 是否激活 |
+| `created_at` | float | 创建时间 (Unix 时间戳) |
+| `updated_at` | float | 更新时间 (Unix 时间戳) |
+
+### ModelConfigListResponse
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `configs` | `ModelConfigItem[]` | 当前用户的模型配置列表 |
+
+### ActiveConfigResponse
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `config` | `ModelConfigItem \| null` | 当前激活的配置，没有激活配置时为 null |
+
+### TestConnectionResponse
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `success` | bool | 测试连接是否成功 |
+| `message` | string | 详细结果消息（例如 "Connection successful" 或连接失败的具体错误信息） |
+| `model` | string \| null | 连接成功的模型名称 |
 
 ## 认证接口
 
@@ -947,6 +984,7 @@ SSE 数据帧格式：每帧为 `data: <JSON>`，以空行分隔。
 | `SESSION_BUSY` | 当前用户已有生成任务在运行 | 同一用户同时发起多个 `send` 或 `regenerate` |
 | `BAD_REQUEST` | 请求数据不合法 | `send` 的 `message` 为空，或 `regenerate` 缺少 `anchor_msg_id` |
 | `RESOURCE_NOT_FOUND` | 资源不存在 | `anchor_msg_id` 不存在或不属于当前用户 |
+| `MODEL_BUILD_FAILED` | Agent 构建失败 | `BUILD_MODEL` 节点无法构建 PydanticAI Agent（如 API Key 缺失、配置非法），不重试，直接终止 |
 | `MODEL_CALL_FAILED` | 模型调用失败 | 模型调用异常，最多重试 3 次后仍失败，或没有收到模型结果事件 |
 | `LOOP_CONFIG_ERROR` | 状态机配置错误 | 状态机节点未注册 |
 | `LOOP_EXECUTION_ERROR` | 节点执行异常 | 状态机节点抛出未捕获异常 |
@@ -961,6 +999,9 @@ SSE 数据帧格式：每帧为 `data: <JSON>`，以空行分隔。
 | 消息保存 | 生成结束后保存本轮新产生的 Pydantic AI 消息，并更新会话 `timestamp` |
 | 技能目录 | 模型调用时加载全局、项目、用户三个 skills 目录 |
 | 工具限制 | `allowed_tools` 被传入运行上下文，并用于过滤 `build_tools` 注入的注册表工具 |
+| 模型配置 | 模型调用时加载用户激活的模型配置（`is_active = 1`），包含 api_key, base_url, model_name, temperature, max_tokens；若未激活/未提供配置则回退到环境变量默认值 |
+| Agent 构建 | `BUILD_MODEL` 节点在每次 `send`/`regenerate` 时构建 Agent 实例并写入 `ctx.agent`；构建失败直接终止流，不重试 |
+| 系统提示词 | 通过 `load_instruction()` 函数加载，当前读取环境变量 `SYSTEM_INSTRUCTION`；用户无显式传入 `instructions` 时自动调用 |
 
 ## 文件接口
 
@@ -1143,3 +1184,190 @@ SSE 数据帧格式：每帧为 `data: <JSON>`，以空行分隔。
 - 用户的 `skills` 目录（`data/{user_uuid}/skills`）
 
 因此前端的 Skill 管理只是文件 API 上的一层惯例，不需要独立的 Skill 路由。
+
+
+## 用户配置接口
+
+### GET `/settings/model-configs`
+
+意义：列出当前用户的所有模型配置。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+请求体：无。
+
+成功返回：`200 OK`
+
+返回体：`ModelConfigListResponse`
+
+### POST `/settings/model-configs`
+
+意义：创建新的模型配置。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+请求体：
+
+| 字段 | 类型 | 必填 | 约束 | 说明 |
+|---|---|---|---|---|
+| `config_name` | string | 是 | 1-100 字符 | 配置名称 |
+| `api_key` | string | 否 | max 500 字符，默认 "" | API Key |
+| `base_url` | string | 否 | max 500 字符，默认 "" | API Base URL |
+| `model_name` | string | 否 | max 200 字符，默认 "" | 模型名称 |
+| `temperature` | float \| null | 否 | 0.0 - 2.0，默认 null | 温度参数 |
+| `max_tokens` | int \| null | 否 | 1 - 128000，默认 null | 最大 token 数 |
+| `is_active` | bool | 否 | 默认 false | 是否激活 |
+
+成功返回：`201 Created`
+
+返回体：`ModelConfigItem`
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 422 | 参数校验错误 | 请求字段格式或值越界 |
+
+### GET `/settings/model-configs/active`
+
+意义：获取当前用户激活的模型配置。没有激活配置时返回 `config=None`。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+请求体：无。
+
+成功返回：`200 OK`
+
+返回体：`ActiveConfigResponse`
+
+### PATCH `/settings/model-configs/{config_id}`
+
+意义：更新指定的模型配置（仅更新请求中提供的非空字段）。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `config_id` | string | 是 | 模型配置 ID |
+
+请求体：
+
+| 字段 | 类型 | 必填 | 约束 | 说明 |
+|---|---|---|---|---|
+| `config_name` | string \| null | 否 | 1-100 字符，默认 null | 配置名称 |
+| `api_key` | string \| null | 否 | max 500 字符，默认 null | API Key |
+| `base_url` | string \| null | 否 | max 500 字符，默认 null | API Base URL |
+| `model_name` | string \| null | 否 | max 200 字符，默认 null | 模型名称 |
+| `temperature` | float \| null | 否 | 0.0 - 2.0，默认 null | 温度参数 |
+| `max_tokens` | int \| null | 否 | 1 - 128000，默认 null | 最大 token 数 |
+
+成功返回：`200 OK`
+
+返回体：`ModelConfigItem`
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 404 | `{ code: "RESOURCE_NOT_FOUND", message: "Model config not found" }` | 模型配置不存在或不属于当前用户 |
+| 422 | 参数校验错误 | 请求字段格式或值越界 |
+
+### POST `/settings/model-configs/{config_id}/activate`
+
+意义：激活指定的模型配置（同时取消当前用户其他配置的激活状态）。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `config_id` | string | 是 | 模型配置 ID |
+
+请求体：无。
+
+成功返回：`200 OK`
+
+返回体：`ModelConfigItem`
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 404 | `{ code: "RESOURCE_NOT_FOUND", message: "Model config not found" }` | 模型配置不存在或不属于当前用户 |
+
+### POST `/settings/model-configs/deactivate`
+
+意义：取消所有模型配置的激活状态，回到全局默认配置。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+请求体：无。
+
+成功返回：`204 No Content`，无返回体。
+
+### DELETE `/settings/model-configs/{config_id}`
+
+意义：删除指定的模型配置。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `config_id` | string | 是 | 模型配置 ID |
+
+请求体：无。
+
+成功返回：`204 No Content`，无返回体。
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 404 | `{ code: "RESOURCE_NOT_FOUND", message: "Model config not found" }` | 模型配置不存在或不属于当前用户 |
+
+### POST `/settings/model-configs/test-connection`
+
+意义：用传入的原始参数测试 API 连通性（保存前预检）。传入参数优先，未提供字段回退到环境变量默认值。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+请求体：
+
+| 字段 | 类型 | 必填 | 约束 | 说明 |
+|---|---|---|---|---|
+| `api_key` | string | 否 | max 500 字符，默认 "" | API Key |
+| `base_url` | string | 否 | max 500 字符，默认 "" | API Base URL |
+| `model_name` | string | 否 | max 200 字符，默认 "" | 模型名称 |
+
+成功返回：`200 OK`
+
+返回体：`TestConnectionResponse`
+
+### POST `/settings/model-configs/{config_id}/test-connection`
+
+意义：用已保存的配置测试 API 连通性。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `config_id` | string | 是 | 模型配置 ID |
+
+请求体：无。
+
+成功返回：`200 OK`
+
+返回体：`TestConnectionResponse`
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 404 | `{ code: "RESOURCE_NOT_FOUND", message: "Model config not found" }` | 模型配置不存在或不属于当前用户 |

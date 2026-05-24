@@ -92,9 +92,10 @@ _graph.set_entry(ActionKind.STOP, NodeName.VALIDATE)
 _graph.add_edge(NodeName.VALIDATE, NodeName.LOAD_HISTORY, condition=_action_is("send", "regenerate"))
 _graph.add_edge(NodeName.VALIDATE, NodeName.STOP, condition=_action_is("stop"))
 
-# 线形流水 (VALIDATE 通过后 → LOAD → BUILD → CALL)
+# 线形流水 (VALIDATE 通过后 → LOAD → BUILD → BUILD_MODEL → CALL)
 _graph.add_edge(NodeName.LOAD_HISTORY, NodeName.BUILD_MESSAGES)
-_graph.add_edge(NodeName.BUILD_MESSAGES, NodeName.CALL_MODEL)
+_graph.add_edge(NodeName.BUILD_MESSAGES, NodeName.BUILD_MODEL)
+_graph.add_edge(NodeName.BUILD_MODEL, NodeName.CALL_MODEL)
 
 # CALL_MODEL 三向分支 (按优先级排列: 正常 / 重试 / 失败)
 _graph.add_edge(NodeName.CALL_MODEL, NodeName.SAVE, condition=_no_error)

@@ -41,7 +41,6 @@ const form = ref({
   api_key: '',
   base_url: '',
   model_name: '',
-  system_instruction: '',
   temperature: null as number | null,
   max_tokens: null as number | null,
 })
@@ -83,7 +82,6 @@ function startCreate(): void {
     api_key: '',
     base_url: '',
     model_name: '',
-    system_instruction: '',
     temperature: null,
     max_tokens: null,
   }
@@ -101,7 +99,6 @@ function startEdit(config: ModelConfigItem): void {
     api_key: config.api_key,
     base_url: config.base_url,
     model_name: config.model_name,
-    system_instruction: config.system_instruction,
     temperature: config.temperature,
     max_tokens: config.max_tokens,
   }
@@ -130,7 +127,6 @@ async function save(): Promise<void> {
         api_key: form.value.api_key,
         base_url: form.value.base_url,
         model_name: form.value.model_name,
-        system_instruction: form.value.system_instruction,
         temperature: form.value.temperature,
         max_tokens: form.value.max_tokens,
         is_active: false,
@@ -141,7 +137,6 @@ async function save(): Promise<void> {
         config_name: form.value.config_name.trim(),
         base_url: form.value.base_url,
         model_name: form.value.model_name,
-        system_instruction: form.value.system_instruction,
         temperature: form.value.temperature,
         max_tokens: form.value.max_tokens,
       }
@@ -505,18 +500,6 @@ onBeforeUnmount(() => {
                 maxlength="200"
                 autocomplete="off"
               />
-            </label>
-
-            <!-- 系统指令 -->
-            <label class="block">
-              <span class="mb-1 block text-sm font-medium text-[#374151]">系统指令</span>
-              <textarea
-                v-model="form.system_instruction"
-                class="w-full rounded-md border border-[#d1d5db] bg-white px-3 py-2 text-sm outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
-                rows="3"
-                placeholder="自定义系统提示词（可选）"
-                maxlength="5000"
-              ></textarea>
             </label>
 
             <!-- 高级选项折叠 -->
