@@ -38,7 +38,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from backend.config import DATABASE_PATH, GetAgent, SKILL_STORAGE_DIR
+from backend.config import DATABASE_PATH, GetAgent, SKILL_STORAGE_DIR, load_prompt
 from pydantic_ai_skills import SkillsCapability
 from backend.context import (
     ActionKind,
@@ -242,27 +242,12 @@ async def build_messages_node(ctx: LoopContext) -> NodeOutput:
     return NodeOutput()
 
 
-@register_node(NodeName.CALL_MODEL)
-async def call_model_node(ctx: LoopContext) -> NodeOutput:
-    """调用 PydanticAI Agent，流式消费事件并推送 SSE。
+@register_node(NodeName.BUILD_MODEL)
+async def build_model_node(ctx: LoopContext) -> NodeOutput:
+    """构建 PydanticAI Agent 实例并存入 ctx.agent。
 
-    PydanticAI 内部自动处理工具调用循环（Option A 黑盒模式），
-    图表层只看最终结果（成功 → SAVE / 失败 (可重试) → CALL_MODEL / 失败 (耗尽) → STREAM_ERROR）。
-
-    SEND: 以 user_input 为 user_prompt，历史为 message_history。
-    REGENERATE: 历史最后一条为用户消息，不传额外 user_prompt，PydanticAI 从历史继续。
+    失败时直接跳转 STREAM_ERROR，不重试。
     """
-    deps = ChatDeps(
-        user_uuid=ctx.user_uuid,
-        pid=ctx.pid,
-        sid=ctx.sid,
-        allowed_tools=ctx.allowed_tools,
-        tool_mode=ToolMode.ON,
-    )
-
-    # 构建技能列表：三个目录分别加载，给每个 Skill 的 name 打 scope 前缀，
-    # 让模型在 <skill>/load_skill 层面就能区分归属（否则 pydantic-ai-skills
-    # 只会把三个目录平铺展示，模型无法分辨同名技能属于哪一层）。
     from backend.file import UserFile, ProjectFile
     from backend.tool import build_tools
     from dataclasses import replace
@@ -285,11 +270,8 @@ async def call_model_node(ctx: LoopContext) -> NodeOutput:
             scoped_skills.append(replace(skill, name=f"{prefix}{skill.name}"))
 
     skills_capability = SkillsCapability(skills=scoped_skills, validate=True)
-
-    # 注入注册表中的工具（含 skill 文件读写工具），按 ctx.allowed_tools 过滤
     tools = build_tools(allowed=ctx.allowed_tools)
 
-    # 查询用户激活的模型配置，优先使用用户自定义配置
     agent_kwargs: dict = {"tools": tools, "capabilities": [skills_capability]}
     user_config = db.model_configs.get_active_for_user(ctx.user_uuid)
     model_settings: dict = {}
@@ -300,9 +282,6 @@ async def call_model_node(ctx: LoopContext) -> NodeOutput:
             agent_kwargs["base_url"] = user_config["base_url"]
         if user_config.get("model_name"):
             agent_kwargs["model_name"] = user_config["model_name"]
-        if user_config.get("system_instruction"):
-            agent_kwargs["system_instruction"] = user_config["system_instruction"]
-        # temperature 和 max_tokens 通过 model_settings 传递
         if user_config.get("temperature") is not None:
             model_settings["temperature"] = user_config["temperature"]
         if user_config.get("max_tokens") is not None:
@@ -311,7 +290,42 @@ async def call_model_node(ctx: LoopContext) -> NodeOutput:
     if model_settings:
         agent_kwargs["model_settings"] = model_settings
 
-    agent = GetAgent(**agent_kwargs)
+    # Set instructions to empty string to bypass env default in GetAgent,
+    # then register file-based prompt using the decorator/method format.
+    agent_kwargs["instructions"] = ""
+
+    try:
+        ctx.agent = GetAgent(**agent_kwargs)
+        ctx.agent.instructions(load_prompt("init.md"))
+    except Exception as exc:
+        ctx.error = str(exc)
+        ctx.error_code = "MODEL_BUILD_FAILED"
+        logger.exception("model_build_failed user=%s sid=%s", ctx.user_uuid, ctx.sid)
+        return NodeOutput(transition=NodeName.STREAM_ERROR)
+
+    return NodeOutput()
+
+
+@register_node(NodeName.CALL_MODEL)
+async def call_model_node(ctx: LoopContext) -> NodeOutput:
+    """调用 PydanticAI Agent，流式消费事件并推送 SSE。
+
+    Agent 已由 BUILD_MODEL 节点构建并存入 ctx.agent。
+    PydanticAI 内部自动处理工具调用循环（Option A 黑盒模式），
+    图表层只看最终结果（成功 → SAVE / 失败 (可重试) → CALL_MODEL / 失败 (耗尽) → STREAM_ERROR）。
+
+    SEND: 以 user_input 为 user_prompt，历史为 message_history。
+    REGENERATE: 历史最后一条为用户消息，不传额外 user_prompt，PydanticAI 从历史继续。
+    """
+    deps = ChatDeps(
+        user_uuid=ctx.user_uuid,
+        pid=ctx.pid,
+        sid=ctx.sid,
+        allowed_tools=ctx.allowed_tools,
+        tool_mode=ToolMode.ON,
+    )
+
+    agent = ctx.agent
     ctx.response_text = ""
     # 新一轮调用开始，清除上一轮的临时错误状态
     ctx.error = None

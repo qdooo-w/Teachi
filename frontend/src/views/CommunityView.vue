@@ -13,6 +13,7 @@ import {
   getCurrentUserId,
   getErrorMessage,
 } from '../api'
+import { COMMUNITY_MAX_UPLOAD_BYTES, COMMUNITY_PAGE_LIMIT } from '../config'
 import { useProjects } from '../composables/useProjects'
 
 const router = useRouter()
@@ -27,7 +28,7 @@ const errorMsg = ref('')
 
 const keyword = ref('')
 const sort = ref<CommunitySort>('popular')
-const limit = 20
+const limit = COMMUNITY_PAGE_LIMIT
 const offset = ref(0)
 
 const selected = ref<CommunitySkillDetail | null>(null)
@@ -42,7 +43,7 @@ const uploading = ref(false)
 const uploadMsg = ref('')
 const uploadMsgKind = ref<'success' | 'error'>('success')
 
-const MAX_UPLOAD_ZIP_BYTES = 40 * 1024 * 1024
+const MAX_UPLOAD_ZIP_BYTES = COMMUNITY_MAX_UPLOAD_BYTES
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / limit)))
 const currentPage = computed(() => Math.floor(offset.value / limit) + 1)
@@ -239,7 +240,7 @@ onMounted(() => {
           @change="handleZipUpload"
         />
         <button
-          class="h-9 rounded-md border border-[#d1d5db] px-3 text-sm text-[#374151] transition hover:border-[#1f6f5b]/50 hover:bg-[#f9fafb] disabled:cursor-not-allowed disabled:opacity-50"
+          class="h-9 rounded-md border border-[#d1d5db] px-3 text-sm text-[#374151] transition hover:border-[#d1d5db] hover:bg-[#f3f4f6] disabled:cursor-not-allowed disabled:opacity-50"
           :disabled="uploading"
           type="button"
           title="上传技能 zip"
@@ -249,7 +250,7 @@ onMounted(() => {
         </button>
         <input
           v-model="keyword"
-          class="h-9 w-64 rounded-md border border-[#d1d5db] px-3 text-sm outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
+          class="h-9 w-64 rounded-md border border-[#d1d5db] px-3 text-sm outline-none transition focus:border-[#9ca3af] focus:ring-2 focus:ring-[#9ca3af]/20"
           placeholder="搜索技能名或描述"
           type="search"
           @keyup.enter="submitSearch"
@@ -270,7 +271,7 @@ onMounted(() => {
         <button
           :class="[
             'rounded-md px-3 py-1 text-xs transition',
-            sort === 'popular' ? 'bg-[#e6f4ee] font-medium text-[#1f6f5b]' : 'text-[#6b7280] hover:bg-[#f3f4f6]',
+            sort === 'popular' ? 'bg-[#f3f4f6] font-medium text-[#4b5563]' : 'text-[#6b7280] hover:bg-[#f3f4f6]',
           ]"
           type="button"
           @click="changeSort('popular')"
@@ -280,7 +281,7 @@ onMounted(() => {
         <button
           :class="[
             'rounded-md px-3 py-1 text-xs transition',
-            sort === 'newest' ? 'bg-[#e6f4ee] font-medium text-[#1f6f5b]' : 'text-[#6b7280] hover:bg-[#f3f4f6]',
+            sort === 'newest' ? 'bg-[#f3f4f6] font-medium text-[#4b5563]' : 'text-[#6b7280] hover:bg-[#f3f4f6]',
           ]"
           type="button"
           @click="changeSort('newest')"
@@ -319,7 +320,7 @@ onMounted(() => {
         <button
           v-for="s in skills"
           :key="s.id"
-          class="flex flex-col gap-2 rounded-lg border border-[#e5e7eb] bg-white p-4 text-left transition hover:border-[#1f6f5b]/40 hover:shadow-sm"
+          class="flex flex-col gap-2 rounded-lg border border-[#e5e7eb] bg-white p-4 text-left transition hover:border-[#d1d5db] hover:shadow-sm"
           type="button"
           @click="openDetail(s.id)"
         >
@@ -428,7 +429,7 @@ onMounted(() => {
               <div class="flex items-center gap-2">
                 <select
                   v-model="selectedProjectId"
-                  class="h-8 rounded-md border border-[#d1d5db] bg-white px-2 text-sm text-[#374151] outline-none focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
+                  class="h-8 rounded-md border border-[#d1d5db] bg-white px-2 text-sm text-[#374151] outline-none focus:border-[#9ca3af] focus:ring-2 focus:ring-[#9ca3af]/20"
                 >
                   <option value="">选择项目</option>
                   <option v-for="project in projects" :key="project.pid" :value="project.pid">
@@ -436,7 +437,7 @@ onMounted(() => {
                   </option>
                 </select>
                 <button
-                  class="rounded-md border border-[#1f6f5b] px-3 py-1.5 text-sm text-[#1f6f5b] transition hover:bg-[#e6f4ee] disabled:cursor-not-allowed disabled:opacity-50"
+                  class="rounded-md border border-[#d1d5db] px-3 py-1.5 text-sm text-[#4b5563] transition hover:bg-[#f3f4f6] disabled:cursor-not-allowed disabled:opacity-50"
                   :disabled="installingProject || !selectedProjectId"
                   type="button"
                   @click="doInstallProject"
@@ -444,7 +445,7 @@ onMounted(() => {
                   {{ installingProject ? '安装中...' : '安装到项目' }}
                 </button>
                 <button
-                  class="rounded-md bg-[#1f6f5b] px-4 py-1.5 text-sm text-white transition hover:bg-[#1a5b4a] disabled:cursor-not-allowed disabled:bg-[#9ca3af]"
+                  class="rounded-md bg-[#e5e7eb] px-4 py-1.5 text-sm text-[#374151] transition hover:bg-[#d1d5db] disabled:cursor-not-allowed disabled:bg-[#e5e7eb] disabled:text-[#9ca3af]"
                   :disabled="installing"
                   type="button"
                   @click="doInstall"

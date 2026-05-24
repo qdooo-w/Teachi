@@ -33,6 +33,7 @@ class NodeName(StrEnum):
     VALIDATE = "validate"
     LOAD_HISTORY = "load_history"
     BUILD_MESSAGES = "build_messages"
+    BUILD_MODEL = "build_model"
     CALL_MODEL = "call_model"
     SAVE = "save"
     STREAM_COMPLETE = "stream_complete"
@@ -68,6 +69,9 @@ class LoopContext:
 
     retries: int = 0
     tool_rounds: int = 0
+
+    # BUILD_MODEL 节点构建后存入，CALL_MODEL 节点直接使用
+    agent: Any = field(default=None, repr=False)
 
     response_text: str = ""
     response_msg_id: str | None = None

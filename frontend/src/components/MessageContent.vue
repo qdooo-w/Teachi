@@ -3,6 +3,7 @@ import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
 
 import { renderMarkdown } from '../markdown/renderer'
 import { renderMermaidInElement } from '../markdown/mermaid'
+import { CHAT_COPY_RESET_MS } from '../config'
 
 const props = defineProps<{
   content: string
@@ -42,7 +43,7 @@ async function handleCopyClick(btn: HTMLButtonElement): Promise<void> {
   copyResetTimer = window.setTimeout(() => {
     btn.textContent = originalLabel
     btn.disabled = false
-  }, 1500)
+  }, CHAT_COPY_RESET_MS)
 }
 
 async function copyText(text: string): Promise<boolean> {

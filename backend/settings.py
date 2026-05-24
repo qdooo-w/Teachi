@@ -34,7 +34,6 @@ class ModelConfigItem(BaseModel):
     api_key: str  # 返回时脱敏，仅显示末4位
     base_url: str
     model_name: str
-    system_instruction: str
     temperature: float | None = None
     max_tokens: int | None = None
     is_active: bool
@@ -55,7 +54,6 @@ class CreateModelConfigRequest(BaseModel):
     api_key: str = Field(default="", max_length=500, description="API Key")
     base_url: str = Field(default="", max_length=500, description="API Base URL")
     model_name: str = Field(default="", max_length=200, description="模型名称")
-    system_instruction: str = Field(default="", max_length=5000, description="系统指令")
     temperature: float | None = Field(default=None, ge=0.0, le=2.0, description="温度参数")
     max_tokens: int | None = Field(default=None, ge=1, le=128000, description="最大 token 数")
     is_active: bool = Field(default=False, description="是否激活")
@@ -68,7 +66,6 @@ class UpdateModelConfigRequest(BaseModel):
     api_key: str | None = Field(default=None, max_length=500, description="API Key")
     base_url: str | None = Field(default=None, max_length=500, description="API Base URL")
     model_name: str | None = Field(default=None, max_length=200, description="模型名称")
-    system_instruction: str | None = Field(default=None, max_length=5000, description="系统指令")
     temperature: float | None = Field(default=None, ge=0.0, le=2.0, description="温度参数")
     max_tokens: int | None = Field(default=None, ge=1, le=128000, description="最大 token 数")
 
@@ -119,7 +116,6 @@ def _row_to_item(row: dict) -> ModelConfigItem:
         api_key=_mask_api_key(row["api_key"]),
         base_url=row["base_url"],
         model_name=row["model_name"],
-        system_instruction=row["system_instruction"],
         temperature=row["temperature"],
         max_tokens=row["max_tokens"],
         is_active=bool(row["is_active"]),
@@ -158,7 +154,6 @@ def create_model_config(
         api_key=payload.api_key,
         base_url=payload.base_url,
         model_name=payload.model_name,
-        system_instruction=payload.system_instruction,
         temperature=payload.temperature,
         max_tokens=payload.max_tokens,
         is_active=payload.is_active,
@@ -202,7 +197,6 @@ def update_model_config(
         api_key=payload.api_key,
         base_url=payload.base_url,
         model_name=payload.model_name,
-        system_instruction=payload.system_instruction,
         temperature=payload.temperature,
         max_tokens=payload.max_tokens,
     )

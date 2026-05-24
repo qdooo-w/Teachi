@@ -1,6 +1,4 @@
-const TOKEN_STORAGE_KEY = 'teachi.access_token'
-
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')
+import { API_BASE_URL, DEFAULT_PROJECT_NAME, DEFAULT_SESSION_NAME, TOKEN_STORAGE_KEY } from './config'
 
 export interface UserOut {
   uuid: string
@@ -285,9 +283,9 @@ export async function deleteSession(sid: string): Promise<void> {
 
 export async function ensureChatWorkspace(userId: string): Promise<ChatWorkspace> {
   const projects = await listProjects(userId)
-  const project = projects[0] ?? await createProject(userId, '默认学习项目')
+  const project = projects[0] ?? await createProject(userId, DEFAULT_PROJECT_NAME)
   const sessions = await listSessions(project.pid)
-  const session = sessions[0] ?? await createSession(project.pid, '新的对话')
+  const session = sessions[0] ?? await createSession(project.pid, DEFAULT_SESSION_NAME)
   return { project, session }
 }
 
@@ -631,7 +629,6 @@ export interface ModelConfigItem {
   api_key: string
   base_url: string
   model_name: string
-  system_instruction: string
   temperature: number | null
   max_tokens: number | null
   is_active: boolean
@@ -648,7 +645,6 @@ export interface CreateModelConfigRequest {
   api_key?: string
   base_url?: string
   model_name?: string
-  system_instruction?: string
   temperature?: number | null
   max_tokens?: number | null
   is_active?: boolean
@@ -659,7 +655,6 @@ export interface UpdateModelConfigRequest {
   api_key?: string
   base_url?: string
   model_name?: string
-  system_instruction?: string
   temperature?: number | null
   max_tokens?: number | null
 }

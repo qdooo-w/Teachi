@@ -1,0 +1,1 @@
+export const SUBJECT_DESC_COLLAPSE_LIMIT = 150

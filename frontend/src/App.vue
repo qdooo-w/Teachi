@@ -20,6 +20,7 @@ import { useAuth } from './composables/useAuth'
 import { useProjects } from './composables/useProjects'
 import { useLayout } from './composables/useLayout'
 import { useProjectSkills } from './composables/useProjectSkills'
+import { PREVIEW_PROJECT_LIMIT } from './config'
 
 // ── 认证（状态 / 行为均来自 composable，模板继续使用同名 ref） ───────────────
 const {
@@ -46,7 +47,7 @@ const route = useRoute()
 const { projects, loadProjects, resetProjects, upsertProject, removeProject } = useProjects()
 const { sidebarOpen, isMobile, handleResize, closeSidebarOnMobile } = useLayout()
 
-const previewProjects = computed(() => projects.value.slice(0, 10))
+const previewProjects = computed(() => projects.value.slice(0, PREVIEW_PROJECT_LIMIT))
 
 const subjectProject = computed(() => {
   const pid = route.params.pid as string | undefined
@@ -349,8 +350,8 @@ onBeforeUnmount(() => {
               <span class="text-2xl font-bold tracking-tight">Teachi</span>
             </button>
             <button
-              class="flex h-7 items-center gap-1 rounded-full border border-[#e5e7eb] px-2.5 text-xs text-[#4b5563] transition-colors hover:border-[#1f6f5b]/40 hover:bg-[#e6f4ee] hover:text-[#1f6f5b]"
-              :class="{ 'border-[#1f6f5b]/40 bg-[#e6f4ee] text-[#1f6f5b]': $route.name === 'community' }"
+              class="flex h-7 items-center gap-1 rounded-full border border-[#e5e7eb] px-2.5 text-xs text-[#4b5563] transition-colors hover:border-[#d1d5db] hover:bg-[#f3f4f6] hover:text-[#4b5563]"
+              :class="{ 'border-[#d1d5db] bg-[#f3f4f6] text-[#4b5563]': $route.name === 'community' }"
               type="button"
               title="技能社区"
               @click="closeSidebarOnMobile(); router.push({ name: 'community' })"

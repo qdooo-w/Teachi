@@ -25,6 +25,15 @@ import { type SkillMeta } from '../skills'
 import { useAuth } from '../composables/useAuth'
 import { useProjects } from '../composables/useProjects'
 import { useProjectSkills } from '../composables/useProjectSkills'
+import {
+  CHAT_COMPOSER_MAX_HEIGHT,
+  CHAT_COPY_RESET_MS,
+  CHAT_DRAWER_ENTER_MAX_HEIGHT_MS,
+  CHAT_DRAWER_ENTER_OPACITY_MS,
+  CHAT_DRAWER_LEAVE_MAX_HEIGHT_MS,
+  CHAT_DRAWER_LEAVE_OPACITY_MS,
+  CHAT_SCROLL_BOTTOM_THRESHOLD,
+} from '../config'
 
 const route = useRoute()
 const router = useRouter()
@@ -99,8 +108,7 @@ function scrollToBottom(force = false): void {
 function isChatAtBottom(): boolean {
   const container = chatContainer.value
   if (!container) return true
-  const threshold = 32
-  return container.scrollHeight - container.scrollTop - container.clientHeight <= threshold
+  return container.scrollHeight - container.scrollTop - container.clientHeight <= CHAT_SCROLL_BOTTOM_THRESHOLD
 }
 
 function handleChatScroll(): void {
@@ -521,7 +529,7 @@ async function copyMessage(id: string, content: string): Promise<void> {
   if (ok) {
     copiedId.value = id
     if (copyResetTimer) window.clearTimeout(copyResetTimer)
-    copyResetTimer = window.setTimeout(() => { copiedId.value = null }, 1500)
+    copyResetTimer = window.setTimeout(() => { copiedId.value = null }, CHAT_COPY_RESET_MS)
   }
 }
 
@@ -529,7 +537,7 @@ function autosizeComposer(): void {
   const el = composerTextarea.value
   if (!el) return
   el.style.height = 'auto'
-  const next = Math.min(el.scrollHeight, 240)
+  const next = Math.min(el.scrollHeight, CHAT_COMPOSER_MAX_HEIGHT)
   el.style.height = `${next}px`
 }
 
@@ -543,7 +551,7 @@ function onDrawerBeforeEnter(el: Element): void {
 function onDrawerEnter(el: Element, done: () => void): void {
   const target = el as HTMLElement
   requestAnimationFrame(() => {
-    target.style.transition = 'max-height 220ms ease, opacity 180ms ease'
+    target.style.transition = `max-height ${CHAT_DRAWER_ENTER_MAX_HEIGHT_MS}ms ease, opacity ${CHAT_DRAWER_ENTER_OPACITY_MS}ms ease`
     target.style.maxHeight = `${target.scrollHeight}px`
     target.style.opacity = '1'
     const handler = () => { target.removeEventListener('transitionend', handler); done() }
@@ -567,7 +575,7 @@ function onDrawerBeforeLeave(el: Element): void {
 function onDrawerLeave(el: Element, done: () => void): void {
   const target = el as HTMLElement
   requestAnimationFrame(() => {
-    target.style.transition = 'max-height 200ms ease, opacity 160ms ease'
+    target.style.transition = `max-height ${CHAT_DRAWER_LEAVE_MAX_HEIGHT_MS}ms ease, opacity ${CHAT_DRAWER_LEAVE_OPACITY_MS}ms ease`
     target.style.maxHeight = '0'
     target.style.opacity = '0'
     const handler = () => { target.removeEventListener('transitionend', handler); done() }

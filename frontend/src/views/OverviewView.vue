@@ -15,6 +15,17 @@ import {
 import { useProjects } from '../composables/useProjects'
 import { useLayout } from '../composables/useLayout'
 import { writeSkill, PROJECT_DESC_SKILL, buildProjectDescSkill } from '../skills'
+import {
+  OVERVIEW_COLLAPSE_DELAY_MS,
+  OVERVIEW_CONTENT_PAD_EXPANDED,
+  OVERVIEW_EXPAND_DELAY_MS,
+  OVERVIEW_EXPAND_THRESHOLD,
+  OVERVIEW_OVERSCROLL_MAX_EXTRA,
+  OVERVIEW_OVERSCROLL_MULTIPLIER,
+  OVERVIEW_OVERSCROLL_RESET_MS,
+  OVERVIEW_POST_COLLAPSE_DELAY_MS,
+  OVERVIEW_SCROLL_END_EPSILON,
+} from '../config'
 
 const router = useRouter()
 const { projects, loadProjects, prependProject, upsertProject, removeProject } = useProjects()
@@ -30,7 +41,7 @@ const contentPaddingTop = ref(0)
 
 // 过量滚动检测：滚动到底后继续滚动触发展开
 const overscrollX = ref(0)
-const EXPAND_THRESHOLD = 150
+const EXPAND_THRESHOLD = OVERVIEW_EXPAND_THRESHOLD
 let overscrollResetTimer: ReturnType<typeof setTimeout> | null = null
 
 function recalcPadding(): void {
@@ -50,13 +61,16 @@ function onCardWheel(e: WheelEvent): void {
   if (!cardScroller.value) return
   e.preventDefault()
   const el = cardScroller.value
-  const atEnd = el.scrollLeft + el.clientWidth >= el.scrollWidth - 2
+  const atEnd = el.scrollLeft + el.clientWidth >= el.scrollWidth - OVERVIEW_SCROLL_END_EPSILON
 
   // 右滑过量：滚动到底后继续向右
   if (atEnd && e.deltaY > 0) {
-    overscrollX.value = Math.min(overscrollX.value + e.deltaY * 0.4, EXPAND_THRESHOLD + 40)
+    overscrollX.value = Math.min(
+      overscrollX.value + e.deltaY * OVERVIEW_OVERSCROLL_MULTIPLIER,
+      EXPAND_THRESHOLD + OVERVIEW_OVERSCROLL_MAX_EXTRA,
+    )
     clearTimeout(overscrollResetTimer!)
-    overscrollResetTimer = setTimeout(() => { overscrollX.value = 0 }, 180)
+    overscrollResetTimer = setTimeout(() => { overscrollX.value = 0 }, OVERVIEW_OVERSCROLL_RESET_MS)
     if (overscrollX.value >= EXPAND_THRESHOLD) {
       overscrollX.value = 0
       expand()
@@ -72,18 +86,18 @@ function onCardWheel(e: WheelEvent): void {
 // 展开：标题先淡出，然后切换视图，列表进场完毕后标题以小字淡入
 async function expand(): Promise<void> {
   titleVisible.value = false
-  contentPaddingTop.value = 40  // 展开后靠上，对应 pt-10
-  await new Promise<void>((r) => setTimeout(r, 180))
+  contentPaddingTop.value = OVERVIEW_CONTENT_PAD_EXPANDED  // 展开后靠上，对应 pt-10
+  await new Promise<void>((r) => setTimeout(r, OVERVIEW_EXPAND_DELAY_MS))
   expanded.value = true
 }
 
 // 收起：标题先淡出，切换回卡片，再淡入大字
 async function collapse(): Promise<void> {
   titleVisible.value = false
-  await new Promise<void>((r) => setTimeout(r, 180))
+  await new Promise<void>((r) => setTimeout(r, OVERVIEW_COLLAPSE_DELAY_MS))
   expanded.value = false
   recalcPadding()
-  await new Promise<void>((r) => setTimeout(r, 50))
+  await new Promise<void>((r) => setTimeout(r, OVERVIEW_POST_COLLAPSE_DELAY_MS))
   titleVisible.value = true
 }
 
