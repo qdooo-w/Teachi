@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import {
   type CommunitySkillSummary,
   type CommunitySkillDetail,
@@ -24,7 +24,9 @@ const total = ref(0)
 const loading = ref(false)
 const errorMsg = ref('')
 
-const keyword = ref('')
+import { useCommunity } from '../composables/useCommunity'
+
+const { searchQuery: keyword, triggerSearch, showUploadModal } = useCommunity()
 const sort = ref<CommunitySort>('popular')
 const limit = COMMUNITY_PAGE_LIMIT
 const offset = ref(0)
@@ -48,7 +50,7 @@ interface UploadQueueItem {
   error?: string
 }
 
-const showUploadModal = ref(false)
+// showUploadModal is imported from useCommunity
 const uploadQueue = ref<UploadQueueItem[]>([])
 const isDragOver = ref(false)
 const isBatchUploading = ref(false)
@@ -285,6 +287,10 @@ function gotoPage(page: number): void {
   void load()
 }
 
+watch(triggerSearch, () => {
+  submitSearch()
+})
+
 onMounted(() => {
   document.title = '社区 · Teachi'
   void load()
@@ -293,12 +299,10 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="flex h-full min-h-0 flex-col bg-[#f9fafb]">
-    <header class="flex flex-shrink-0 items-center justify-between bg-white px-6 py-3">
-      <div class="flex items-center gap-3">
-        <h1 class="text-lg font-semibold text-[#1f2937]">技能社区</h1>
-      </div>
-      <div class="flex items-center gap-2">
+  <div class="flex h-full min-h-0 flex-col bg-transparent">
+    <!-- 搜索及上传控制栏 -->
+    <div class="relative flex h-14 flex-shrink-0 items-center justify-between px-6 bg-transparent">
+      <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center gap-3">
         <input
           ref="uploadInput"
           class="hidden"
@@ -307,56 +311,65 @@ onMounted(() => {
           multiple
           @change="handleZipUpload"
         />
+        <!-- 上传 ZIP 圆形按钮 -->
         <button
-          class="h-9 rounded-lg border border-[#d1d5db] px-3 text-sm text-[#374151] transition hover:border-[#d1d5db] hover:bg-[#f3f4f6]"
+          class="flex h-9 w-9 items-center justify-center rounded-full hover:bg-[#e5e7eb] text-[#4b5563] transition-colors"
           type="button"
-          title="批量上传技能 ZIP"
+          title="上传 ZIP"
           @click="showUploadModal = true"
         >
-          上传 ZIP
+          <svg class="h-5 w-5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+          </svg>
         </button>
-        <input
-          v-model="keyword"
-          class="h-9 w-64 rounded-lg border border-[#d1d5db] px-3 text-sm outline-none transition focus:border-[#9ca3af] focus:ring-2 focus:ring-[#9ca3af]/20"
-          placeholder="搜索技能名或描述"
-          type="search"
-          @keyup.enter="submitSearch"
-        />
-        <button
-          class="h-9 rounded-lg bg-[#1f2937] px-4 text-sm text-white transition hover:bg-[#111827]"
-          type="button"
-          @click="submitSearch"
-        >
-          搜索
-        </button>
-      </div>
-    </header>
 
-    <div class="flex flex-shrink-0 items-center justify-between border-b border-[#e5e7eb] bg-white px-6 py-2 text-sm">
-      <div class="flex items-center gap-1">
-        <span class="mr-2 text-xs text-[#9ca3af]">排序</span>
+        <!-- 居中搜索框 -->
+        <div class="relative flex items-center bg-[#e5e7eb]/70 hover:bg-[#e5e7eb] focus-within:bg-white focus-within:ring-2 focus-within:ring-[#9ca3af]/20 transition-all rounded-2xl w-64 h-9">
+          <div class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+            <svg class="h-4 w-4 text-[#6b7280]" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+          </div>
+          <input
+            v-model="keyword"
+            class="block w-full rounded-2xl bg-transparent py-1.5 pl-9 pr-3 text-sm text-[#1f2937] placeholder:text-[#9ca3af] outline-none"
+            placeholder="搜索技能名或描述"
+            type="search"
+            @keyup.enter="submitSearch"
+          />
+        </div>
+      </div>
+    </div>
+
+    <!-- 排序选项卡 -->
+    <div class="flex flex-shrink-0 items-center justify-between bg-transparent px-6 py-2 text-sm">
+      <div class="flex items-center gap-6">
         <button
-          :class="[
-            'rounded-lg px-3 py-1 text-xs transition',
-            sort === 'popular' ? 'bg-[#f3f4f6] font-medium text-[#4b5563]' : 'text-[#6b7280] hover:bg-[#f3f4f6]',
-          ]"
           type="button"
+          class="relative pb-2 text-sm font-medium transition-colors duration-200"
+          :class="sort === 'popular' ? 'text-[#1f2937] font-semibold' : 'text-[#6b7280] hover:text-[#1f2937]'"
           @click="changeSort('popular')"
         >
           热门
+          <span
+            v-if="sort === 'popular'"
+            class="absolute bottom-0 left-0 right-0 h-[2px] bg-[#1f2937] rounded-full"
+          />
         </button>
         <button
-          :class="[
-            'rounded-lg px-3 py-1 text-xs transition',
-            sort === 'newest' ? 'bg-[#f3f4f6] font-medium text-[#4b5563]' : 'text-[#6b7280] hover:bg-[#f3f4f6]',
-          ]"
           type="button"
+          class="relative pb-2 text-sm font-medium transition-colors duration-200"
+          :class="sort === 'newest' ? 'text-[#1f2937] font-semibold' : 'text-[#6b7280] hover:text-[#1f2937]'"
           @click="changeSort('newest')"
         >
           最新
+          <span
+            v-if="sort === 'newest'"
+            class="absolute bottom-0 left-0 right-0 h-[2px] bg-[#1f2937] rounded-full"
+          />
         </button>
       </div>
-      <span class="text-xs text-[#9ca3af]">共 {{ total }} 个技能</span>
+      <span class="text-xs text-[#4b5563]">共 {{ total }} 个技能</span>
     </div>
 
     <div class="min-h-0 flex-1 overflow-y-auto px-6 py-5">
@@ -383,11 +396,11 @@ onMounted(() => {
         还没有技能，去技能管理页发布第一个吧。
       </div>
 
-      <div v-else class="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
+      <div v-else class="flex flex-wrap gap-4">
         <button
           v-for="s in skills"
           :key="s.id"
-          class="flex flex-col gap-2 rounded-xl border border-[#e5e7eb] bg-white p-4 text-left transition hover:border-[#d1d5db] hover:shadow-sm"
+          class="flex w-[280px] flex-col gap-2 rounded-2xl bg-white p-4 text-left shadow-sm transition hover:bg-[#f9fafb] hover:shadow-md"
           type="button"
           @click="openDetail(s.id)"
         >
