@@ -18,6 +18,11 @@ _TEXT_FILE_EXTENSIONS: frozenset[str] = frozenset({
     ".md", ".txt", ".json", ".yaml", ".yml", ".csv", ".xml"
 })
 
+_IMAGE_FILE_EXTENSIONS: frozenset[str] = frozenset({
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico"
+})
+
+
 # 文件操作方法白名单，供 File_Handler 和 Skill_Handler 使用
 _ALLOWED_FS_METHODS: set[str] = {
     "create_file", "delete_file", "create_dir", "delete_dir", "read_file", "search_dir",
@@ -170,7 +175,8 @@ def _validate_skill_relpath(rel_path: str) -> None:
     if any(p == ".." for p in parts):
         raise FileError("path must not contain '..' segments")
     suffix = Path(rel_path).suffix.lower()
-    if suffix not in SKILL_TEXT_EXTENSIONS:
+    is_image = suffix in _IMAGE_FILE_EXTENSIONS
+    if not is_image and suffix not in SKILL_TEXT_EXTENSIONS:
         raise FileError(
             f"unsupported file extension '{suffix}'. allowed: "
             f"{sorted(SKILL_TEXT_EXTENSIONS)}"
@@ -220,11 +226,10 @@ def validate_skill_storage_path(path: str, *, allow_skill_dir: bool = False) -> 
         _validate_skill_relpath(item)
         return
 
-    if len(rel_parts) == 2:
-        folder, filename = rel_parts
+    if len(rel_parts) >= 2:
+        folder = rel_parts[0]
         if folder not in SKILL_RESOURCE_DIRS:
             raise FileError("skill folders can only be 'references' or 'assets'")
-        _validate_skill_relpath(filename)
+        subpath = "/".join(rel_parts[1:])
+        _validate_skill_relpath(subpath)
         return
-
-    raise FileError("nested directories inside skill folders are not supported")

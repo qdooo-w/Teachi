@@ -666,21 +666,23 @@ def _validate_skill_zip_relpath(parts: tuple[str, ...]) -> tuple[str, ...]:
     if parts == ("SKILL.md",):
         return parts
 
+    _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico"}
+    suffix = Path(parts[-1]).suffix.lower()
+    is_image = suffix in _IMAGE_EXTENSIONS
+
     if len(parts) == 1:
-        if Path(parts[0]).suffix.lower() not in SKILL_TEXT_EXTENSIONS:
+        if not is_image and suffix not in SKILL_TEXT_EXTENSIONS:
             _zip_validation_error("Skill zip root files must be md, txt, json, yaml, or yml text files.")
         return parts
 
-    if len(parts) == 2:
-        folder, filename = parts
+    if len(parts) >= 2:
+        folder = parts[0]
         normalized_folder = SKILL_ZIP_RESOURCE_DIR_ALIASES.get(folder)
         if normalized_folder is None:
             _zip_validation_error("Skill zip folders can only be reference(s)/ or assets/.")
-        if Path(filename).suffix.lower() not in SKILL_TEXT_EXTENSIONS:
+        if not is_image and suffix not in SKILL_TEXT_EXTENSIONS:
             _zip_validation_error("Skill zip resource files must be md, txt, json, yaml, or yml text files.")
-        return (normalized_folder, filename)
-
-    _zip_validation_error("Skill zip must not contain nested directories beyond references/ or assets/.")
+        return (normalized_folder,) + parts[1:]
 
 
 def _validate_community_skill_zip(
@@ -728,7 +730,7 @@ def _validate_community_skill_zip(
         rel_parts = parts[len(strip_root):] if strip_root else parts
         if not rel_parts:
             continue
-        if len(rel_parts) != 1 or rel_parts[0] not in SKILL_ZIP_RESOURCE_DIR_ALIASES:
+        if len(rel_parts) < 1 or rel_parts[0] not in SKILL_ZIP_RESOURCE_DIR_ALIASES:
             _zip_validation_error("Skill zip directories can only be reference(s)/ or assets/.")
 
     for info, parts in file_entries:

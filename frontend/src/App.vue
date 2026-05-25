@@ -516,12 +516,6 @@ onBeforeUnmount(() => {
           </div>
 
           <div class="flex items-center gap-1">
-            <span class="flex h-9 items-center gap-1 px-2 text-sm text-[#9ca3af]">
-              Skills管理
-              <svg class="h-3 w-3" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-              </svg>
-            </span>
             <button
               v-if="$route.name === 'chat'"
               class="flex h-9 items-center gap-1 rounded-xl border border-transparent px-3 text-sm text-[#4b5563] transition-colors hover:border-[#d1d5db] hover:bg-[#e5e7eb]"
@@ -534,6 +528,12 @@ onBeforeUnmount(() => {
               </svg>
               <span class="hidden sm:inline">新建对话</span>
             </button>
+            <span class="flex h-9 items-center gap-1 px-2 text-sm text-[#9ca3af]">
+              Skills管理
+              <svg class="h-3 w-3" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+              </svg>
+            </span>
             <button
               class="flex h-9 w-9 items-center justify-center rounded-xl border border-transparent text-[#4b5563] transition-colors hover:border-[#d1d5db] hover:bg-[#e5e7eb]"
               type="button"

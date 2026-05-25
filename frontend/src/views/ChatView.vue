@@ -720,7 +720,7 @@ watch(
                 <svg v-if="copiedId !== message.id" class="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v2m-6 12h8a2 2 0 0 1 2-2v-8a2 2 0 0 1-2-2h-8a2 2 0 0 1-2 2v8a2 2 0 0 1 2 2z" />
                 </svg>
-                <svg v-else class="h-3.5 w-3.5 text-[#1f6f5b]" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg v-else class="h-3.5 w-3.5 text-[#1f2937]" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
                 </svg>
               </button>
@@ -793,7 +793,7 @@ watch(
         </Transition>
         <div
           :class="[
-            'composer-shell relative bg-white p-4 shadow-sm focus-within:ring-2 focus-within:ring-[#1f6f5b]/20',
+            'composer-shell relative bg-white p-4 shadow-sm focus-within:ring-2 focus-within:ring-[#1f2937]/20',
             showSkillPicker ? 'drawer-open' : '',
             streaming ? 'generating' : '',
           ]"
