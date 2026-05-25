@@ -337,7 +337,7 @@ onBeforeUnmount(() => {
               class="group rounded-lg border px-4 py-3 transition-colors"
               :class="[
                 config.is_active
-                  ? 'border-[#1f6f5b]/30 bg-[#e6f4ee]'
+                  ? 'border-[#1f2937]/30 bg-[#f3f4f6]'
                   : 'border-[#e5e7eb] bg-white hover:border-[#d1d5db]',
               ]"
             >
@@ -347,7 +347,7 @@ onBeforeUnmount(() => {
                   <button
                     type="button"
                     class="flex h-5 w-9 flex-shrink-0 items-center rounded-full p-0.5 transition-colors"
-                    :class="config.is_active ? 'bg-[#1f6f5b]' : 'bg-[#d1d5db]'"
+                    :class="config.is_active ? 'bg-[#1f2937]' : 'bg-[#d1d5db]'"
                     :title="config.is_active ? '点击取消激活' : '点击激活'"
                     @click="toggleActive(config)"
                   >
@@ -359,7 +359,7 @@ onBeforeUnmount(() => {
                   <div class="min-w-0">
                     <div class="flex items-center gap-2">
                       <span class="truncate text-sm font-medium text-[#1f2937]">{{ config.config_name }}</span>
-                      <span v-if="config.is_active" class="rounded-full bg-[#1f6f5b] px-2 py-0.5 text-[10px] font-medium text-white">激活</span>
+                      <span v-if="config.is_active" class="rounded-full bg-[#1f2937] px-2 py-0.5 text-[10px] font-medium text-white">激活</span>
                     </div>
                     <div class="mt-0.5 truncate text-xs text-[#6b7280]">
                       {{ config.model_name || '未设置' }} · {{ config.base_url || '默认 URL' }} · {{ config.api_key ? config.api_key : '无 Key' }}
@@ -406,7 +406,7 @@ onBeforeUnmount(() => {
 
           <!-- 新建按钮 -->
           <button
-            class="mt-4 flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-[#d1d5db] py-2.5 text-sm text-[#6b7280] transition-colors hover:border-[#1f6f5b] hover:bg-[#e6f4ee] hover:text-[#1f6f5b]"
+            class="mt-4 flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-[#d1d5db] py-2.5 text-sm text-[#6b7280] transition-colors hover:border-[#1f2937] hover:bg-[#f3f4f6] hover:text-[#1f2937]"
             type="button"
             @click="startCreate"
           >
@@ -436,7 +436,7 @@ onBeforeUnmount(() => {
               <span class="mb-1 block text-sm font-medium text-[#374151]">配置名称 <span class="text-[#ef4444]">*</span></span>
               <input
                 v-model="form.config_name"
-                class="h-10 w-full rounded-md border border-[#d1d5db] bg-white px-3 text-sm outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
+                class="h-10 w-full rounded-md border border-[#d1d5db] bg-white px-3 text-sm outline-none transition focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20"
                 type="text"
                 placeholder="如：GPT-4o、DeepSeek"
                 maxlength="100"
@@ -450,7 +450,7 @@ onBeforeUnmount(() => {
               <div class="relative">
                 <input
                   v-model="form.api_key"
-                  class="h-10 w-full rounded-md border border-[#d1d5db] bg-white px-3 pr-10 text-sm outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
+                  class="h-10 w-full rounded-md border border-[#d1d5db] bg-white px-3 pr-10 text-sm outline-none transition focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20"
                   type="text"
                   :style="!showApiKey ? { WebkitTextSecurity: 'disc' } as any : {}"
                   placeholder="sk-..."
@@ -481,7 +481,7 @@ onBeforeUnmount(() => {
               <span class="mb-1 block text-sm font-medium text-[#374151]">Base URL</span>
               <input
                 v-model="form.base_url"
-                class="h-10 w-full rounded-md border border-[#d1d5db] bg-white px-3 text-sm outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
+                class="h-10 w-full rounded-md border border-[#d1d5db] bg-white px-3 text-sm outline-none transition focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20"
                 type="text"
                 placeholder="https://api.openai.com/v1"
                 maxlength="500"
@@ -494,7 +494,7 @@ onBeforeUnmount(() => {
               <span class="mb-1 block text-sm font-medium text-[#374151]">模型名称</span>
               <input
                 v-model="form.model_name"
-                class="h-10 w-full rounded-md border border-[#d1d5db] bg-white px-3 text-sm outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
+                class="h-10 w-full rounded-md border border-[#d1d5db] bg-white px-3 text-sm outline-none transition focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20"
                 type="text"
                 placeholder="如：gpt-4o、deepseek-chat"
                 maxlength="200"
@@ -535,7 +535,7 @@ onBeforeUnmount(() => {
                       min="0"
                       max="2"
                       step="0.1"
-                      class="h-2 flex-1 cursor-pointer appearance-none rounded-lg bg-[#e5e7eb] accent-[#1f6f5b]"
+                      class="h-2 flex-1 cursor-pointer appearance-none rounded-lg bg-[#e5e7eb] accent-[#1f2937]"
                     />
                     <button
                       type="button"
@@ -561,7 +561,7 @@ onBeforeUnmount(() => {
                   <div class="flex items-center gap-3">
                     <input
                       v-model.number="form.max_tokens"
-                      class="h-10 w-full rounded-md border border-[#d1d5db] bg-white px-3 text-sm outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
+                      class="h-10 w-full rounded-md border border-[#d1d5db] bg-white px-3 text-sm outline-none transition focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20"
                       type="number"
                       min="1"
                       max="128000"

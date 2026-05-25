@@ -59,7 +59,7 @@ function handleKeydown(event: KeyboardEvent): void {
       :maxlength="maxLength"
       :placeholder="placeholder"
       :disabled="submitting"
-      class="h-9 flex-1 rounded-md border border-[#1f6f5b] bg-white px-3 text-sm text-[#1f2937] outline-none focus:ring-2 focus:ring-[#1f6f5b]/20"
+      class="h-9 flex-1 rounded-md border border-[#1f2937] bg-white px-3 text-sm text-[#1f2937] outline-none focus:ring-2 focus:ring-[#1f2937]/20"
       @keydown="handleKeydown"
     />
     <button

@@ -502,6 +502,9 @@ onBeforeUnmount(() => {
                 <span class="text-[#1f2937]">科目总览</span>
                 <span v-if="preparing" class="text-xs text-[#9ca3af]">准备中</span>
               </template>
+              <template v-else-if="$route.name === 'community'">
+                <span class="text-[#1f2937] font-semibold text-sm">技能社区</span>
+              </template>
               <template v-else-if="$route.name === 'subject' && subjectProject">
                 <span class="cursor-pointer text-[#9ca3af] hover:text-[#1f2937]" @click="router.push({ name: 'overview' })">科目</span>
                 <span class="text-[#9ca3af]">/</span>
@@ -516,12 +519,6 @@ onBeforeUnmount(() => {
           </div>
 
           <div class="flex items-center gap-1">
-            <span class="flex h-9 items-center gap-1 px-2 text-sm text-[#9ca3af]">
-              Skills管理
-              <svg class="h-3 w-3" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-              </svg>
-            </span>
             <button
               v-if="$route.name === 'chat'"
               class="flex h-9 items-center gap-1 rounded-xl border border-transparent px-3 text-sm text-[#4b5563] transition-colors hover:border-[#d1d5db] hover:bg-[#e5e7eb]"
@@ -533,6 +530,23 @@ onBeforeUnmount(() => {
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
               </svg>
               <span class="hidden sm:inline">新建对话</span>
+            </button>
+            <span class="flex h-9 items-center gap-1 px-2 text-sm text-[#9ca3af]">
+              Skills管理
+              <svg class="h-3 w-3" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+              </svg>
+            </span>
+            <button
+              class="flex h-9 w-9 items-center justify-center rounded-xl border border-transparent text-[#9ca3af] cursor-not-allowed"
+              type="button"
+              title="技能仓库（暂不可用）"
+              disabled
+            >
+              <svg class="h-4.5 w-4.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
             </button>
             <button
               class="flex h-9 w-9 items-center justify-center rounded-xl border border-transparent text-[#4b5563] transition-colors hover:border-[#d1d5db] hover:bg-[#e5e7eb]"

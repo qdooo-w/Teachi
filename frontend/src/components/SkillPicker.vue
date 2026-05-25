@@ -103,7 +103,7 @@ nextTick(() => { inputEl.value?.focus() })
           :class="[
             'flex h-4 w-4 flex-shrink-0 items-center justify-center rounded border text-[10px]',
             selected.includes(skill.name)
-              ? 'border-[#1f6f5b] bg-[#1f6f5b] text-white'
+              ? 'border-[#1f2937] bg-[#1f2937] text-white'
               : 'border-[#9ca3af] bg-white/70',
           ]"
         >

@@ -15,11 +15,11 @@ const emit = defineEmits<{
     <span
       v-for="skill in skills"
       :key="skill.name"
-      class="flex items-center gap-1 rounded-full bg-[#e6f4ee] px-2.5 py-0.5 text-xs font-medium text-[#1f6f5b]"
+      class="flex items-center gap-1 rounded-full border border-gray-200/60 bg-[#f3f4f6] px-2.5 py-0.5 text-xs font-medium text-[#1f2937]"
     >
       {{ skill.display_name || skill.name }}
       <button
-        class="flex h-3.5 w-3.5 items-center justify-center rounded-full hover:bg-[#1f6f5b]/20"
+        class="flex h-3.5 w-3.5 items-center justify-center rounded-full hover:bg-[#1f2937]/10"
         type="button"
         :aria-label="`移除 ${skill.name}`"
         @click="emit('remove', skill.name)"

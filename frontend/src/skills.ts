@@ -44,7 +44,7 @@ export interface SkillTreeEntry {
 export function validateSkillName(name: string): string | null {
   if (!name) return '名称不能为空'
   if (name.length > SKILL_NAME_MAX) return `名称不能超过 ${SKILL_NAME_MAX} 个字符`
-  if (!SKILL_NAME_PATTERN.test(name)) return '名称只能包含小写字母、数字和连字符，且不能以连字符开头或结尾'
+  if (!SKILL_NAME_PATTERN.test(name)) return '名称只能包含中文、字母、数字和连字符，且不能以连字符开头或结尾'
   for (const reserved of SKILL_RESERVED) {
     if (name.includes(reserved)) return `名称不能包含保留词 "${reserved}"`
   }
@@ -78,17 +78,30 @@ export function validateSkillRelativePath(path: string, allowDirectory = false):
   if (parts.some((part) => part === '.' || part === '..')) return '路径不能包含 . 或 ..'
   if (parts.length === 1 && parts[0] === 'SKILL.md') return null
 
+  const SKILL_IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico']
+  const isImage = SKILL_IMAGE_EXTENSIONS.includes(extensionOf(parts[parts.length - 1]))
+
   if (parts.length === 1) {
     const [name] = parts
     if (allowDirectory && isResourceDir(name)) return null
-    if (!isAllowedTextFile(name)) return '只允许 md、txt、json、yaml、yml 文本文件'
+    if (!isAllowedTextFile(name) && !isImage) return '只允许 md、txt、json、yaml、yml 文本文件或图片文件'
     return null
   }
 
-  if (parts.length === 2) {
-    const [folder, filename] = parts
+  if (parts.length >= 2) {
+    const folder = parts[0]
+    const filename = parts[parts.length - 1]
     if (!isResourceDir(folder)) return '只能使用 references 或 assets 文件夹'
-    if (!isAllowedTextFile(filename)) return '只允许 md、txt、json、yaml、yml 文本文件'
+    if (allowDirectory) {
+      const ext = extensionOf(filename)
+      if (ext !== '' && !isAllowedTextFile(filename) && !isImage) {
+        return '只允许 md、txt、json、yaml、yml 文本文件或图片文件'
+      }
+    } else {
+      if (!isAllowedTextFile(filename) && !isImage) {
+        return '只允许 md、txt、json、yaml、yml 文本文件或图片文件'
+      }
+    }
     return null
   }
 

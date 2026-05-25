@@ -28,3 +28,5 @@ tests/*
 !tests/test_community_zip_upload.py
 AGENTS.md
 archived_skill
+# Some configuration files
+*.conf

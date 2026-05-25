@@ -126,11 +126,11 @@ input {
 }
 
 .markdown-body a {
-  color: #1f6f5b;
+  color: #1f2937;
   text-decoration: underline;
   text-underline-offset: 2px;
 }
-.markdown-body a:hover { color: #0f5842; }
+.markdown-body a:hover { color: #111827; }
 
 .markdown-body code {
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;

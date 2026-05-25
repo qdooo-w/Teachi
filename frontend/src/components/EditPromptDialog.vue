@@ -77,7 +77,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
         ref="textarea"
         v-model="draft"
         rows="6"
-        class="block w-full resize-none rounded-md border border-[#d1d5db] bg-white px-3 py-2 text-sm leading-relaxed text-[#1f2937] outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
+        class="block w-full resize-none rounded-md border border-[#d1d5db] bg-white px-3 py-2 text-sm leading-relaxed text-[#1f2937] outline-none transition focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20"
         :placeholder="placeholder"
         :disabled="submitting"
       />

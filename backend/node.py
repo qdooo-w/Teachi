@@ -268,7 +268,7 @@ async def build_model_node(ctx: LoopContext) -> NodeOutput:
     for prefix, path in scoped_sources:
         for skill in discover_skills(path, validate=True, max_depth=3):
             scoped_skills.append(replace(skill, name=f"{prefix}{skill.name}"))
-
+    #实现了技能的分层加载，用户技能 > 项目技能 > 全局技能，且同名技能会被自动重命名以避免冲突，例如 user-weather、project-weather、global-weather。
     skills_capability = SkillsCapability(skills=scoped_skills, validate=True)
     tools = build_tools(allowed=ctx.allowed_tools)
 

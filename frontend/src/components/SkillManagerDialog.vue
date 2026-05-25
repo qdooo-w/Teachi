@@ -119,8 +119,15 @@ const canDeleteSelectedFile = computed(() =>
 )
 const dirty = computed(() => cleanSnapshot.value !== null && editorSnapshot() !== cleanSnapshot.value)
 
+const isImageFile = computed(() => {
+  if (!selectedPath.value) return false
+  const ext = selectedPath.value.slice(selectedPath.value.lastIndexOf('.')).toLowerCase()
+  return ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico'].includes(ext)
+})
+
 const canSave = computed(() => {
   if (saving.value || fileLoading.value) return false
+  if (isImageFile.value) return false
   if (selectedEditorKind.value === 'skill') {
     if (rawMode.value) return rawContent.value.trim().length > 0
     if (isNew.value && nameError.value) return false
@@ -226,6 +233,9 @@ async function openFile(relPath: string, askBeforeSwitch = true): Promise<void> 
     if (relPath === 'SKILL.md') {
       const { content } = await readSkill(props.space, selectedName.value)
       loadSkillForm(content, selectedName.value)
+    } else if (isImageFile.value) {
+      plainContent.value = ''
+      markClean()
     } else {
       const { content } = await readSkillFile(props.space, selectedName.value, relPath)
       plainContent.value = content
@@ -413,6 +423,7 @@ async function save(): Promise<void> {
       if (selectedName.value) await loadTree(selectedName.value)
       markClean()
     }
+    publishMsg.value = '保存成功'
   } catch (e) {
     errorMsg.value = getErrorMessage(e)
   } finally {
@@ -558,8 +569,8 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="fixed inset-0 z-[1000] flex items-center justify-center bg-black/40" @click.self="handleClose">
-    <div class="flex h-[680px] w-[1080px] max-w-[96vw] flex-col rounded-xl bg-white shadow-xl">
-      <div class="flex h-14 flex-shrink-0 items-center justify-between border-b border-[#e5e7eb] px-5">
+    <div class="flex h-[680px] w-[1080px] max-w-[96vw] flex-col rounded-xl bg-white shadow-xl overflow-hidden">
+      <div class="flex h-14 flex-shrink-0 items-center justify-between px-5">
         <span class="font-semibold text-[#1f2937]">{{ title }}</span>
         <button
           class="flex h-8 w-8 items-center justify-center rounded-md text-[#6b7280] hover:bg-[#f3f4f6] hover:text-[#1f2937]"
@@ -573,7 +584,7 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="flex min-h-0 flex-1">
-        <div class="flex w-52 flex-shrink-0 flex-col border-r border-[#e5e7eb]">
+        <div class="flex w-52 flex-shrink-0 flex-col">
           <div class="flex-1 overflow-y-auto p-2">
             <div v-if="loading" class="px-3 py-4 text-sm text-[#9ca3af]">加载中...</div>
             <div v-else-if="skills.length === 0" class="px-3 py-4 text-sm text-[#9ca3af]">暂无技能</div>
@@ -583,7 +594,7 @@ onBeforeUnmount(() => {
               :class="[
                 'w-full rounded-md px-3 py-2 text-left transition-colors',
                 selectedName === skill.name && !isNew
-                  ? 'bg-[#e6f4ee] text-[#1f6f5b]'
+                  ? 'bg-[#e5e7eb] text-[#1f2937] font-medium'
                   : 'text-[#374151] hover:bg-[#f3f4f6]',
               ]"
               type="button"
@@ -594,11 +605,11 @@ onBeforeUnmount(() => {
               <div class="truncate text-xs text-[#9ca3af]">{{ skill.description || '无描述' }}</div>
             </button>
           </div>
-          <div class="border-t border-[#e5e7eb] p-2">
+          <div class="p-2">
             <button
               :class="[
                 'flex w-full items-center gap-1.5 rounded-md px-3 py-2 text-sm transition-colors',
-                isNew ? 'bg-[#e6f4ee] text-[#1f6f5b]' : 'text-[#374151] hover:bg-[#f3f4f6]',
+                isNew ? 'bg-[#e5e7eb] text-[#1f2937] font-medium' : 'text-[#374151] hover:bg-[#f3f4f6]',
               ]"
               type="button"
               @click="startNew"
@@ -613,9 +624,9 @@ onBeforeUnmount(() => {
 
         <div
           v-if="selectedName && !isNew"
-          class="flex w-60 flex-shrink-0 flex-col border-r border-[#e5e7eb] bg-[#fafafa]"
+          class="flex w-60 flex-shrink-0 flex-col bg-[#fafafa]"
         >
-          <div class="flex h-12 items-center justify-between border-b border-[#e5e7eb] px-3">
+          <div class="flex h-12 items-center justify-between px-3">
             <span class="truncate text-sm font-medium text-[#374151]">{{ selectedName }}</span>
             <div class="flex items-center gap-1">
               <button
@@ -672,7 +683,7 @@ onBeforeUnmount(() => {
                     'flex h-8 w-full items-center gap-1.5 rounded-md px-2 text-left text-sm transition-colors',
                     entry.parent ? 'pl-7' : '',
                     selectedPath === entry.relPath
-                      ? 'bg-[#e6f4ee] text-[#1f6f5b]'
+                      ? 'bg-[#e5e7eb] text-[#1f2937] font-medium'
                       : 'text-[#374151] hover:bg-white',
                   ]"
                   type="button"
@@ -694,231 +705,250 @@ onBeforeUnmount(() => {
           </div>
 
           <template v-else>
-            <div class="flex h-12 flex-shrink-0 items-center justify-between border-b border-[#e5e7eb] px-5">
+            <div class="flex h-12 flex-shrink-0 items-center justify-between px-5">
               <div class="min-w-0">
                 <div class="truncate text-sm font-medium text-[#1f2937]">{{ selectedFileLabel }}</div>
                 <div v-if="selectedEditorKind && selectedEditorKind !== 'skill'" class="text-xs text-[#9ca3af]">
                   {{ selectedEditorKind }}
                 </div>
               </div>
-              <button
-                v-if="canDeleteSelectedFile"
-                class="rounded-md px-2 py-1 text-xs text-[#9a3412] hover:bg-[#fff7ed] disabled:opacity-50"
-                :disabled="deletingFile"
-                type="button"
-                @click="removeSelectedFile"
-              >
-                {{ deletingFile ? '删除中...' : '删除文件' }}
-              </button>
             </div>
 
-            <div class="min-h-0 flex-1 overflow-y-auto px-5 pt-5">
-              <div v-if="fileLoading" class="py-10 text-center text-sm text-[#9ca3af]">加载文件...</div>
+            <!-- Scroll Area Wrapper with top and bottom gradient overlays -->
+            <div class="relative min-h-0 flex-1">
+              <!-- Top fade gradient overlay -->
+              <div class="pointer-events-none absolute left-0 right-0 top-0 h-6 bg-gradient-to-b from-white via-white/70 to-transparent z-10" />
+              <!-- Bottom fade gradient overlay -->
+              <div class="pointer-events-none absolute left-0 right-0 bottom-0 h-6 bg-gradient-to-t from-white via-white/70 to-transparent z-10" />
 
-              <template v-else-if="selectedEditorKind === 'skill'">
-                <template v-if="!rawMode">
-                  <div class="mb-4">
-                    <label class="mb-1 block text-xs font-medium text-[#6b7280]">技能名称</label>
-                    <input
-                      v-if="isNew"
-                      v-model="form.name"
-                      class="h-9 w-full rounded-md border border-[#d1d5db] px-3 text-sm outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
-                      placeholder="my-skill-name（小写字母、数字、连字符）"
-                      type="text"
-                    />
-                    <div v-else class="flex h-9 items-center rounded-md bg-[#f9fafb] px-3 text-sm text-[#374151]">
-                      {{ selectedName }}
-                    </div>
-                    <p v-if="nameError" class="mt-1 text-xs text-[#9a3412]">{{ nameError }}</p>
-                    <p v-if="parseWarning && !rawMode" class="mt-1 text-xs text-[#92400e]">{{ parseWarning }}</p>
-                  </div>
+              <!-- Scroll Area -->
+              <div class="h-full overflow-y-auto px-5 pb-5 pt-3">
+                <div v-if="fileLoading" class="py-10 text-center text-sm text-[#9ca3af]">加载文件...</div>
 
-                  <div class="mb-4">
-                    <div class="mb-1 flex items-baseline justify-between">
-                      <label class="block text-xs font-medium text-[#6b7280]">展示名</label>
-                      <span
-                        :class="[
-                          'text-[10px] tabular-nums',
-                          (form.display_name ?? '').length > DISPLAY_NAME_MAX ? 'text-[#9a3412]' : 'text-[#9ca3af]',
-                        ]"
-                      >
-                        {{ (form.display_name ?? '').length }} / {{ DISPLAY_NAME_MAX }}
-                      </span>
-                    </div>
-                    <input
-                      v-model="form.display_name"
-                      :maxlength="DISPLAY_NAME_MAX"
-                      class="h-9 w-full rounded-md border border-[#d1d5db] px-3 text-sm outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
-                      placeholder="例如：数学解题助手"
-                      type="text"
-                    />
-                    <p v-if="displayNameError" class="mt-1 text-xs text-[#9a3412]">{{ displayNameError }}</p>
-                  </div>
-
-                  <div class="mb-4">
-                    <div class="mb-1 flex items-baseline justify-between">
-                      <label class="block text-xs font-medium text-[#6b7280]">
-                        描述 <span class="text-[#9a3412]">*</span>
-                      </label>
-                      <span
-                        :class="[
-                          'text-[10px] tabular-nums',
-                          form.description.length > DESCRIPTION_MAX ? 'text-[#9a3412]' : 'text-[#9ca3af]',
-                        ]"
-                      >
-                        {{ form.description.length }} / {{ DESCRIPTION_MAX }}
-                      </span>
-                    </div>
-                    <textarea
-                      v-model="form.description"
-                      :maxlength="DESCRIPTION_MAX"
-                      class="w-full resize-y rounded-md border border-[#d1d5db] p-2.5 text-sm outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
-                      rows="2"
-                    />
-                    <p v-if="descriptionError" class="mt-1 text-xs text-[#9a3412]">{{ descriptionError }}</p>
-                  </div>
-
-                  <div class="mb-4">
-                    <button
-                      class="flex items-center gap-1 text-xs font-medium text-[#6b7280] hover:text-[#1f2937]"
-                      type="button"
-                      @click="showAdvanced = !showAdvanced"
-                    >
-                      <svg
-                        :class="['h-3 w-3 transition-transform', showAdvanced ? 'rotate-90' : '']"
-                        aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24"
-                      >
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7" />
-                      </svg>
-                      高级字段（可选）
-                    </button>
-                    <div v-if="showAdvanced" class="mt-2 grid grid-cols-2 gap-3">
-                      <label class="block">
-                        <span class="mb-1 block text-xs text-[#6b7280]">license</span>
+                <div v-else class="rounded-2xl border border-gray-200 bg-[#f3f4f6] p-6 shadow-md">
+                  <template v-if="selectedEditorKind === 'skill'">
+                    <template v-if="!rawMode">
+                      <div class="mb-4">
+                        <label class="mb-1 block text-xs font-medium text-[#6b7280]">技能名称</label>
                         <input
-                          v-model="form.license"
-                          class="h-9 w-full rounded-md border border-[#d1d5db] px-3 text-sm outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
-                          placeholder="例如 MIT"
+                          v-if="isNew"
+                          v-model="form.name"
+                          class="h-9 w-full rounded-md border border-[#d1d5db] bg-white px-3 text-sm outline-none transition focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20"
+                          placeholder="my-skill-name（小写字母、数字、连字符）"
                           type="text"
                         />
-                      </label>
-                      <label class="block">
+                        <div v-else class="flex h-9 items-center rounded-md bg-[#e5e7eb] px-3 text-sm text-[#374151]">
+                          {{ selectedName }}
+                        </div>
+                        <p v-if="nameError" class="mt-1 text-xs text-[#9a3412]">{{ nameError }}</p>
+                        <p v-if="parseWarning && !rawMode" class="mt-1 text-xs text-[#92400e]">{{ parseWarning }}</p>
+                      </div>
+
+                      <div class="mb-4">
                         <div class="mb-1 flex items-baseline justify-between">
-                          <span class="block text-xs text-[#6b7280]">compatibility</span>
+                          <label class="block text-xs font-medium text-[#6b7280]">展示名</label>
                           <span
                             :class="[
                               'text-[10px] tabular-nums',
-                              (form.compatibility ?? '').length > COMPATIBILITY_MAX ? 'text-[#9a3412]' : 'text-[#9ca3af]',
+                              (form.display_name ?? '').length > DISPLAY_NAME_MAX ? 'text-[#9a3412]' : 'text-[#9ca3af]',
                             ]"
                           >
-                            {{ (form.compatibility ?? '').length }} / {{ COMPATIBILITY_MAX }}
+                            {{ (form.display_name ?? '').length }} / {{ DISPLAY_NAME_MAX }}
                           </span>
                         </div>
                         <input
-                          v-model="form.compatibility"
-                          :maxlength="COMPATIBILITY_MAX"
-                          class="h-9 w-full rounded-md border border-[#d1d5db] px-3 text-sm outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
-                          placeholder="兼容性说明"
+                          v-model="form.display_name"
+                          :maxlength="DISPLAY_NAME_MAX"
+                          class="h-9 w-full rounded-md border border-[#d1d5db] bg-white px-3 text-sm outline-none transition focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20"
+                          placeholder="例如：数学解题助手"
                           type="text"
                         />
-                        <p v-if="compatibilityError" class="mt-1 text-xs text-[#9a3412]">{{ compatibilityError }}</p>
-                      </label>
+                        <p v-if="displayNameError" class="mt-1 text-xs text-[#9a3412]">{{ displayNameError }}</p>
+                      </div>
+
+                      <div class="mb-4">
+                        <div class="mb-1 flex items-baseline justify-between">
+                          <label class="block text-xs font-medium text-[#6b7280]">
+                            描述 <span class="text-[#9a3412]">*</span>
+                          </label>
+                          <span
+                            :class="[
+                              'text-[10px] tabular-nums',
+                              form.description.length > DESCRIPTION_MAX ? 'text-[#9a3412]' : 'text-[#9ca3af]',
+                            ]"
+                          >
+                            {{ form.description.length }} / {{ DESCRIPTION_MAX }}
+                          </span>
+                        </div>
+                        <textarea
+                          v-model="form.description"
+                          :maxlength="DESCRIPTION_MAX"
+                          class="w-full resize-y rounded-md border border-[#d1d5db] bg-white p-2.5 text-sm outline-none transition focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20"
+                          rows="2"
+                        />
+                        <p v-if="descriptionError" class="mt-1 text-xs text-[#9a3412]">{{ descriptionError }}</p>
+                      </div>
+
+                      <div class="mb-4">
+                        <button
+                          class="flex items-center gap-1 text-xs font-medium text-[#6b7280] hover:text-[#1f2937]"
+                          type="button"
+                          @click="showAdvanced = !showAdvanced"
+                        >
+                          <svg
+                            :class="['h-3 w-3 transition-transform', showAdvanced ? 'rotate-90' : '']"
+                            aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                          >
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7" />
+                          </svg>
+                          高级字段（可选）
+                        </button>
+                        <div v-if="showAdvanced" class="mt-2 grid grid-cols-2 gap-3">
+                          <label class="block">
+                            <span class="mb-1 block text-xs text-[#6b7280]">license</span>
+                            <input
+                              v-model="form.license"
+                              class="h-9 w-full rounded-md border border-[#d1d5db] bg-white px-3 text-sm outline-none transition focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20"
+                              placeholder="例如 MIT"
+                              type="text"
+                            />
+                          </label>
+                          <label class="block">
+                            <div class="mb-1 flex items-baseline justify-between">
+                              <span class="block text-xs text-[#6b7280]">compatibility</span>
+                              <span
+                                :class="[
+                                  'text-[10px] tabular-nums',
+                                  (form.compatibility ?? '').length > COMPATIBILITY_MAX ? 'text-[#9a3412]' : 'text-[#9ca3af]',
+                                ]"
+                              >
+                                {{ (form.compatibility ?? '').length }} / {{ COMPATIBILITY_MAX }}
+                              </span>
+                            </div>
+                            <input
+                              v-model="form.compatibility"
+                              :maxlength="COMPATIBILITY_MAX"
+                              class="h-9 w-full rounded-md border border-[#d1d5db] bg-white px-3 text-sm outline-none transition focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20"
+                              placeholder="兼容性说明"
+                              type="text"
+                            />
+                            <p v-if="compatibilityError" class="mt-1 text-xs text-[#9a3412]">{{ compatibilityError }}</p>
+                          </label>
+                        </div>
+                      </div>
+
+                      <div class="mb-5">
+                        <div class="mb-1 flex items-baseline justify-between">
+                          <label class="block text-xs font-medium text-[#6b7280]">技能内容（Markdown）</label>
+                          <span class="text-[10px] tabular-nums text-[#9ca3af]">
+                            {{ bodyCharCount.toLocaleString() }} 字符 · {{ bodyLineCount }} 行
+                          </span>
+                        </div>
+                        <textarea
+                          v-model="form.body"
+                          class="w-full resize-y rounded-md border border-[#d1d5db] bg-white p-3 font-mono text-sm outline-none transition focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20"
+                          style="min-height: 250px"
+                          spellcheck="false"
+                        />
+                        <p class="mt-1 text-[10px] text-[#9ca3af]">前端会自动生成合法的 frontmatter（name/description 等），你无需手动写 `---` 分隔块。</p>
+                      </div>
+                    </template>
+
+                    <template v-else>
+                      <div class="mb-3 flex items-center justify-between">
+                        <span class="text-xs font-medium text-[#6b7280]">原始 SKILL.md 编辑</span>
+                        <button
+                          class="text-xs text-[#1f2937] hover:underline"
+                          type="button"
+                          @click="switchToStructured"
+                        >
+                          尝试切换到结构化表单
+                        </button>
+                      </div>
+                      <p class="mb-3 rounded-md border border-[#fcd34d] bg-[#fffbeb] px-3 py-2 text-xs text-[#92400e]">
+                        {{ parseWarning }}
+                      </p>
+                      <textarea
+                        v-model="rawContent"
+                        class="w-full resize-y rounded-md border border-[#d1d5db] bg-white p-3 font-mono text-sm outline-none transition focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20"
+                        style="min-height: 360px"
+                        spellcheck="false"
+                      />
+                    </template>
+                  </template>
+
+                  <template v-else>
+                    <div v-if="isImageFile" class="flex flex-col items-center justify-center p-8 border border-[#e5e7eb] rounded-md bg-[#f9fafb]" style="min-height: 420px">
+                      <span class="text-3xl mb-2">🖼️</span>
+                      <p class="text-sm text-[#4b5563] font-medium">图片文件仅支持管理，无法直接编辑内容。</p>
+                      <p class="text-xs text-[#9ca3af] mt-1">{{ selectedPath }}</p>
+                    </div>
+                    <template v-else>
+                      <div class="mb-1 flex items-baseline justify-between">
+                        <label class="block text-xs font-medium text-[#6b7280]">文本内容</label>
+                        <span class="text-[10px] tabular-nums text-[#9ca3af]">
+                          {{ plainCharCount.toLocaleString() }} 字符 · {{ plainLineCount }} 行
+                        </span>
+                      </div>
+                      <textarea
+                        v-model="plainContent"
+                        class="w-full resize-y rounded-md border border-[#d1d5db] bg-white p-3 font-mono text-sm outline-none transition focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20"
+                        style="min-height: 420px"
+                        spellcheck="false"
+                      />
+                    </template>
+                  </template>
+
+                  <!-- Actions inside the card -->
+                  <div class="mt-4 border-t border-gray-200/50 pt-3.5">
+                    <p v-if="errorMsg" class="mb-3 rounded-md border border-[#efb3a7] bg-[#fff7ed] px-3 py-2 text-xs text-[#9a3412]">
+                      {{ errorMsg }}
+                    </p>
+                    <p v-if="publishMsg" class="mb-3 rounded-md border border-[#bbf7d0] bg-[#f0fdf4] px-3 py-2 text-xs text-[#166534]">
+                      {{ publishMsg }}
+                    </p>
+                    <div class="flex items-center justify-between">
+                      <button
+                        v-if="!isNew && selectedName && selectedPath === 'SKILL.md'"
+                        class="rounded-md px-3 py-1.5 text-sm text-[#9a3412] transition hover:bg-[#fff7ed] disabled:opacity-50"
+                        :disabled="deleting"
+                        type="button"
+                        @click="remove"
+                      >
+                        {{ deleting ? '删除中...' : '删除技能' }}
+                      </button>
+                      <button
+                        v-else-if="canDeleteSelectedFile"
+                        class="rounded-md px-3 py-1.5 text-sm text-[#9a3412] transition hover:bg-[#fff7ed] disabled:opacity-50"
+                        :disabled="deletingFile"
+                        type="button"
+                        @click="removeSelectedFile"
+                      >
+                        {{ deletingFile ? '删除中...' : '删除文件' }}
+                      </button>
+                      <div v-else />
+                      <div class="flex items-center gap-2">
+                        <button
+                          v-if="canPublish"
+                          class="rounded-md border border-[#1f2937] px-3 py-1.5 text-sm text-[#1f2937] transition hover:bg-[#f3f4f6] disabled:cursor-not-allowed disabled:opacity-50"
+                          :disabled="publishing"
+                          type="button"
+                          title="把当前技能发布到社区"
+                          @click="publishToCommunity"
+                        >
+                          {{ publishing ? '发布中...' : '发布到社区' }}
+                        </button>
+                        <button
+                          class="rounded-md bg-[#1f2937] px-4 py-1.5 text-sm text-white transition hover:bg-[#111827] disabled:cursor-not-allowed disabled:bg-[#9ca3af]"
+                          :disabled="!canSave"
+                          type="button"
+                          @click="save"
+                        >
+                          {{ saving ? '保存中...' : '保存' }}
+                        </button>
+                      </div>
                     </div>
                   </div>
-
-                  <div class="mb-5">
-                    <div class="mb-1 flex items-baseline justify-between">
-                      <label class="block text-xs font-medium text-[#6b7280]">技能内容（Markdown）</label>
-                      <span class="text-[10px] tabular-nums text-[#9ca3af]">
-                        {{ bodyCharCount.toLocaleString() }} 字符 · {{ bodyLineCount }} 行
-                      </span>
-                    </div>
-                    <textarea
-                      v-model="form.body"
-                      class="w-full resize-y rounded-md border border-[#d1d5db] p-3 font-mono text-sm outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
-                      style="min-height: 250px"
-                      spellcheck="false"
-                    />
-                    <p class="mt-1 text-[10px] text-[#9ca3af]">前端会自动生成合法的 frontmatter（name/description 等），你无需手动写 `---` 分隔块。</p>
-                  </div>
-                </template>
-
-                <template v-else>
-                  <div class="mb-3 flex items-center justify-between">
-                    <span class="text-xs font-medium text-[#6b7280]">原始 SKILL.md 编辑</span>
-                    <button
-                      class="text-xs text-[#1f6f5b] hover:underline"
-                      type="button"
-                      @click="switchToStructured"
-                    >
-                      尝试切换到结构化表单
-                    </button>
-                  </div>
-                  <p class="mb-3 rounded-md border border-[#fcd34d] bg-[#fffbeb] px-3 py-2 text-xs text-[#92400e]">
-                    {{ parseWarning }}
-                  </p>
-                  <textarea
-                    v-model="rawContent"
-                    class="w-full resize-y rounded-md border border-[#d1d5db] p-3 font-mono text-sm outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
-                    style="min-height: 360px"
-                    spellcheck="false"
-                  />
-                </template>
-              </template>
-
-              <template v-else>
-                <div class="mb-1 flex items-baseline justify-between">
-                  <label class="block text-xs font-medium text-[#6b7280]">文本内容</label>
-                  <span class="text-[10px] tabular-nums text-[#9ca3af]">
-                    {{ plainCharCount.toLocaleString() }} 字符 · {{ plainLineCount }} 行
-                  </span>
-                </div>
-                <textarea
-                  v-model="plainContent"
-                  class="w-full resize-y rounded-md border border-[#d1d5db] p-3 font-mono text-sm outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
-                  style="min-height: 420px"
-                  spellcheck="false"
-                />
-              </template>
-            </div>
-
-            <div class="flex-shrink-0 border-t border-[#e5e7eb] bg-white px-5 py-3">
-              <p v-if="errorMsg" class="mb-2 rounded-md border border-[#efb3a7] bg-[#fff7ed] px-3 py-2 text-xs text-[#9a3412]">
-                {{ errorMsg }}
-              </p>
-              <p v-if="publishMsg" class="mb-2 rounded-md border border-[#bbf7d0] bg-[#f0fdf4] px-3 py-2 text-xs text-[#166534]">
-                {{ publishMsg }}
-              </p>
-              <div class="flex items-center justify-between">
-                <button
-                  v-if="!isNew && selectedName"
-                  class="rounded-md px-3 py-1.5 text-sm text-[#9a3412] transition hover:bg-[#fff7ed] disabled:opacity-50"
-                  :disabled="deleting"
-                  type="button"
-                  @click="remove"
-                >
-                  {{ deleting ? '删除中...' : '删除技能' }}
-                </button>
-                <div v-else />
-                <div class="flex items-center gap-2">
-                  <button
-                    v-if="canPublish"
-                    class="rounded-md border border-[#1f6f5b] px-3 py-1.5 text-sm text-[#1f6f5b] transition hover:bg-[#e6f4ee] disabled:cursor-not-allowed disabled:opacity-50"
-                    :disabled="publishing"
-                    type="button"
-                    title="把当前技能发布到社区"
-                    @click="publishToCommunity"
-                  >
-                    {{ publishing ? '发布中...' : '发布到社区' }}
-                  </button>
-                  <button
-                    class="rounded-md bg-[#1f2937] px-4 py-1.5 text-sm text-white transition hover:bg-[#111827] disabled:cursor-not-allowed disabled:bg-[#9ca3af]"
-                    :disabled="!canSave"
-                    type="button"
-                    @click="save"
-                  >
-                    {{ saving ? '保存中...' : '保存' }}
-                  </button>
                 </div>
               </div>
             </div>
