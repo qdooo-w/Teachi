@@ -296,7 +296,7 @@ async def build_model_node(ctx: LoopContext) -> NodeOutput:
 
     try:
         ctx.agent = GetAgent(**agent_kwargs)
-        ctx.agent.instructions(load_prompt("init.md"))
+        ctx.agent.instructions(load_prompt("init.md","harness.md","text_output.md"))
     except Exception as exc:
         ctx.error = str(exc)
         ctx.error_code = "MODEL_BUILD_FAILED"
