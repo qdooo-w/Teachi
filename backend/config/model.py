@@ -17,11 +17,14 @@ def load_instruction() -> str:
     return os.getenv("SYSTEM_INSTRUCTION", "")
 
 
-def load_prompt(filename: str) -> Callable[[], str]:
-    """返回一个从 backend/config/prompts/<filename> 读取提示词的函数。"""
+def load_prompt(*filenames: str) -> Callable[[], str]:
+    """返回一个从 backend/config/prompts/ 下按顺序读取并拼接多个提示词文件的函数。"""
     def _loader() -> str:
-        path = Path(__file__).parent / "prompts" / filename
-        return path.read_text(encoding="utf-8")
+        contents = []
+        for filename in filenames:
+            path = Path(__file__).parent / "prompts" / filename
+            contents.append(path.read_text(encoding="utf-8"))
+        return "\n\n".join(contents)
     return _loader
 
 
