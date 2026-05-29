@@ -30,12 +30,16 @@ from pydantic_ai import AgentRunResultEvent
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
+    PartStartEvent,
     PartDeltaEvent,
     PartEndEvent,
+    TextPart,
     TextPartDelta,
     ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
+    FunctionToolCallEvent,
+    FunctionToolResultEvent,
 )
 
 from backend.config import DATABASE_PATH, GetAgent, SKILL_STORAGE_DIR, load_prompt
@@ -348,7 +352,13 @@ async def call_model_node(ctx: LoopContext) -> NodeOutput:
             message_history=message_history,
             deps=deps,
         ):
-            if isinstance(event, PartDeltaEvent):
+            if isinstance(event, PartStartEvent):
+                if isinstance(event.part, TextPart) and event.part.content:
+                    delta_text = event.part.content
+                    if isinstance(delta_text, str):
+                        ctx.response_text += delta_text
+                        await _emit(ctx, {"type": "text_delta", "content": delta_text})
+            elif isinstance(event, PartDeltaEvent):
                 if isinstance(event.delta, TextPartDelta):
                     delta_text = event.delta.content_delta
                     ctx.response_text += delta_text
@@ -365,6 +375,20 @@ async def call_model_node(ctx: LoopContext) -> NodeOutput:
                 elif isinstance(event.part, ToolReturnPart):
                     # 只推送工具名和状态，不暴露返回内容
                     # 后期可在此处调用总结 Agent，生成 tool_summary 推送
+                    await _emit(ctx, {
+                        "type": "tool_result",
+                        "tool_name": event.part.tool_name,
+                        "status": "success" if event.part.content else "error",
+                    })
+
+            elif isinstance(event, FunctionToolCallEvent):
+                await _emit(ctx, {
+                    "type": "tool_call",
+                    "tool_name": event.part.tool_name,
+                })
+
+            elif isinstance(event, FunctionToolResultEvent):
+                if isinstance(event.part, ToolReturnPart):
                     await _emit(ctx, {
                         "type": "tool_result",
                         "tool_name": event.part.tool_name,

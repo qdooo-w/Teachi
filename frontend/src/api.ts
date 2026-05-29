@@ -166,6 +166,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   }
 
   const response = await fetch(apiUrl(path), {
+    cache: 'no-store',
     ...fetchOptions,
     headers,
     credentials: 'include',

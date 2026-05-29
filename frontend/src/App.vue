@@ -241,19 +241,24 @@ onBeforeUnmount(() => {
 
 <template>
   <main class="h-full bg-[#f3f4f6] text-[#1f2937]">
+    <!-- 启动中 / 连接后端 -->
+    <section v-if="bootstrapping" class="relative h-full w-full bg-[#f3f4f6]">
+      <div class="absolute right-12 top-12 flex flex-col items-center gap-4 font-serif text-3xl font-extralight tracking-widest text-[#9ca3af] pointer-events-none select-none">
+        <span>请</span>
+        <span>稍</span>
+        <span>后</span>
+      </div>
+    </section>
+
     <!-- 登录 / 注册 -->
-    <section v-if="bootstrapping || !isAuthenticated" class="flex h-full items-center justify-center px-4">
+    <section v-else-if="!isAuthenticated" class="flex h-full items-center justify-center px-4">
       <div class="w-full max-w-[420px] rounded-lg border border-[#d1d5db] bg-white p-6 shadow-sm">
         <div class="mb-6">
           <div class="text-2xl font-bold tracking-normal">Teachi</div>
-          <div class="mt-1 text-sm text-[#6b7280]">
-            {{ bootstrapping ? '正在连接后端...' : '登录后开始对话' }}
-          </div>
+          <div class="mt-1 text-sm text-[#6b7280]">登录后开始对话</div>
         </div>
 
-        <div v-if="bootstrapping" class="h-32 rounded-md border border-dashed border-[#d1d5db] bg-[#f9fafb]" />
-
-        <form v-else class="space-y-4" @submit.prevent="submitAuth">
+        <form class="space-y-4" @submit.prevent="submitAuth">
           <div class="grid grid-cols-2 rounded-md border border-[#d1d5db] bg-[#f9fafb] p-1">
             <button
               type="button"
