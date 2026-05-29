@@ -91,7 +91,7 @@ export function validateSkillRelativePath(path: string, allowDirectory = false):
   if (parts.length >= 2) {
     const folder = parts[0]
     const filename = parts[parts.length - 1]
-    if (!isResourceDir(folder)) return '只能使用 references 或 assets 文件夹'
+    if (!isResourceDir(folder)) return '只能使用 references、assets、examples 或 templates 文件夹'
     if (allowDirectory) {
       const ext = extensionOf(filename)
       if (ext !== '' && !isAllowedTextFile(filename) && !isImage) {

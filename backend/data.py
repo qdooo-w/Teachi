@@ -679,7 +679,7 @@ def _validate_skill_zip_relpath(parts: tuple[str, ...]) -> tuple[str, ...]:
         folder = parts[0]
         normalized_folder = SKILL_ZIP_RESOURCE_DIR_ALIASES.get(folder)
         if normalized_folder is None:
-            _zip_validation_error("Skill zip folders can only be reference(s)/ or assets/.")
+            _zip_validation_error("Skill zip folders can only be reference(s)/, assets/, example(s)/, or template(s)/.")
         if not is_image and suffix not in SKILL_TEXT_EXTENSIONS:
             _zip_validation_error("Skill zip resource files must be md, txt, json, yaml, or yml text files.")
         return (normalized_folder,) + parts[1:]
@@ -731,7 +731,7 @@ def _validate_community_skill_zip(
         if not rel_parts:
             continue
         if len(rel_parts) < 1 or rel_parts[0] not in SKILL_ZIP_RESOURCE_DIR_ALIASES:
-            _zip_validation_error("Skill zip directories can only be reference(s)/ or assets/.")
+            _zip_validation_error("Skill zip directories can only be reference(s)/, assets/, example(s)/, or template(s)/.")
 
     for info, parts in file_entries:
         rel_parts = parts[len(strip_root):] if strip_root else parts
@@ -871,7 +871,7 @@ def _validate_file_directory_path(path: str) -> None:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
                 "code": "FILE_ERROR",
-                "message": "Skill folders can only be skills/<name>/references or skills/<name>/assets",
+                "message": "Skill folders can only be skills/<name>/references, skills/<name>/assets, skills/<name>/examples or skills/<name>/templates",
             },
         )
 

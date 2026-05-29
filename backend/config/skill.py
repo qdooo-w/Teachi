@@ -13,7 +13,7 @@ SKILL_TEXT_EXTENSIONS: frozenset[str] = frozenset({
     ".md", ".txt", ".json", ".yaml", ".yml",
 })#技能文本文件的允许扩展名集合，包括 Markdown、文本、JSON 和 YAML 文件
 
-SKILL_RESOURCE_DIRS: frozenset[str] = frozenset({"references", "assets"})#技能资源目录名称集合，允许的资源目录名称包括 "references" 和 "assets"
+SKILL_RESOURCE_DIRS: frozenset[str] = frozenset({"references", "assets", "examples", "templates"})#技能资源目录名称集合，允许的资源目录名称包括 "references" 和 "assets"
 
 SKILL_FILE_MAX_CHARS = env_int(os.getenv("SKILL_FILE_MAX_CHARS"), 512 * 1024)#技能文件最大字符数，默认为 512 * 1024
 SKILL_ZIP_MAX_BYTES = env_int(os.getenv("SKILL_ZIP_MAX_BYTES"), 5 * 1024 * 1024)#技能压缩包最大字节数，默认为 5 * 1024 * 1024
@@ -28,6 +28,10 @@ SKILL_ZIP_RESOURCE_DIR_ALIASES: dict[str, str] = {
     "reference": "references",
     "references": "references",
     "assets": "assets",
+    "example": "examples",
+    "examples": "examples",
+    "template": "templates",
+    "templates": "templates",
 }#技能压缩包资源目录别名映射，将上传的 ZIP 文件中的资源目录名称（如 "reference"）映射到标准的资源目录名称（如 "references"），以便统一处理资源目录
 
 DESCRIPTION_MAX = 1024

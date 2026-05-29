@@ -216,6 +216,8 @@ async def write_skill_file(
       - `references/*.md`         — long-form notes, loaded on demand via
                                     `read_skill_resource`.
       - `assets/*.{json,yaml,…}`  — structured data the skill body references.
+      - `examples/*`              — example files for the skill.
+      - `templates/*`             — template files for the skill.
       Body of SKILL.md should stay short; push detail into `references/`.
 
     Recommended workflow when creating a new skill:
@@ -238,7 +240,7 @@ async def write_skill_file(
         skill_ref: scoped skill name shown to the model, e.g. `project-math-helper`
             or `user-writing-style`.
         file_path: relative path inside the skill folder, e.g. `"SKILL.md"`,
-            `"references/notes.md"`, `"assets/data.json"`.
+            `"references/notes.md"`, `"assets/data.json"`, `"examples/demo.json"`, `"templates/template.txt"`.
         content: full UTF-8 text content. For `SKILL.md`, MUST start with
             a YAML frontmatter block delimited by `---`.
 

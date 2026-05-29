@@ -166,3 +166,46 @@ def test_upload_community_skill_zip_rejects_non_zip(tmp_path: Path, monkeypatch)
 
     assert response.status_code == 422
     assert response.json()["detail"]["code"] == "ZIP_VALIDATION_ERROR"
+
+
+def test_upload_community_skill_zip_accepts_examples_and_templates(tmp_path: Path, monkeypatch) -> None:
+    client, _db, token = _client(tmp_path, monkeypatch)
+    zip_body = _zip_bytes({
+        "new-skill/SKILL.md": "---\nname: new-skill\ndescription: Uses examples and templates\n---\n",
+        "new-skill/examples/test.txt": "example txt\n",
+        "new-skill/templates/layout.json": "{}",
+    })
+
+    response = client.post(
+        "/community/skills/upload",
+        content=zip_body,
+        headers=_auth_headers(token),
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert (tmp_path / "archived_skill" / body["id"] / "examples" / "test.txt").is_file()
+    assert (tmp_path / "archived_skill" / body["id"] / "templates" / "layout.json").is_file()
+
+
+def test_upload_community_skill_zip_accepts_singular_aliases(tmp_path: Path, monkeypatch) -> None:
+    client, _db, token = _client(tmp_path, monkeypatch)
+    zip_body = _zip_bytes({
+        "alias-skill/SKILL.md": "---\nname: alias-skill\ndescription: Uses singular aliases\n---\n",
+        "alias-skill/example/test.txt": "example txt\n",
+        "alias-skill/template/layout.json": "{}",
+    })
+
+    response = client.post(
+        "/community/skills/upload",
+        content=zip_body,
+        headers=_auth_headers(token),
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert (tmp_path / "archived_skill" / body["id"] / "examples" / "test.txt").is_file()
+    assert (tmp_path / "archived_skill" / body["id"] / "templates" / "layout.json").is_file()
+    assert not (tmp_path / "archived_skill" / body["id"] / "example").exists()
+    assert not (tmp_path / "archived_skill" / body["id"] / "template").exists()
+
