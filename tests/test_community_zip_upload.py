@@ -48,12 +48,14 @@ def _client(tmp_path: Path, monkeypatch) -> tuple[TestClient, DatabaseFacade, st
         password_hash="unused",
     )
 
-    monkeypatch.setattr(auth_module, "db", db)
-    monkeypatch.setattr(data_module, "db", db)
-    monkeypatch.setattr(transfer_module, "db", db)
     monkeypatch.setattr(transfer_module, "BASE_DIR", tmp_path)
+    monkeypatch.setattr("backend.config.JWT_SECRET", "test-secret")
+    monkeypatch.setattr("backend.auth.JWT_SECRET", "test-secret")
 
+    from backend.db_dep import get_db
     app = FastAPI()
+    app.dependency_overrides[get_db] = lambda: db
+    app.include_router(auth_module.router)
     app.include_router(data_module.router)
     return TestClient(app), db, auth_module.create_access_token(user["uuid"])
 

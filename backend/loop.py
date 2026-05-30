@@ -15,6 +15,8 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 from fastapi import APIRouter, Depends
+from backend.db import DatabaseFacade
+from backend.db_dep import get_db
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -36,6 +38,7 @@ logger = logging.getLogger(__name__)
 # ── 用户锁 & 运行中任务 ──
 
 _user_locks: dict[str, asyncio.Lock] = {}
+_user_locks_lock = asyncio.Lock()
 TaskKey = tuple[str, str]
 
 _running_tasks: dict[TaskKey, asyncio.Task] = {}
@@ -45,10 +48,12 @@ def task_key(user_uuid: str, sid: str) -> TaskKey:
     return (user_uuid, sid)
 
 
-def get_user_lock(user_uuid: str) -> asyncio.Lock:
-    """获取用户的互斥锁（不存在则创建）。"""
+async def get_user_lock(user_uuid: str) -> asyncio.Lock:
+    """获取用户的互斥锁（不存在则创建，线程安全）。"""
     if user_uuid not in _user_locks:
-        _user_locks[user_uuid] = asyncio.Lock()
+        async with _user_locks_lock:
+            if user_uuid not in _user_locks:
+                _user_locks[user_uuid] = asyncio.Lock()
     return _user_locks[user_uuid]
 
 
@@ -238,12 +243,15 @@ async def chat_loop(
     payload: ChatRequest,
     current_user: dict = Depends(get_current_user),
     _nonce: None = Depends(verify_nonce),
+    db: DatabaseFacade = Depends(get_db),
 ) -> StreamingResponse:
     """协议驱动入口: POST /loop/{sid}
 
     body.action 区分 send / regenerate / stop，统一进入状态机引擎。
     """
     user_uuid: str = current_user["uuid"]
+
+    db = get_db()
 
     ctx = LoopContext(
         user_uuid=user_uuid,
@@ -253,6 +261,7 @@ async def chat_loop(
         user_input=payload.message,
         anchor_msg_id=payload.anchor_msg_id,
         allowed_tools=payload.allowed_tools,
+        db=db,
     )
 
     return StreamingResponse(

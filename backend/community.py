@@ -24,12 +24,12 @@ from pydantic import BaseModel, Field
 from backend.auth import get_current_user, verify_nonce
 from backend.config import (
     BASE_DIR,
-    DATABASE_PATH,
     PAGE_DEFAULT_LIMIT,
     PAGE_MAX_LIMIT,
     SORT_DEFAULT,
 )
 from backend.db import DatabaseFacade
+from backend.db_dep import get_db
 from backend.file import FileBase, FileError, ProjectFile, UserFile
 from backend.skill_parser import (
     SkillParseError,
@@ -39,7 +39,6 @@ from backend.skill_parser import (
 
 
 logger = logging.getLogger(__name__)
-db = DatabaseFacade(db_path=DATABASE_PATH)
 router = APIRouter(prefix="/community", tags=["community"])
 
 
@@ -181,6 +180,7 @@ def list_community_skills(
     offset: int = Query(0, ge=0),
     sort: Literal["popular", "newest"] = Query(SORT_DEFAULT),
     _user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
 ) -> CommunitySkillListResponse:
     """社区列表。默认按 downloads 降序（并列时 created_at 兜底）。"""
     skills = db.community.list(keyword=keyword, limit=limit, offset=offset, sort=sort)
@@ -198,6 +198,7 @@ def list_community_skills(
 def get_community_skill(
     skill_id: str,
     _user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
 ) -> CommunitySkillDetail:
     """详情。"""
     record = db.community.get_by_id(skill_id)
@@ -218,6 +219,7 @@ def get_community_skill(
 def publish_community_skill(
     payload: PublishSkillRequest,
     current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
 ) -> CommunitySkillDetail:
     """发布 skill 到社区。
 
@@ -322,6 +324,7 @@ def install_community_skill(
     skill_id: str,
     payload: InstallSkillRequest | None = None,
     current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
 ) -> InstallResponse:
     """把社区 skill 安装到用户级或项目级 skills/{name}/。
 
@@ -388,6 +391,7 @@ def install_community_skill(
 def delete_community_skill(
     skill_id: str,
     current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
 ) -> None:
     """删除社区 skill，仅作者可调用。"""
     record = db.community.get_by_id(skill_id)

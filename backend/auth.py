@@ -15,7 +15,6 @@ from pydantic import BaseModel, Field
 
 from backend.config import (
     ACCESS_TOKEN_EXPIRE_MINUTES,
-    DATABASE_PATH,
     JWT_ALGORITHM,
     JWT_SECRET,
     NONCE_CLEANUP_PROBABILITY,
@@ -27,12 +26,11 @@ from backend.config import (
     REFRESH_TOKEN_EXPIRE_DAYS,
 )
 from backend.db import DatabaseFacade
+from backend.db_dep import get_db
 
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 security = HTTPBearer(auto_error=False)
-db = DatabaseFacade(db_path=DATABASE_PATH)
-
 
 # 令牌类型：访问令牌和刷新令牌。
 TokenType = Literal["access", "refresh"]
@@ -199,6 +197,7 @@ def verify_nonce(
     x_nonce: str | None = Header(None, alias="X-Nonce"),
     x_nonce_ts: float | None = Header(None, alias="X-Nonce-Timestamp"),
     user_uuid: str = Depends(get_current_user_uuid),
+    db: DatabaseFacade = Depends(get_db),
 ) -> None:
     """
     FastAPI 依赖项：验证 Nonce 以防重放攻击。
@@ -261,7 +260,7 @@ def _clear_refresh_cookie(response: Response) -> None:
 
 
 @router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
-def register_user(payload: RegisterRequest) -> UserOut:
+def register_user(payload: RegisterRequest, db: DatabaseFacade = Depends(get_db)) -> UserOut:
     existing = db.users.get_by_email(payload.email)
     if existing:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already exists")
@@ -281,7 +280,7 @@ def register_user(payload: RegisterRequest) -> UserOut:
 
 
 @router.post("/login", response_model=AccessTokenOut)
-def login_user(payload: LoginRequest, response: Response) -> AccessTokenOut:
+def login_user(payload: LoginRequest, response: Response, db: DatabaseFacade = Depends(get_db)) -> AccessTokenOut:
     """登录流程：验证用户凭据，生成访问令牌和刷新令牌，并通过 HttpOnly Cookie 返回刷新令牌。"""
     user = db.users.get_by_email(payload.email)
     if not user:
@@ -298,7 +297,7 @@ def login_user(payload: LoginRequest, response: Response) -> AccessTokenOut:
 
 
 @router.post("/refresh", response_model=AccessTokenOut)
-def refresh_access_token(request: Request, response: Response) -> AccessTokenOut:
+def refresh_access_token(request: Request, response: Response, db: DatabaseFacade = Depends(get_db)) -> AccessTokenOut:
     refresh_token = request.cookies.get(REFRESH_COOKIE_NAME)
     if not refresh_token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing refresh token cookie")
@@ -323,7 +322,7 @@ def logout(response: Response) -> Response:
     return response#返回空响应保证可读性
 
 
-def get_current_user(user_uuid: str = Depends(get_current_user_uuid)) -> UserRecord:
+def get_current_user(user_uuid: str = Depends(get_current_user_uuid), db: DatabaseFacade = Depends(get_db)) -> UserRecord:
     """根据用户 UUID 获取当前用户信息，供其他接口使用"""
     user = db.users.get_by_uuid(user_uuid)
     return _ensure_user_record(user)

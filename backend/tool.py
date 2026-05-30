@@ -147,14 +147,12 @@ def _skill_rel_path(skill_name: str, file_path: str) -> str:
 def _with_skill_fs(ctx: RunContext[Any], skill_ref: str, fn) -> dict[str, Any]:
     """构造对应范围的文件门面并执行 fn(fs)，统一把异常转为结构化返回。"""
     from backend.context import ChatDeps  # 避免顶层循环依赖
-    from backend.db import DatabaseFacade
-    from backend.config import DATABASE_PATH
     from backend.file import ProjectFile, UserFile, FileError
 
     if not isinstance(ctx.deps, ChatDeps):
         return {"status": "error", "error": "deps_missing"}
 
-    db = DatabaseFacade(DATABASE_PATH)
+    db = ctx.deps.db
     try:
         scope, _skill_name = _parse_skill_ref(skill_ref)
         if scope == "user":

@@ -19,17 +19,16 @@ from pydantic import BaseModel, Field
 from backend.auth import get_current_user
 from backend.config import (
     APP_NAME,
-    DATABASE_PATH,
     SKILL_FILE_MAX_CHARS,
     SKILL_RESOURCE_DIRS,
 )
 from backend.db import DatabaseFacade
+from backend.db_dep import get_db
 from backend.file import ProjectFile, UserFile, FileError, _TEXT_FILE_EXTENSIONS, validate_skill_storage_path
 from backend.tool import get_registered_tool_names
 from backend.transfer import router as transfer_router
 
 
-db = DatabaseFacade(db_path=DATABASE_PATH)
 router = APIRouter(tags=["data"])
 router.include_router(transfer_router)
 
@@ -122,6 +121,7 @@ class MessageListResponse(BaseModel):
 def list_user_projects(
     user_id: str,
     current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
 ) -> ProjectListResponse:
     """查询用户所拥有的项目"""
     jwt_user_uuid = current_user.get("uuid")
@@ -154,6 +154,7 @@ def create_user_project(
     user_id: str,
     payload: CreateProjectRequest,
     current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
 ) -> ProjectItem:
     """为用户创建新项目。"""
     jwt_user_uuid = current_user.get("uuid")
@@ -179,6 +180,7 @@ def rename_project(
     pid: str,
     payload: UpdateProjectRequest,
     current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
 ) -> ProjectItem:
     """重命名项目。项目不存在或不属于当前用户返回 404。"""
     user_uuid = current_user.get("uuid")
@@ -210,6 +212,7 @@ def rename_project(
 def delete_project(
     pid: str,
     current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
 ) -> None:
     """删除项目。外键 ON DELETE CASCADE 会级联删除该项目下所有会话与消息。"""
     user_uuid = current_user.get("uuid")
@@ -230,6 +233,7 @@ def delete_project(
 def list_project_sessions(
     pid: str,
     current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
 ) -> SessionListResponse:
     """查询项目下的所有会话"""
     user_uuid = current_user.get("uuid")
@@ -269,6 +273,7 @@ def create_project_session(
     pid: str,
     payload: CreateSessionRequest,
     current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
 ) -> SessionItem:
     """在项目下创建新会话。"""
     user_uuid = current_user.get("uuid")
@@ -302,6 +307,7 @@ def rename_session(
     sid: str,
     payload: UpdateSessionRequest,
     current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
 ) -> SessionItem:
     """重命名会话。会话不存在或不属于当前用户返回 404。"""
     user_uuid = current_user.get("uuid")
@@ -333,6 +339,7 @@ def rename_session(
 def delete_session(
     sid: str,
     current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
 ) -> None:
     """删除会话。外键 ON DELETE CASCADE 会级联删除该会话下所有消息。"""
     user_uuid = current_user.get("uuid")
@@ -353,6 +360,7 @@ def delete_session(
 def list_session_messages(
     sid: str,
     current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
 ) -> MessageListResponse:
     """查询会话的所有消息"""
     user_uuid = current_user.get("uuid")
@@ -424,6 +432,7 @@ class MessageVersionsResponse(BaseModel):
 def get_message_versions(
     msg_id: str,
     current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
 ) -> MessageVersionsResponse:
     """查询某个回合 anchor 下的所有版本消息（含活跃版 version=0 与历史版 version>0）。"""
     user_uuid = current_user.get("uuid")
@@ -471,6 +480,7 @@ def switch_to_message_version(
     msg_id: str,
     payload: SwitchVersionRequest,
     current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
 ) -> SwitchVersionResponse:
     """切换到指定版本：把 target_version_msg_id 所在版本与 version=0 整组对调。
 
@@ -503,6 +513,7 @@ def switch_to_message_version(
 def delete_active_turn(
     anchor_msg_id: str,
     current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
 ) -> None:
     """删除该回合当前活跃版本（version=0）的整组消息。
 
@@ -636,6 +647,7 @@ def list_user_files(
     user_id: str,
     path: str = ".",
     current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
 ) -> FileListResponse:
     """列出用户文件目录。"""
     if user_id != current_user.get("uuid"):
@@ -667,6 +679,7 @@ def read_user_file(
     user_id: str,
     path: str,
     current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
 ) -> FileContentResponse:
     """读取用户文件内容。"""
     if user_id != current_user.get("uuid"):
@@ -705,6 +718,7 @@ def write_user_file(
     user_id: str,
     payload: WriteFileRequest,
     current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
 ) -> FileContentResponse:
     """写入或覆盖用户文件。"""
     if user_id != current_user.get("uuid"):
@@ -738,6 +752,7 @@ def create_user_directory(
     user_id: str,
     payload: CreateDirectoryRequest,
     current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
 ) -> None:
     """创建用户文件目录。当前仅允许 materialize skill 规范目录。"""
     if user_id != current_user.get("uuid"):
@@ -766,6 +781,7 @@ def delete_user_file(
     user_id: str,
     path: str,
     current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
 ) -> None:
     """删除用户文件或目录。"""
     if user_id != current_user.get("uuid"):
@@ -807,6 +823,7 @@ def list_project_files(
     pid: str,
     path: str = ".",
     current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
 ) -> FileListResponse:
     """列出项目文件目录。"""
     user_uuid = current_user.get("uuid")
@@ -839,6 +856,7 @@ def read_project_file(
     pid: str,
     path: str,
     current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
 ) -> FileContentResponse:
     """读取项目文件内容。"""
     user_uuid = current_user.get("uuid")
@@ -878,6 +896,7 @@ def write_project_file(
     pid: str,
     payload: WriteFileRequest,
     current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
 ) -> FileContentResponse:
     """写入或覆盖项目文件。"""
     user_uuid = current_user.get("uuid")
@@ -912,6 +931,7 @@ def create_project_directory(
     pid: str,
     payload: CreateDirectoryRequest,
     current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
 ) -> None:
     """创建项目文件目录。当前仅允许 materialize skill 规范目录。"""
     user_uuid = current_user.get("uuid")
@@ -941,6 +961,7 @@ def delete_project_file(
     pid: str,
     path: str,
     current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
 ) -> None:
     """删除项目文件或目录。"""
     user_uuid = current_user.get("uuid")
