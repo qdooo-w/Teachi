@@ -42,7 +42,7 @@ from pydantic_ai.messages import (
     FunctionToolResultEvent,
 )
 
-from backend.config import DATABASE_PATH, GetAgent, SKILL_STORAGE_DIR, load_prompt
+from backend.config import GetAgent, SKILL_STORAGE_DIR, load_prompt
 from pydantic_ai_skills import SkillsCapability
 from backend.context import (
     ActionKind,
@@ -53,7 +53,6 @@ from backend.context import (
     ToolMode,
     register_node,
 )
-from backend.db import DatabaseFacade
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +77,7 @@ async def validate_node(ctx: LoopContext) -> NodeOutput:
     SEND 额外校验 user_input 和 pid 非空。
     STOP 仅归属链校验，不过则拒绝。
     """
-    db = DatabaseFacade(db_path=DATABASE_PATH)
+    db = ctx.db
 
     # 归属校验
     if not db.access.validate_project_session(
@@ -93,7 +92,7 @@ async def validate_node(ctx: LoopContext) -> NodeOutput:
     # 用户锁校验: send/regenerate 需要获取锁
     if ctx.action in (ActionKind.SEND, ActionKind.REGENERATE):
         from backend.loop import get_user_lock
-        lock = get_user_lock(ctx.user_uuid)
+        lock = await get_user_lock(ctx.user_uuid)
         if lock.locked():
             ctx.error = "AI is generating, please wait"
             ctx.error_code = "SESSION_BUSY"
@@ -152,7 +151,7 @@ async def stop_node(ctx: LoopContext) -> NodeOutput:
             pass
 
         # 确保锁被释放（如果任务没有正常释放）
-        lock = get_user_lock(ctx.user_uuid)
+        lock = await get_user_lock(ctx.user_uuid)
         if lock.locked():
             lock.release()
 
@@ -168,7 +167,7 @@ async def load_history_node(ctx: LoopContext) -> NodeOutput:
     旧版本会被 bump 到 version=1。
     SEND 模式：返回到当前为止的全部活跃消息。
     """
-    db = DatabaseFacade(db_path=DATABASE_PATH)
+    db = ctx.db
 
     raw_messages = db.messages.list_active_by_session_for_user(
         sid=ctx.sid,
@@ -212,7 +211,7 @@ async def build_messages_node(ctx: LoopContext) -> NodeOutput:
         prompt_text = ctx.user_input
     else:
         # 用户没改，复用 anchor 的原文（从数据库读 raw_json 反序列化取 UserPromptPart.content）
-        db = DatabaseFacade(db_path=DATABASE_PATH)
+        db = ctx.db
         anchor_row = db.messages.get_for_user(
             msg_id=ctx.anchor_msg_id or "",
             user_uuid=ctx.user_uuid,
@@ -256,7 +255,7 @@ async def build_model_node(ctx: LoopContext) -> NodeOutput:
     from backend.tool import build_tools
     from dataclasses import replace
     from pydantic_ai_skills import discover_skills
-    db = DatabaseFacade(DATABASE_PATH)
+    db = ctx.db
 
     global_skills = SKILL_STORAGE_DIR
     user_fs = UserFile(user_uuid=ctx.user_uuid, db_facade=db)
@@ -326,6 +325,7 @@ async def call_model_node(ctx: LoopContext) -> NodeOutput:
         pid=ctx.pid,
         sid=ctx.sid,
         allowed_tools=ctx.allowed_tools,
+        db=ctx.db,
         tool_mode=ToolMode.ON,
     )
 
@@ -424,7 +424,7 @@ async def save_node(ctx: LoopContext) -> NodeOutput:
     REGENERATE: 先把 anchor 组所有旧消息的 version 自增 1（旧版本退到 v=1...n），
                 再以同一 anchor、version=0 写入新一组消息。前端按 version=0 取出即活跃组。
     """
-    db = DatabaseFacade(db_path=DATABASE_PATH)
+    db = ctx.db
 
     new_messages = [m for m in ctx.messages if m not in ctx.history_messages]
 
@@ -463,7 +463,7 @@ async def release_lock_node(ctx: LoopContext) -> NodeOutput:
     """释放用户锁。所有路径的最终出口。"""
     from backend.loop import _running_tasks, get_user_lock, task_key
 
-    lock = get_user_lock(ctx.user_uuid)
+    lock = await get_user_lock(ctx.user_uuid)
     if lock.locked():
         lock.release()
 

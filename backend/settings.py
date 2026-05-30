@@ -1,4 +1,4 @@
-"""settings.py - 用户模型配置 API 路由
+﻿"""settings.py - 用户模型配置 API 路由
 
 提供用户自定义模型配置的 CRUD 端点：
 - 列出所有配置
@@ -15,15 +15,14 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from backend.auth import get_current_user
-from backend.config import DATABASE_PATH
 from backend.db import DatabaseFacade
+from backend.db_dep import get_db
 
 
-db = DatabaseFacade(db_path=DATABASE_PATH)
 router = APIRouter(prefix="/settings", tags=["settings"])
 
 
-# ── 请求/响应模型 ──
+# ─── 请求/响应模型 ──────────────────────────────────────────────────────────────
 
 
 class ModelConfigItem(BaseModel):
@@ -77,7 +76,7 @@ class ActiveConfigResponse(BaseModel):
 
 
 class TestConnectionRequest(BaseModel):
-    """测试连接请求（保存前预检用）"""
+    """测试连接请求（保存前预检）"""
 
     api_key: str = Field(default="", max_length=500, description="API Key")
     base_url: str = Field(default="", max_length=500, description="API Base URL")
@@ -92,14 +91,14 @@ class TestConnectionResponse(BaseModel):
     model: str | None = None
 
 
-# ── 辅助函数 ──
+# ─── 辅助函数 ──────────────────────────────────────────────────────────────
 
 
 def _mask_api_key(api_key: str) -> str:
     """对 API Key 脱敏：仅保留末4位，其余用 * 替代。
 
-    短 Key（<=4位）保留末2位，让用户仍能区分不同配置。
-    空 Key 返回空字符串，前端可据此区分"已填写"和"未填写"。
+    短 Key（≤4位）保留末2位，让用户仍能区分不同配置。
+    空 Key 返回空字串，前端可据此区分"已填写"和"未填写"。
     """
     if not api_key:
         return ""
@@ -124,12 +123,13 @@ def _row_to_item(row: dict) -> ModelConfigItem:
     )
 
 
-# ── 路由 ──
+# ─── 路由 ──────────────────────────────────────────────────────────────
 
 
 @router.get("/model-configs", response_model=ModelConfigListResponse)
 def list_model_configs(
     current_user: dict = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
 ) -> ModelConfigListResponse:
     """列出当前用户的所有模型配置。"""
     user_uuid: str = current_user["uuid"]
@@ -137,14 +137,11 @@ def list_model_configs(
     return ModelConfigListResponse(configs=[_row_to_item(c) for c in configs])
 
 
-@router.post(
-    "/model-configs",
-    response_model=ModelConfigItem,
-    status_code=status.HTTP_201_CREATED,
-)
+@router.post("/model-configs", response_model=ModelConfigItem, status_code=status.HTTP_201_CREATED)
 def create_model_config(
     payload: CreateModelConfigRequest,
     current_user: dict = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
 ) -> ModelConfigItem:
     """创建新的模型配置。"""
     user_uuid: str = current_user["uuid"]
@@ -164,6 +161,7 @@ def create_model_config(
 @router.get("/model-configs/active", response_model=ActiveConfigResponse)
 def get_active_model_config(
     current_user: dict = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
 ) -> ActiveConfigResponse:
     """获取当前用户激活的模型配置。没有激活配置时返回 config=None。"""
     user_uuid: str = current_user["uuid"]
@@ -178,6 +176,7 @@ def update_model_config(
     config_id: str,
     payload: UpdateModelConfigRequest,
     current_user: dict = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
 ) -> ModelConfigItem:
     """更新模型配置。仅更新请求中提供的字段。"""
     user_uuid: str = current_user["uuid"]
@@ -212,6 +211,7 @@ def update_model_config(
 def activate_model_config(
     config_id: str,
     current_user: dict = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
 ) -> ModelConfigItem:
     """激活指定的模型配置（同时取消其他配置的激活状态）。"""
     user_uuid: str = current_user["uuid"]
@@ -228,6 +228,7 @@ def activate_model_config(
 @router.post("/model-configs/deactivate", status_code=status.HTTP_204_NO_CONTENT)
 def deactivate_all_model_configs(
     current_user: dict = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
 ) -> None:
     """取消所有模型配置的激活状态，回到全局默认配置。"""
     user_uuid: str = current_user["uuid"]
@@ -238,6 +239,7 @@ def deactivate_all_model_configs(
 def delete_model_config(
     config_id: str,
     current_user: dict = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
 ) -> None:
     """删除模型配置。"""
     user_uuid: str = current_user["uuid"]
@@ -271,6 +273,7 @@ async def test_connection_with_params(
 async def test_connection_with_config(
     config_id: str,
     current_user: dict = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
 ) -> TestConnectionResponse:
     """用已保存的配置测试 API 连通性。"""
     user_uuid: str = current_user["uuid"]

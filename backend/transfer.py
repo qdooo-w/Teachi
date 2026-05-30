@@ -22,18 +22,17 @@ from pydantic import BaseModel
 from backend.auth import get_current_user, verify_nonce
 from backend.config import (
     BASE_DIR,
-    DATABASE_PATH,
     SKILL_TEXT_EXTENSIONS,
     SKILL_ZIP_ALLOWED_CONTENT_TYPES,
     SKILL_ZIP_MAX_BYTES,
     SKILL_ZIP_RESOURCE_DIR_ALIASES,
 )
 from backend.db import DatabaseFacade
+from backend.db_dep import get_db
 from backend.file import FileError
 from backend.skill_parser import SkillFields, SkillParseError, parse_skill_file
 
 
-db = DatabaseFacade(db_path=DATABASE_PATH)
 router = APIRouter(tags=["transfer"])
 
 
@@ -280,6 +279,7 @@ async def _read_limited_zip_body(request: Request) -> bytes:
 async def upload_community_skill_zip(
     request: Request,
     current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
 ) -> CommunitySkillDetail:
     content_type = (request.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
     if content_type and content_type not in SKILL_ZIP_ALLOWED_CONTENT_TYPES:

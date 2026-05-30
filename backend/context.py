@@ -57,6 +57,7 @@ class LoopContext:
     pid: str
     sid: str
     allowed_tools: list[str] | None = None
+    db: Any = field(default=None, repr=False)
 
     action: ActionKind = ActionKind.SEND
 
@@ -103,6 +104,7 @@ class ChatDeps:
     pid: str
     sid: str
     allowed_tools: list[str] | None
+    db: Any = None
     tool_mode: ToolMode = ToolMode.ON
 
 

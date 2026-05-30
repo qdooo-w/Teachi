@@ -6,10 +6,10 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.auth import router as auth_router
-from backend.config import APP_NAME, CORS_ALLOW_ORIGINS, DATABASE_PATH, LOG_LEVEL, LOG_REQUESTS
+from backend.config import APP_NAME, CORS_ALLOW_ORIGINS, LOG_LEVEL, LOG_REQUESTS
 from backend.community import router as community_router
 from backend.data import router as data_router
-from backend.db import DatabaseFacade
+from backend.db_dep import db, get_db
 from backend.logging import configure_logging
 from backend.loop import router as loop_router
 from backend.settings import router as settings_router
@@ -17,9 +17,6 @@ from backend.settings import router as settings_router
 
 configure_logging(LOG_LEVEL)
 logger = logging.getLogger(__name__)
-db = DatabaseFacade(db_path=DATABASE_PATH)
-
-
 @asynccontextmanager
 async def lifespan(_: FastAPI):
 	"""应用生命周期管理器（就是资源（例如说数据库）的初始化和清理），在应用启动时设置数据库连接，并在应用关闭时进行清理（如果需要）。"""
