@@ -469,12 +469,12 @@ async function removeSelectedFile(): Promise<void> {
 }
 
 function askTargetFolder(defaultFolder: '' | SkillResourceDir = ''): '' | SkillResourceDir | null {
-  const raw = prompt('目标文件夹：留空表示技能根目录，或输入 references / assets', defaultFolder)
+  const raw = prompt('目标文件夹：留空表示技能根目录，或输入 references / assets / examples / templates', defaultFolder)
   if (raw === null) return null
   const value = raw.trim()
   if (value === '') return ''
   if ((SKILL_RESOURCE_DIRS as readonly string[]).includes(value)) return value as SkillResourceDir
-  errorMsg.value = '只能使用 references 或 assets 文件夹。'
+  errorMsg.value = '只能使用 references、assets、examples 或 templates 文件夹。'
   return null
 }
 
@@ -511,11 +511,11 @@ async function addFolder(): Promise<void> {
   if (!selectedName.value) return
   errorMsg.value = ''
   publishMsg.value = ''
-  const raw = prompt('文件夹名（只能是 references 或 assets）')
+  const raw = prompt('文件夹名（只能是 references、assets、examples 或 templates）')
   if (raw === null) return
   const name = raw.trim()
   if (!(SKILL_RESOURCE_DIRS as readonly string[]).includes(name)) {
-    errorMsg.value = '只能新建 references 或 assets 文件夹。'
+    errorMsg.value = '只能新建 references、assets、examples 或 templates 文件夹。'
     return
   }
   try {

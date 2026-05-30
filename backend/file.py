@@ -193,7 +193,9 @@ def validate_skill_storage_path(path: str, *, allow_skill_dir: bool = False) -> 
     - skills/<name>/<text-file>
     - skills/<name>/references/<text-file>
     - skills/<name>/assets/<text-file>
-    - optional directory paths for references/assets and whole skill delete
+    - skills/<name>/examples/<text-file>
+    - skills/<name>/templates/<text-file>
+    - optional directory paths for references/assets/examples/templates and whole skill delete
     """
     if not isinstance(path, str) or not path.strip():
         raise FileError("path must be a non-empty string")
@@ -229,7 +231,7 @@ def validate_skill_storage_path(path: str, *, allow_skill_dir: bool = False) -> 
     if len(rel_parts) >= 2:
         folder = rel_parts[0]
         if folder not in SKILL_RESOURCE_DIRS:
-            raise FileError("skill folders can only be 'references' or 'assets'")
+            raise FileError("skill folders can only be 'references', 'assets', 'examples' or 'templates'")
         subpath = "/".join(rel_parts[1:])
         _validate_skill_relpath(subpath)
         return

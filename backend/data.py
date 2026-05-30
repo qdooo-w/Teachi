@@ -624,7 +624,7 @@ def _validate_file_directory_path(path: str) -> None:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
                 "code": "FILE_ERROR",
-                "message": "Skill folders can only be skills/<name>/references or skills/<name>/assets",
+                "message": "Skill folders can only be skills/<name>/references, skills/<name>/assets, skills/<name>/examples or skills/<name>/templates",
             },
         )
 
