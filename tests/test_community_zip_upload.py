@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 import backend.auth as auth_module
 import backend.data as data_module
+import backend.transfer as transfer_module
 from backend.db import DatabaseFacade
 
 
@@ -49,7 +50,8 @@ def _client(tmp_path: Path, monkeypatch) -> tuple[TestClient, DatabaseFacade, st
 
     monkeypatch.setattr(auth_module, "db", db)
     monkeypatch.setattr(data_module, "db", db)
-    monkeypatch.setattr(data_module, "BASE_DIR", tmp_path)
+    monkeypatch.setattr(transfer_module, "db", db)
+    monkeypatch.setattr(transfer_module, "BASE_DIR", tmp_path)
 
     app = FastAPI()
     app.include_router(data_module.router)
