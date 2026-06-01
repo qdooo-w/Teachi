@@ -1500,6 +1500,8 @@ class DatabaseFacade:
             CREATE INDEX IF NOT EXISTS idx_attachments_sid ON attachments(sid);
             CREATE INDEX IF NOT EXISTS idx_attachments_user ON attachments(user_uuid);
             CREATE INDEX IF NOT EXISTS idx_attachments_anchor ON attachments(anchor_msg_id);
+            CREATE INDEX IF NOT EXISTS idx_attachments_hash ON attachments(file_hash, sid, user_uuid);
+
             CREATE TABLE IF NOT EXISTS user_preferences (
                 user_uuid TEXT PRIMARY KEY,
                 theme TEXT NOT NULL DEFAULT 'system',
@@ -1534,11 +1536,6 @@ class DatabaseFacade:
                 cursor.execute(
                     "ALTER TABLE attachments ADD COLUMN file_size INTEGER NOT NULL DEFAULT 0"
                 )
-
-            # 确保 file_hash 列存在后再创建对应索引，防止对旧库迁移时报错
-            cursor.execute(
-                "CREATE INDEX IF NOT EXISTS idx_attachments_hash ON attachments(file_hash, sid, user_uuid)"
-            )
 
             cursor.execute("PRAGMA table_info(community_skills)")
             columns = {row["name"] for row in cursor.fetchall()}
