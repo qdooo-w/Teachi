@@ -129,6 +129,22 @@ async def validate_node(ctx: LoopContext) -> NodeOutput:
             ctx.error_code = "BAD_REQUEST"
             return NodeOutput(transition=NodeName.STREAM_ERROR)
 
+    if ctx.attachment_ids:
+        for att_id in ctx.attachment_ids:
+            att = db.attachments.get_for_user(att_id, ctx.user_uuid)
+            if att is None:
+                ctx.error = f"Attachment {att_id} not found or does not belong to user"
+                ctx.error_code = "RESOURCE_NOT_FOUND"
+                return NodeOutput(transition=NodeName.STREAM_ERROR)
+            if att["sid"] != ctx.sid:
+                ctx.error = f"Attachment {att_id} does not belong to session {ctx.sid}"
+                ctx.error_code = "FORBIDDEN"
+                return NodeOutput(transition=NodeName.STREAM_ERROR)
+            if att["anchor_msg_id"] is not None:
+                ctx.error = f"Attachment {att_id} is already bound to another turn"
+                ctx.error_code = "BAD_REQUEST"
+                return NodeOutput(transition=NodeName.STREAM_ERROR)
+
     return NodeOutput()
 
 
@@ -302,7 +318,27 @@ async def build_model_node(ctx: LoopContext) -> NodeOutput:
 
     try:
         ctx.agent = GetAgent(**agent_kwargs)
-        ctx.agent.instructions(load_prompt("init.md","harness.md","text_output.md"))
+        session_attachments = db.attachments.list_by_session(ctx.sid, ctx.user_uuid)
+        attachment_constraint = ""
+        if session_attachments:
+            lines = [
+                f"- {a['original_filename']} (attachment_id: {a['attachment_id']})"
+                for a in session_attachments
+            ]
+            attachment_constraint = (
+                "\n\n用户在本会话中上传了以下附件：\n"
+                + "\n".join(lines)
+                + "\n\n当用户的消息与上述附件相关时，"
+                "你必须先调用 view_attachment(attachment_id=...) 工具读取附件内容，"
+                "再回答用户。不得跳过此步骤。"
+            )
+
+        base_prompt_fn = load_prompt("init.md", "harness.md", "text_output.md")
+        if attachment_constraint:
+            _constraint_snapshot = attachment_constraint
+            ctx.agent.instructions(lambda: base_prompt_fn() + _constraint_snapshot)
+        else:
+            ctx.agent.instructions(base_prompt_fn)
         # Append user_instruction if provided
         if user_instruction:
             ctx.agent.instructions(user_instruction)
@@ -452,6 +488,13 @@ async def save_node(ctx: LoopContext) -> NodeOutput:
         # SEND 场景把新生成的 anchor 回写，便于响应携带
         if ctx.action == ActionKind.SEND:
             ctx.anchor_msg_id = anchor_msg_id
+
+        if ctx.attachment_ids and ctx.anchor_msg_id:
+            db.attachments.bind_anchor(
+                attachment_ids=ctx.attachment_ids,
+                anchor_msg_id=ctx.anchor_msg_id,
+                user_uuid=ctx.user_uuid,
+            )
 
     db.sessions.touch_timestamp(sid=ctx.sid)
     return NodeOutput()

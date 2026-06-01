@@ -326,3 +326,104 @@ async def delete_skill(
         return f"skill deleted: {skill_name}"
 
     return _with_skill_fs(ctx, skill_ref, _delete_skill)
+
+
+# ── 视觉附件工具 ──────────────────────────────────────────────
+
+
+async def _generate_description(attachment: dict, db, user_uuid: str) -> str | None:
+    """调用视觉辅助模型生成图片精确内容叙述，成功后写入数据库缓存。"""
+    from backend.config.model import get_vision_assistant_provider
+    from backend.config import BASE_DIR
+    from pydantic_ai import Agent, BinaryContent
+
+    try:
+        vision_model = get_vision_assistant_provider(db, user_uuid)
+    except RuntimeError:
+        return None
+
+    file_path_str: str = attachment["file_path"]
+    from pathlib import Path
+    file_path = (
+        Path(file_path_str)
+        if Path(file_path_str).is_absolute()
+        else BASE_DIR / file_path_str
+    )
+    if not file_path.is_file():
+        return None
+
+    image_bytes = file_path.read_bytes()
+    mime_type: str = attachment["mime_type"]
+
+    describe_prompt = (
+        "请对这张图片的所有可见内容进行精确、完整的叙述。"
+        "包括但不限于：图片中的所有文字（逐字转录）、图表数据与坐标轴标签、"
+        "人物描述、场景与背景、颜色与空间关系、代码内容、数学公式等。"
+        "不要省略任何细节，不要推断图片以外的内容。"
+    )
+
+    vision_agent = Agent(vision_model)
+    try:
+        result = await vision_agent.run(
+            [describe_prompt, BinaryContent(data=image_bytes, media_type=mime_type)]
+        )
+        description = result.output if hasattr(result, "output") else str(result.data)
+    except Exception:
+        return None
+
+    db.attachments.update_description(attachment["attachment_id"], description)
+    return description
+
+
+@register_tool
+async def view_attachment(
+    ctx: RunContext[Any],
+    attachment_id: str,
+) -> Any:
+    """读取附件内容。当用户消息与上传的附件相关时，必须先调用此工具读取附件，再回答用户。
+
+    Args:
+        attachment_id: 附件 ID，来自会话系统提示词中列出的附件列表。
+
+    Returns:
+        ToolReturn：return_value 为图片精确内容叙述文字；
+        若主模型支持视觉，content 中额外包含原始图片 BinaryContent。
+    """
+    from pydantic_ai import ToolReturn, BinaryContent
+    from backend.context import ChatDeps
+    from backend.config.model import active_model_supports_vision
+    from pathlib import Path
+    from backend.config import BASE_DIR
+
+    if not isinstance(ctx.deps, ChatDeps):
+        return ToolReturn(return_value="错误：工具依赖未正确注入。")
+
+    db = ctx.deps.db
+    user_uuid = ctx.deps.user_uuid
+
+    attachment = db.attachments.get_for_user(attachment_id, user_uuid)
+    if attachment is None:
+        return ToolReturn(return_value="错误：附件不存在或无权访问。")
+
+    description: str | None = attachment.get("description")
+    if description is None:
+        description = await _generate_description(attachment, db, user_uuid)
+        if description is None:
+            return ToolReturn(return_value="错误：无法生成图片内容叙述，请检查视觉模型配置。")
+
+    if active_model_supports_vision(db, user_uuid):
+        file_path_str: str = attachment["file_path"]
+        file_path = (
+            Path(file_path_str)
+            if Path(file_path_str).is_absolute()
+            else BASE_DIR / file_path_str
+        )
+        if file_path.is_file():
+            image_bytes = file_path.read_bytes()
+            return ToolReturn(
+                return_value=description,
+                content=[description, BinaryContent(data=image_bytes, media_type=attachment["mime_type"])],
+            )
+
+    return ToolReturn(return_value=description)
+
