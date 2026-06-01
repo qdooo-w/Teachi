@@ -753,7 +753,6 @@ class ModelConfigsFacade(_DataBase):
         max_tokens: int | None = None,
         is_active: bool = False,
         supports_vision: bool = False,
-        is_vision_assistant: bool = False,
     ) -> dict:
         config_id = str(uuid.uuid4())
         now_ts = self._now_timestamp()
@@ -763,8 +762,8 @@ class ModelConfigsFacade(_DataBase):
                 INSERT INTO user_model_configs
                     (config_id, user_uuid, config_name, api_key, base_url, model_name,
                      user_instruction, temperature, max_tokens, is_active,
-                     supports_vision, is_vision_assistant, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     supports_vision, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     config_id,
@@ -778,7 +777,6 @@ class ModelConfigsFacade(_DataBase):
                     max_tokens,
                     1 if is_active else 0,
                     1 if supports_vision else 0,
-                    1 if is_vision_assistant else 0,
                     now_ts,
                     now_ts,
                 ),
@@ -838,7 +836,6 @@ class ModelConfigsFacade(_DataBase):
         temperature: float | None = None,
         max_tokens: int | None = None,
         supports_vision: bool | None = None,
-        is_vision_assistant: bool | None = None,
     ) -> dict | None:
         """更新模型配置，仅更新非 None 的字段。"""
         updates: list[str] = []
@@ -868,9 +865,6 @@ class ModelConfigsFacade(_DataBase):
         if supports_vision is not None:
             updates.append("supports_vision = ?")
             params.append(1 if supports_vision else 0)
-        if is_vision_assistant is not None:
-            updates.append("is_vision_assistant = ?")
-            params.append(1 if is_vision_assistant else 0)
 
         if not updates:
             return self.get_for_user(config_id, user_uuid)
@@ -1145,11 +1139,18 @@ class CommunitySkillsFacade(_DataBase):
 
 
 class AttachmentsFacade(_DataBase):
-    """附件管理门面。"""
+    """附件管理门面。
+
+    存储与引用逻辑分离：
+    - file_hash (SHA-256 hex) + file_path 标识物理文件，同 sid 内同一文件只写一份。
+    - attachment_id (UUID) 是调用标识，多条记录可指向同一 file_path。
+    - 删除记录前用 count_by_path 检查引用数，仅最后一条记录删除时才清理物理文件。
+    """
 
     _COLUMNS = (
         "attachment_id, sid, user_uuid, anchor_msg_id, original_filename, "
-        "file_path, mime_type, description, description_generated_at, created_at"
+        "file_hash, file_path, mime_type, file_size, "
+        "description, description_generated_at, created_at"
     )
 
     def create(
@@ -1157,8 +1158,10 @@ class AttachmentsFacade(_DataBase):
         sid: str,
         user_uuid: str,
         original_filename: str,
+        file_hash: str,
         file_path: str,
         mime_type: str,
+        file_size: int = 0,
         description: str | None = None,
         description_generated_at: float | None = None,
         attachment_id: str | None = None,
@@ -1170,16 +1173,19 @@ class AttachmentsFacade(_DataBase):
                 """
                 INSERT INTO attachments
                     (attachment_id, sid, user_uuid, anchor_msg_id, original_filename,
-                     file_path, mime_type, description, description_generated_at, created_at)
-                VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)
+                     file_hash, file_path, mime_type, file_size,
+                     description, description_generated_at, created_at)
+                VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     aid,
                     sid,
                     user_uuid,
                     original_filename,
+                    file_hash,
                     file_path,
                     mime_type,
+                    file_size,
                     description,
                     description_generated_at,
                     now_ts,
@@ -1199,6 +1205,36 @@ class AttachmentsFacade(_DataBase):
             row = cursor.fetchone()
         return self._row_to_dict(row)
 
+    def get_by_filename(self, sid: str, original_filename: str, user_uuid: str) -> dict | None:
+        """根据会话内友好文件名查找附件。"""
+        with self._cursor() as cursor:
+            cursor.execute(
+                f"SELECT {self._COLUMNS} FROM attachments WHERE sid = ? AND original_filename = ? AND user_uuid = ? LIMIT 1",
+                (sid, original_filename, user_uuid),
+            )
+            row = cursor.fetchone()
+        return self._row_to_dict(row)
+
+    def get_by_hash(self, file_hash: str, sid: str, user_uuid: str) -> dict | None:
+        """查找同一会话内是否已有相同哈希的附件记录（用于上传去重）。"""
+        with self._cursor() as cursor:
+            cursor.execute(
+                f"SELECT {self._COLUMNS} FROM attachments WHERE file_hash = ? AND sid = ? AND user_uuid = ? LIMIT 1",
+                (file_hash, sid, user_uuid),
+            )
+            row = cursor.fetchone()
+        return self._row_to_dict(row)
+
+    def count_by_path(self, file_path: str, user_uuid: str) -> int:
+        """统计指向同一物理路径的附件记录数，用于判断是否可以安全删除物理文件。"""
+        with self._cursor() as cursor:
+            cursor.execute(
+                "SELECT COUNT(1) AS cnt FROM attachments WHERE file_path = ? AND user_uuid = ?",
+                (file_path, user_uuid),
+            )
+            row = cursor.fetchone()
+        return int(row["cnt"]) if row else 0
+
     def list_by_session(self, sid: str, user_uuid: str) -> list[dict]:
         with self._cursor() as cursor:
             cursor.execute(
@@ -1207,6 +1243,16 @@ class AttachmentsFacade(_DataBase):
             )
             rows = cursor.fetchall()
         return [dict(row) for row in rows]
+
+    def count_by_type_in_session(self, sid: str, user_uuid: str, mime_prefix: str) -> int:
+        """统计会话内某类 MIME 前缀的附件数（用于生成友好文件名）。"""
+        with self._cursor() as cursor:
+            cursor.execute(
+                "SELECT COUNT(1) AS cnt FROM attachments WHERE sid = ? AND user_uuid = ? AND mime_type LIKE ?",
+                (sid, user_uuid, f"{mime_prefix}%"),
+            )
+            row = cursor.fetchone()
+        return int(row["cnt"]) if row else 0
 
     def list_by_anchor(self, anchor_msg_id: str, user_uuid: str) -> list[dict]:
         with self._cursor() as cursor:
@@ -1428,7 +1474,6 @@ class DatabaseFacade:
                 max_tokens INTEGER,
                 is_active INTEGER NOT NULL DEFAULT 0,
                 supports_vision INTEGER NOT NULL DEFAULT 0,
-                is_vision_assistant INTEGER NOT NULL DEFAULT 0,
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL,
                 FOREIGN KEY (user_uuid) REFERENCES users(uuid) ON DELETE CASCADE
@@ -1441,8 +1486,10 @@ class DatabaseFacade:
                 user_uuid TEXT NOT NULL,
                 anchor_msg_id TEXT,
                 original_filename TEXT NOT NULL,
+                file_hash TEXT NOT NULL DEFAULT '',
                 file_path TEXT NOT NULL,
                 mime_type TEXT NOT NULL,
+                file_size INTEGER NOT NULL DEFAULT 0,
                 description TEXT,
                 description_generated_at REAL,
                 created_at REAL NOT NULL,
@@ -1475,10 +1522,23 @@ class DatabaseFacade:
                 cursor.execute(
                     "ALTER TABLE user_model_configs ADD COLUMN supports_vision INTEGER NOT NULL DEFAULT 0"
                 )
-            if "is_vision_assistant" not in user_model_configs_columns:
+
+            # attachments 表迁移：补充 file_hash / file_size 列
+            cursor.execute("PRAGMA table_info(attachments)")
+            att_columns = {row["name"] for row in cursor.fetchall()}
+            if "file_hash" not in att_columns:
                 cursor.execute(
-                    "ALTER TABLE user_model_configs ADD COLUMN is_vision_assistant INTEGER NOT NULL DEFAULT 0"
+                    "ALTER TABLE attachments ADD COLUMN file_hash TEXT NOT NULL DEFAULT ''"
                 )
+            if "file_size" not in att_columns:
+                cursor.execute(
+                    "ALTER TABLE attachments ADD COLUMN file_size INTEGER NOT NULL DEFAULT 0"
+                )
+
+            # 确保 file_hash 列存在后再创建对应索引，防止对旧库迁移时报错
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_attachments_hash ON attachments(file_hash, sid, user_uuid)"
+            )
 
             cursor.execute("PRAGMA table_info(community_skills)")
             columns = {row["name"] for row in cursor.fetchall()}

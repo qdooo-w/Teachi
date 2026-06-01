@@ -637,7 +637,6 @@ export interface ModelConfigItem {
   max_tokens: number | null
   is_active: boolean
   supports_vision: boolean
-  is_vision_assistant: boolean
   created_at: number
   updated_at: number
 }
@@ -656,7 +655,6 @@ export interface CreateModelConfigRequest {
   max_tokens?: number | null
   is_active?: boolean
   supports_vision?: boolean
-  is_vision_assistant?: boolean
 }
 
 export interface UpdateModelConfigRequest {
@@ -668,7 +666,6 @@ export interface UpdateModelConfigRequest {
   temperature?: number | null
   max_tokens?: number | null
   supports_vision?: boolean
-  is_vision_assistant?: boolean
 }
 
 export interface ActiveConfigResponse {
@@ -896,6 +893,7 @@ export interface AttachmentUploadResult {
   attachment_id: string
   original_filename: string
   mime_type: string
+  file_size: number
   created_at: number
 }
 
@@ -904,6 +902,7 @@ export interface AttachmentItem {
   anchor_msg_id: string | null
   original_filename: string
   mime_type: string
+  file_size: number
   has_description: boolean
   created_at: number
 }

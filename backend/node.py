@@ -329,16 +329,13 @@ async def build_model_node(ctx: LoopContext) -> NodeOutput:
         ]
         attachment_constraint = ""
         if active_attachments:
-            lines = [
-                f"- {a['original_filename']} (attachment_id: {a['attachment_id']})"
-                for a in active_attachments
-            ]
+            lines = [f"- {a['original_filename']}" for a in active_attachments]
             attachment_constraint = (
-                "\n\n用户在本会话中上传了以下附件：\n"
+                "\n\n本会话存在以下附件：\n"
                 + "\n".join(lines)
-                + "\n\n当用户的消息与上述附件相关时，"
-                "你必须先调用 view_attachment(attachment_id=...) 工具读取附件内容，"
-                "再回答用户。不得跳过此步骤。"
+                + "\n\n处理附件规则："
+                "\n1. 需要查看附件时，使用 view_attachment(filename=...) 读取内容；"
+                "\n2. 读取前不得凭空描述附件内容，必须先完成工具调用。"
             )
 
         base_prompt_fn = load_prompt("init.md", "harness.md", "text_output.md")

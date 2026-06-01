@@ -10,6 +10,7 @@ data.py - 数据传输与查询路由模块
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import shutil
 import uuid
@@ -603,6 +604,7 @@ class AttachmentUploadResponse(BaseModel):
     attachment_id: str
     original_filename: str
     mime_type: str
+    file_size: int
     created_at: float
 
 
@@ -613,6 +615,7 @@ class AttachmentListItem(BaseModel):
     anchor_msg_id: str | None = None
     original_filename: str
     mime_type: str
+    file_size: int = 0
     has_description: bool
     created_at: float
 
@@ -634,7 +637,11 @@ async def upload_attachment(
     current_user: dict[str, Any] = Depends(get_current_user),
     db: DatabaseFacade = Depends(get_db),
 ) -> AttachmentUploadResponse:
-    """上传附件。限制大小 10MB，仅支持 JPEG/PNG/WebP/GIF，对魔术字节进行校验。"""
+    """上传附件。限制 20MB，支持图片 / 文本 / PDF / JSON / CSV 等格式。
+
+    物理文件以 SHA-256 哈希命名，同会话内相同文件只写一份（引用去重）；
+    original_filename 按类型自动生成友好名称（如"图片1.png"）。
+    """
     user_uuid = current_user.get("uuid")
     if not isinstance(user_uuid, str):
         raise HTTPException(
@@ -642,7 +649,6 @@ async def upload_attachment(
             detail={"code": "AUTH_TOKEN_INVALID", "message": "Invalid token"},
         )
 
-    # 校验会话是否存在且属于该用户
     session = db.sessions.get_for_user(sid=sid, user_uuid=user_uuid)
     if session is None:
         raise HTTPException(
@@ -651,37 +657,38 @@ async def upload_attachment(
         )
 
     pid = session["pid"]
-
-    # 校验文件大小 (最大 10MB)
     content = await file.read()
-    if len(content) > 10 * 1024 * 1024:
+    if len(content) > 20 * 1024 * 1024:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"code": "FILE_TOO_LARGE", "message": "File size exceeds 10MB limit"},
+            detail={"code": "FILE_TOO_LARGE", "message": "File size exceeds 20MB limit"},
         )
 
-    # 校验 MIME_TYPE
-    mime_type = file.content_type
-    allowed_mimes = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+    IMAGE_MIMES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+    TEXT_MIMES = {"text/plain", "text/markdown", "text/csv", "text/html"}
+    OTHER_MIMES = {"application/json", "application/pdf"}
+    allowed_mimes = IMAGE_MIMES | TEXT_MIMES | OTHER_MIMES
+
+    mime_type = (file.content_type or "application/octet-stream").split(";")[0].strip().lower()
     if mime_type not in allowed_mimes:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"code": "INVALID_MIME_TYPE", "message": f"MIME type {mime_type} is not allowed"},
+            detail={"code": "INVALID_MIME_TYPE", "message": f"MIME type {mime_type!r} is not allowed"},
         )
 
-    # 魔术字节校验
-    magic_bytes_map = {
-        "image/jpeg": b"\xff\xd8\xff",
-        "image/png": b"\x89PNG",
-        "image/webp": b"RIFF",
-        "image/gif": b"GIF",
-    }
-    expected_magic = magic_bytes_map[mime_type]
-    if not content.startswith(expected_magic):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"code": "INVALID_FILE_CONTENT", "message": "Magic bytes validation failed"},
-        )
+    # 仅对图片做魔术字节校验
+    if mime_type in IMAGE_MIMES:
+        magic_bytes_map = {
+            "image/jpeg": b"\xff\xd8\xff",
+            "image/png": b"\x89PNG",
+            "image/webp": b"RIFF",
+            "image/gif": b"GIF",
+        }
+        if not content.startswith(magic_bytes_map[mime_type]):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "INVALID_FILE_CONTENT", "message": "Magic bytes validation failed"},
+            )
 
     try:
         session_file = SessionFile(sid=sid, pid=pid, user_uuid=user_uuid, db_facade=db)
@@ -691,37 +698,61 @@ async def upload_attachment(
             detail={"code": "PERMISSION_DENIED", "message": str(e)},
         )
 
-    # 物理文件存储路径：attachments/{attachment_id}{ext} inside the SessionFile base_path
-    attachment_id = str(uuid.uuid4())
+    file_hash = hashlib.sha256(content).hexdigest()
     ext = Path(file.filename or "").suffix.lower()
     if not ext:
-        fallback = {
-            "image/jpeg": ".jpg",
-            "image/png": ".png",
-            "image/webp": ".webp",
-            "image/gif": ".gif"
+        fallback_ext = {
+            "image/jpeg": ".jpg", "image/png": ".png",
+            "image/webp": ".webp", "image/gif": ".gif",
+            "text/plain": ".txt", "text/markdown": ".md",
+            "text/csv": ".csv", "text/html": ".html",
+            "application/json": ".json", "application/pdf": ".pdf",
         }
-        ext = fallback.get(mime_type, "")
+        ext = fallback_ext.get(mime_type, "")
 
-    rel_path_in_session = f"attachments/{attachment_id}{ext}"
-    try:
-        session_file.write_bytes(rel_path_in_session, content)
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"code": "FILE_WRITE_ERROR", "message": f"Failed to save file physically: {e}"},
-        )
+    rel_path_in_session = f"attachments/{file_hash}{ext}"
+
+    # 同会话内同哈希已存在时直接复用，不重复写文件
+    if db.attachments.get_by_hash(file_hash, sid, user_uuid) is None:
+        full_candidate = session_file._safe_path(rel_path_in_session)
+        if not full_candidate.exists():
+            try:
+                session_file.write_bytes(rel_path_in_session, content)
+            except Exception as e:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail={"code": "FILE_WRITE_ERROR", "message": f"Failed to save file: {e}"},
+                )
 
     full_path = session_file._safe_path(rel_path_in_session)
     db_rel_path = str(full_path.relative_to(BASE_DIR))
 
-    # 写入数据库记录
+    # 生成会话内友好文件名
+    if mime_type in IMAGE_MIMES:
+        n = db.attachments.count_by_type_in_session(sid, user_uuid, "image/") + 1
+        original_filename = f"图片{n}{ext}"
+    elif mime_type == "application/pdf":
+        n = db.attachments.count_by_type_in_session(sid, user_uuid, "application/pdf") + 1
+        original_filename = f"PDF文档{n}.pdf"
+    elif mime_type in TEXT_MIMES or mime_type == "application/json":
+        n = (
+            db.attachments.count_by_type_in_session(sid, user_uuid, "text/")
+            + db.attachments.count_by_type_in_session(sid, user_uuid, "application/json")
+            + 1
+        )
+        original_filename = f"文档{n}{ext}"
+    else:
+        original_filename = file.filename or f"文件{ext}"
+
+    attachment_id = str(uuid.uuid4())
     record = db.attachments.create(
         sid=sid,
         user_uuid=user_uuid,
-        original_filename=file.filename or "file",
+        original_filename=original_filename,
+        file_hash=file_hash,
         file_path=db_rel_path,
         mime_type=mime_type,
+        file_size=len(content),
         attachment_id=attachment_id,
     )
 
@@ -729,6 +760,7 @@ async def upload_attachment(
         attachment_id=record["attachment_id"],
         original_filename=record["original_filename"],
         mime_type=record["mime_type"],
+        file_size=record["file_size"],
         created_at=record["created_at"],
     )
 
@@ -767,6 +799,7 @@ def list_session_attachments(
                 anchor_msg_id=item["anchor_msg_id"],
                 original_filename=item["original_filename"],
                 mime_type=item["mime_type"],
+                file_size=item.get("file_size", 0),
                 has_description=bool(item.get("description")),
                 created_at=item["created_at"],
             )
@@ -785,7 +818,7 @@ def delete_session_attachment(
     current_user: dict[str, Any] = Depends(get_current_user),
     db: DatabaseFacade = Depends(get_db),
 ) -> None:
-    """删除指定的会话附件。"""
+    """删除指定的会话附件。仅当没有其他记录引用同一物理文件时才删除文件。"""
     user_uuid = current_user.get("uuid")
     if not isinstance(user_uuid, str):
         raise HTTPException(
@@ -793,7 +826,6 @@ def delete_session_attachment(
             detail={"code": "AUTH_TOKEN_INVALID", "message": "Invalid token"},
         )
 
-    # 校验会话是否存在且属于该用户
     session = db.sessions.get_for_user(sid=sid, user_uuid=user_uuid)
     if session is None:
         raise HTTPException(
@@ -801,7 +833,6 @@ def delete_session_attachment(
             detail={"code": "RESOURCE_NOT_FOUND", "message": "Session not found"},
         )
 
-    # 校验附件是否存在，属于该用户且属于指定 session
     attachment = db.attachments.get_for_user(attachment_id, user_uuid)
     if attachment is None or attachment["sid"] != sid:
         raise HTTPException(
@@ -809,23 +840,17 @@ def delete_session_attachment(
             detail={"code": "RESOURCE_NOT_FOUND", "message": "Attachment not found"},
         )
 
-    # 从数据库删除
+    file_path_str = attachment["file_path"]
     db.attachments.delete(attachment_id, user_uuid)
 
-    # 清理物理文件
-    file_path_str = attachment["file_path"]
-    if file_path_str:
+    # 仅当没有其他记录引用同一物理路径时才删除文件
+    if file_path_str and db.attachments.count_by_path(file_path_str, user_uuid) == 0:
         try:
-            session_file = SessionFile(sid=sid, pid=session["pid"], user_uuid=user_uuid, db_facade=db)
-            rel_to_session = Path(file_path_str).relative_to(Path("data") / user_uuid / session["pid"] / sid)
-            session_file.delete_file(str(rel_to_session))
+            full_path = BASE_DIR / file_path_str
+            if full_path.exists():
+                full_path.unlink()
         except Exception as e:
-            try:
-                full_path = BASE_DIR / file_path_str
-                if full_path.exists():
-                    full_path.unlink()
-            except Exception as e2:
-                logger.warning("Failed to delete physical file %s: %s (SessionFile error: %s)", file_path_str, e2, e)
+            logger.warning("Failed to delete physical file %s: %s", file_path_str, e)
 
 
 # ── 文件 API 模型 ───────────────────────────────────────────────────────────────

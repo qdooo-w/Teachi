@@ -107,54 +107,67 @@ const pendingAttachments = ref<Array<{
   uploading: boolean
 }>>([])
 
+const ALLOWED_MIMES = new Set([
+  'image/jpeg', 'image/png', 'image/webp', 'image/gif',
+  'text/plain', 'text/markdown', 'text/csv', 'text/html',
+  'application/json', 'application/pdf',
+])
+const MAX_FILE_SIZE = 20 * 1024 * 1024 // 20MB
+
 function triggerFileSelect(): void {
   fileInputRef.value?.click()
+}
+
+async function uploadFile(file: File): Promise<void> {
+  if (file.size > MAX_FILE_SIZE) {
+    errorMessage.value = `"${file.name}" 大小超过 20MB 限制`
+    return
+  }
+  const mime = file.type || 'application/octet-stream'
+  if (!ALLOWED_MIMES.has(mime)) {
+    errorMessage.value = `"${file.name}" 格式不支持（支持：图片、文本、JSON、PDF、CSV）`
+    return
+  }
+
+  const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  pendingAttachments.value.push({
+    temp_id: tempId,
+    original_filename: file.name,
+    mime_type: mime,
+    uploading: true,
+  })
+  errorMessage.value = ''
+
+  try {
+    const result = await uploadAttachment(sid.value, file)
+    const idx = pendingAttachments.value.findIndex((item) => item.temp_id === tempId)
+    if (idx !== -1) {
+      pendingAttachments.value[idx].attachment_id = result.attachment_id
+      pendingAttachments.value[idx].original_filename = result.original_filename
+      pendingAttachments.value[idx].uploading = false
+    }
+  } catch (error) {
+    errorMessage.value = `上传"${file.name}"失败：` + getErrorMessage(error)
+    pendingAttachments.value = pendingAttachments.value.filter((item) => item.temp_id !== tempId)
+  }
 }
 
 async function handleFileChange(event: Event): Promise<void> {
   const target = event.target as HTMLInputElement
   if (!target.files || target.files.length === 0) return
-  
-  const file = target.files[0]
-  
-  // 校验大小 (10MB)
-  if (file.size > 10 * 1024 * 1024) {
-    errorMessage.value = '文件大小不能超过 10MB'
-    target.value = ''
-    return
-  }
-  
-  // 校验格式
-  const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/gif']
-  if (!allowed.includes(file.type)) {
-    errorMessage.value = '只支持图片格式 (JPEG, PNG, WebP, GIF)'
-    target.value = ''
-    return
-  }
-  
-  const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2)}`
-  const pendingItem = {
-    temp_id: tempId,
-    original_filename: file.name,
-    mime_type: file.type,
-    uploading: true
-  }
-  pendingAttachments.value.push(pendingItem)
-  errorMessage.value = ''
-  
-  try {
-    const result = await uploadAttachment(sid.value, file)
-    const idx = pendingAttachments.value.findIndex(item => item.temp_id === tempId)
-    if (idx !== -1) {
-      pendingAttachments.value[idx].attachment_id = result.attachment_id
-      pendingAttachments.value[idx].uploading = false
-    }
-  } catch (error) {
-    errorMessage.value = '上传附件失败: ' + getErrorMessage(error)
-    pendingAttachments.value = pendingAttachments.value.filter(item => item.temp_id !== tempId)
-  } finally {
-    target.value = ''
-  }
+  const files = Array.from(target.files)
+  target.value = ''
+  await Promise.all(files.map(uploadFile))
+}
+
+async function handleComposerPaste(event: ClipboardEvent): Promise<void> {
+  const items = event.clipboardData?.items
+  if (!items) return
+  const fileItems = Array.from(items).filter((item) => item.kind === 'file')
+  if (fileItems.length === 0) return
+  event.preventDefault()
+  const files = fileItems.map((item) => item.getAsFile()).filter((f): f is File => f !== null)
+  await Promise.all(files.map(uploadFile))
 }
 
 async function removePendingAttachment(att: typeof pendingAttachments.value[0]): Promise<void> {
@@ -167,7 +180,7 @@ async function removePendingAttachment(att: typeof pendingAttachments.value[0]):
       return
     }
   }
-  pendingAttachments.value = pendingAttachments.value.filter(item => item.temp_id !== att.temp_id)
+  pendingAttachments.value = pendingAttachments.value.filter((item) => item.temp_id !== att.temp_id)
 }
 
 // ── 工具函数 ──────────────────────────────────────────────────────────────────
@@ -940,6 +953,7 @@ watch(
             @keydown="handleComposerKeydown"
             @input="handleComposerInput"
             @click="checkAtTrigger"
+            @paste="handleComposerPaste"
           />
           <div class="mt-2 flex items-center justify-between">
             <div class="flex items-center gap-1">
@@ -959,7 +973,7 @@ watch(
               <button
                 class="flex h-8 w-8 items-center justify-center rounded-full text-[#6b7280] transition hover:bg-[#f3f4f6] hover:text-[#1f2937] disabled:cursor-not-allowed disabled:opacity-50"
                 :disabled="streaming || preparing"
-                title="上传图片附件"
+                title="上传附件（图片/文本/PDF，支持多选）"
                 type="button"
                 @click="triggerFileSelect"
               >
@@ -972,7 +986,8 @@ watch(
                 ref="fileInputRef"
                 type="file"
                 class="hidden"
-                accept="image/jpeg,image/png,image/webp,image/gif"
+                multiple
+                accept="image/jpeg,image/png,image/webp,image/gif,text/plain,text/markdown,text/csv,application/json,application/pdf"
                 @change="handleFileChange"
               />
             </div>
