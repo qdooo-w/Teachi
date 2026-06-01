@@ -39,6 +39,81 @@ MODEL_NAME = os.getenv("MODEL_NAME", "")
 TEST_CONNECTION_TIMEOUT = 15
 
 
+# ── 视觉模型配置 ──
+
+VISION_MODEL_API_KEY = os.getenv("VISION_MODEL_API_KEY", "")
+VISION_MODEL_BASE_URL = os.getenv("VISION_MODEL_BASE_URL", "")
+VISION_MODEL_NAME = os.getenv("VISION_MODEL_NAME", "")
+
+# 逗号分隔的已知多模态模型名关键词（大小写不敏感的子串匹配）
+# 示例：VISION_MODEL_WHITELIST=gpt-4o,gemini,claude-3
+_VISION_WHITELIST_RAW = os.getenv("VISION_MODEL_WHITELIST", "")
+VISION_MODEL_WHITELIST: list[str] = [
+    kw.strip().lower()
+    for kw in _VISION_WHITELIST_RAW.split(",")
+    if kw.strip()
+]
+
+
+def model_name_is_vision(model_name: str) -> bool:
+    """判断模型名是否命中视觉白名单（大小写不敏感子串匹配）。"""
+    lower = model_name.lower()
+    return any(kw in lower for kw in VISION_MODEL_WHITELIST)
+
+
+def active_model_supports_vision(db, user_uuid: str) -> bool:
+    """判断当前用户激活的模型配置是否支持视觉。
+
+    优先级：
+    1. 激活配置的 model_name 命中白名单
+    2. 激活配置的 supports_vision 字段为 True
+    3. 否则返回 False
+    """
+    config = db.model_configs.get_active_for_user(user_uuid)
+    if config is None:
+        return bool(VISION_MODEL_NAME) and model_name_is_vision(VISION_MODEL_NAME)
+    model_name = config.get("model_name", "")
+    if model_name and model_name_is_vision(model_name):
+        return True
+    return bool(config.get("supports_vision"))
+
+
+def get_vision_assistant_provider(db, user_uuid: str) -> "OpenAIChatModel":
+    """选取视觉辅助模型，按优先级：
+    1. 用户配置中 is_vision_assistant=True 的配置
+    2. 用户配置中 supports_vision=True 的任意一条（取第一条）
+    3. 系统 env 默认视觉模型（VISION_MODEL_*）
+    4. 抛出 RuntimeError
+    """
+    configs = db.model_configs.list_by_user(user_uuid)
+
+    for c in configs:
+        if c.get("is_vision_assistant"):
+            return GetProvider(
+                api_key=c.get("api_key") or None,
+                base_url=c.get("base_url") or None,
+                model_name=c.get("model_name") or None,
+            )
+    for c in configs:
+        if c.get("supports_vision") or model_name_is_vision(c.get("model_name", "")):
+            return GetProvider(
+                api_key=c.get("api_key") or None,
+                base_url=c.get("base_url") or None,
+                model_name=c.get("model_name") or None,
+            )
+    if VISION_MODEL_NAME:
+        return GetProvider(
+            api_key=VISION_MODEL_API_KEY or None,
+            base_url=VISION_MODEL_BASE_URL or None,
+            model_name=VISION_MODEL_NAME,
+        )
+
+    raise RuntimeError(
+        "没有可用的视觉辅助模型。请在用户设置中配置支持视觉的模型，"
+        "或在环境变量中设置 VISION_MODEL_NAME。"
+    )
+
+
 def GetProvider(
     api_key: str | None = None,
     base_url: str | None = None,
