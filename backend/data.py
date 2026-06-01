@@ -10,10 +10,13 @@ data.py - 数据传输与查询路由模块
 
 from __future__ import annotations
 
+import logging
+import shutil
+import uuid
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile
 from pydantic import BaseModel, Field
 
 from backend.auth import get_current_user
@@ -21,6 +24,7 @@ from backend.config import (
     APP_NAME,
     SKILL_FILE_MAX_CHARS,
     SKILL_RESOURCE_DIRS,
+    BASE_DIR,
 )
 from backend.db import DatabaseFacade
 from backend.db_dep import get_db
@@ -28,6 +32,7 @@ from backend.file import ProjectFile, UserFile, FileError, _TEXT_FILE_EXTENSIONS
 from backend.tool import get_registered_tool_names
 from backend.transfer import router as transfer_router
 
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["data"])
 router.include_router(transfer_router)
@@ -228,6 +233,14 @@ def delete_project(
             detail={"code": "RESOURCE_NOT_FOUND", "message": "Project not found"},
         )
 
+    # 递归删除物理目录：data/{user_uuid}/{pid}/
+    if user_uuid and pid:
+        project_dir = (BASE_DIR / "data" / user_uuid / pid).resolve()
+        data_dir = (BASE_DIR / "data").resolve()
+        if data_dir in project_dir.parents:
+            if project_dir.exists() and project_dir.is_dir():
+                shutil.rmtree(project_dir)
+
 
 @router.get("/projects/{pid}/sessions", response_model=SessionListResponse)
 def list_project_sessions(
@@ -349,11 +362,28 @@ def delete_session(
             detail={"code": "AUTH_TOKEN_INVALID", "message": "Invalid token"},
         )
 
+    session = db.sessions.get_for_user(sid=sid, user_uuid=user_uuid)
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "RESOURCE_NOT_FOUND", "message": "Session not found"},
+        )
+
+    pid = session["pid"]
+
     if not db.sessions.delete_for_user(sid=sid, user_uuid=user_uuid):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"code": "RESOURCE_NOT_FOUND", "message": "Session not found"},
         )
+
+    # 递归删除物理目录：data/{user_uuid}/{pid}/{sid}/
+    if user_uuid and pid and sid:
+        session_dir = (BASE_DIR / "data" / user_uuid / pid / sid).resolve()
+        data_dir = (BASE_DIR / "data").resolve()
+        if data_dir in session_dir.parents:
+            if session_dir.exists() and session_dir.is_dir():
+                shutil.rmtree(session_dir)
 
 
 @router.get("/sessions/{sid}/messages", response_model=MessageListResponse)
@@ -537,6 +567,227 @@ def delete_active_turn(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"code": "RESOURCE_NOT_FOUND", "message": "Active turn not found"},
         )
+
+
+# ── 附件 API 模型 ───────────────────────────────────────────────────────────────
+
+class AttachmentUploadResponse(BaseModel):
+    """附件上传成功响应"""
+
+    attachment_id: str
+    original_filename: str
+    mime_type: str
+    created_at: float
+
+
+class AttachmentListItem(BaseModel):
+    """附件列表项"""
+
+    attachment_id: str
+    anchor_msg_id: str | None = None
+    original_filename: str
+    mime_type: str
+    has_description: bool
+    created_at: float
+
+
+class AttachmentListResponse(BaseModel):
+    """附件列表响应"""
+
+    attachments: list[AttachmentListItem]
+
+
+@router.post(
+    "/sessions/{sid}/attachments",
+    response_model=AttachmentUploadResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_attachment(
+    sid: str,
+    file: UploadFile = File(...),
+    current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
+) -> AttachmentUploadResponse:
+    """上传附件。限制大小 10MB，仅支持 JPEG/PNG/WebP/GIF，对魔术字节进行校验。"""
+    user_uuid = current_user.get("uuid")
+    if not isinstance(user_uuid, str):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "AUTH_TOKEN_INVALID", "message": "Invalid token"},
+        )
+
+    # 校验会话是否存在且属于该用户
+    session = db.sessions.get_for_user(sid=sid, user_uuid=user_uuid)
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "RESOURCE_NOT_FOUND", "message": "Session not found"},
+        )
+
+    pid = session["pid"]
+
+    # 校验文件大小 (最大 10MB)
+    content = await file.read()
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "FILE_TOO_LARGE", "message": "File size exceeds 10MB limit"},
+        )
+
+    # 校验 MIME_TYPE
+    mime_type = file.content_type
+    allowed_mimes = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+    if mime_type not in allowed_mimes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "INVALID_MIME_TYPE", "message": f"MIME type {mime_type} is not allowed"},
+        )
+
+    # 魔术字节校验
+    magic_bytes_map = {
+        "image/jpeg": b"\xff\xd8\xff",
+        "image/png": b"\x89PNG",
+        "image/webp": b"RIFF",
+        "image/gif": b"GIF",
+    }
+    expected_magic = magic_bytes_map[mime_type]
+    if not content.startswith(expected_magic):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "INVALID_FILE_CONTENT", "message": "Magic bytes validation failed"},
+        )
+
+    # 物理文件存储路径：data/{user_uuid}/{pid}/{sid}/attachments/{attachment_id}{ext}
+    attachment_id = str(uuid.uuid4())
+    ext = Path(file.filename or "").suffix.lower()
+    if not ext:
+        fallback = {
+            "image/jpeg": ".jpg",
+            "image/png": ".png",
+            "image/webp": ".webp",
+            "image/gif": ".gif"
+        }
+        ext = fallback.get(mime_type, "")
+
+    rel_path = f"data/{user_uuid}/{pid}/{sid}/attachments/{attachment_id}{ext}"
+    full_path = BASE_DIR / rel_path
+
+    try:
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        full_path.write_bytes(content)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"code": "FILE_WRITE_ERROR", "message": f"Failed to save file physically: {e}"},
+        )
+
+    # 写入数据库记录
+    record = db.attachments.create(
+        sid=sid,
+        user_uuid=user_uuid,
+        original_filename=file.filename or "file",
+        file_path=rel_path,
+        mime_type=mime_type,
+        attachment_id=attachment_id,
+    )
+
+    return AttachmentUploadResponse(
+        attachment_id=record["attachment_id"],
+        original_filename=record["original_filename"],
+        mime_type=record["mime_type"],
+        created_at=record["created_at"],
+    )
+
+
+@router.get(
+    "/sessions/{sid}/attachments",
+    response_model=AttachmentListResponse,
+)
+def list_session_attachments(
+    sid: str,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
+) -> AttachmentListResponse:
+    """查询会话的所有附件"""
+    user_uuid = current_user.get("uuid")
+    if not isinstance(user_uuid, str):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "AUTH_TOKEN_INVALID", "message": "Invalid token"},
+        )
+
+    # 校验会话是否存在且属于该用户
+    session = db.sessions.get_for_user(sid=sid, user_uuid=user_uuid)
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "RESOURCE_NOT_FOUND", "message": "Session not found"},
+        )
+
+    attachments = db.attachments.list_by_session(sid=sid, user_uuid=user_uuid)
+
+    return AttachmentListResponse(
+        attachments=[
+            AttachmentListItem(
+                attachment_id=item["attachment_id"],
+                anchor_msg_id=item["anchor_msg_id"],
+                original_filename=item["original_filename"],
+                mime_type=item["mime_type"],
+                has_description=bool(item.get("description")),
+                created_at=item["created_at"],
+            )
+            for item in attachments
+        ]
+    )
+
+
+@router.delete(
+    "/sessions/{sid}/attachments/{attachment_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_session_attachment(
+    sid: str,
+    attachment_id: str,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
+) -> None:
+    """删除指定的会话附件。"""
+    user_uuid = current_user.get("uuid")
+    if not isinstance(user_uuid, str):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "AUTH_TOKEN_INVALID", "message": "Invalid token"},
+        )
+
+    # 校验会话是否存在且属于该用户
+    session = db.sessions.get_for_user(sid=sid, user_uuid=user_uuid)
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "RESOURCE_NOT_FOUND", "message": "Session not found"},
+        )
+
+    # 校验附件是否存在，属于该用户且属于指定 session
+    attachment = db.attachments.get_for_user(attachment_id, user_uuid)
+    if attachment is None or attachment["sid"] != sid:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "RESOURCE_NOT_FOUND", "message": "Attachment not found"},
+        )
+
+    # 从数据库删除
+    db.attachments.delete(attachment_id, user_uuid)
+
+    # 清理物理文件
+    file_path_str = attachment["file_path"]
+    if file_path_str:
+        full_path = BASE_DIR / file_path_str
+        if full_path.exists():
+            try:
+                full_path.unlink()
+            except Exception as e:
+                # Log the error but don't crash
+                logger.warning("Failed to delete physical file %s: %s", full_path, e)
 
 
 # ── 文件 API 模型 ───────────────────────────────────────────────────────────────
