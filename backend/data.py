@@ -28,7 +28,7 @@ from backend.config import (
 )
 from backend.db import DatabaseFacade
 from backend.db_dep import get_db
-from backend.file import ProjectFile, UserFile, FileError, _TEXT_FILE_EXTENSIONS, validate_skill_storage_path
+from backend.file import ProjectFile, UserFile, SessionFile, FileError, _TEXT_FILE_EXTENSIONS, validate_skill_storage_path
 from backend.tool import get_registered_tool_names
 from backend.transfer import router as transfer_router
 
@@ -558,6 +558,9 @@ def delete_active_turn(
             detail={"code": "AUTH_TOKEN_INVALID", "message": "Invalid token"},
         )
 
+    # 提前查询绑定在该 anchor 下的附件（此时消息还未删除，外键未触发 SET NULL）
+    attachments = db.attachments.list_by_anchor(anchor_msg_id, user_uuid)
+
     affected = db.messages.delete_active_turn(
         anchor_msg_id=anchor_msg_id,
         user_uuid=user_uuid,
@@ -567,6 +570,29 @@ def delete_active_turn(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"code": "RESOURCE_NOT_FOUND", "message": "Active turn not found"},
         )
+
+    # 物理删除与数据库清理关联的附件
+    for a in attachments:
+        file_path_str = a["file_path"]
+        if file_path_str:
+            try:
+                session = db.sessions.get_for_user(sid=a["sid"], user_uuid=user_uuid)
+                if session:
+                    session_file = SessionFile(sid=a["sid"], pid=session["pid"], user_uuid=user_uuid, db_facade=db)
+                    rel_to_session = Path(file_path_str).relative_to(Path("data") / user_uuid / session["pid"] / a["sid"])
+                    session_file.delete_file(str(rel_to_session))
+                else:
+                    full_path = BASE_DIR / file_path_str
+                    if full_path.exists():
+                        full_path.unlink()
+            except Exception as e:
+                try:
+                    full_path = BASE_DIR / file_path_str
+                    if full_path.exists():
+                        full_path.unlink()
+                except Exception as e2:
+                    logger.warning("Failed to delete physical file %s: %s (SessionFile error: %s)", file_path_str, e2, e)
+        db.attachments.delete(a["attachment_id"], user_uuid)
 
 
 # ── 附件 API 模型 ───────────────────────────────────────────────────────────────
@@ -657,7 +683,15 @@ async def upload_attachment(
             detail={"code": "INVALID_FILE_CONTENT", "message": "Magic bytes validation failed"},
         )
 
-    # 物理文件存储路径：data/{user_uuid}/{pid}/{sid}/attachments/{attachment_id}{ext}
+    try:
+        session_file = SessionFile(sid=sid, pid=pid, user_uuid=user_uuid, db_facade=db)
+    except PermissionError as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "PERMISSION_DENIED", "message": str(e)},
+        )
+
+    # 物理文件存储路径：attachments/{attachment_id}{ext} inside the SessionFile base_path
     attachment_id = str(uuid.uuid4())
     ext = Path(file.filename or "").suffix.lower()
     if not ext:
@@ -669,24 +703,24 @@ async def upload_attachment(
         }
         ext = fallback.get(mime_type, "")
 
-    rel_path = f"data/{user_uuid}/{pid}/{sid}/attachments/{attachment_id}{ext}"
-    full_path = BASE_DIR / rel_path
-
+    rel_path_in_session = f"attachments/{attachment_id}{ext}"
     try:
-        full_path.parent.mkdir(parents=True, exist_ok=True)
-        full_path.write_bytes(content)
+        session_file.write_bytes(rel_path_in_session, content)
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"code": "FILE_WRITE_ERROR", "message": f"Failed to save file physically: {e}"},
         )
 
+    full_path = session_file._safe_path(rel_path_in_session)
+    db_rel_path = str(full_path.relative_to(BASE_DIR))
+
     # 写入数据库记录
     record = db.attachments.create(
         sid=sid,
         user_uuid=user_uuid,
         original_filename=file.filename or "file",
-        file_path=rel_path,
+        file_path=db_rel_path,
         mime_type=mime_type,
         attachment_id=attachment_id,
     )
@@ -781,13 +815,17 @@ def delete_session_attachment(
     # 清理物理文件
     file_path_str = attachment["file_path"]
     if file_path_str:
-        full_path = BASE_DIR / file_path_str
-        if full_path.exists():
+        try:
+            session_file = SessionFile(sid=sid, pid=session["pid"], user_uuid=user_uuid, db_facade=db)
+            rel_to_session = Path(file_path_str).relative_to(Path("data") / user_uuid / session["pid"] / sid)
+            session_file.delete_file(str(rel_to_session))
+        except Exception as e:
             try:
-                full_path.unlink()
-            except Exception as e:
-                # Log the error but don't crash
-                logger.warning("Failed to delete physical file %s: %s", full_path, e)
+                full_path = BASE_DIR / file_path_str
+                if full_path.exists():
+                    full_path.unlink()
+            except Exception as e2:
+                logger.warning("Failed to delete physical file %s: %s (SessionFile error: %s)", file_path_str, e2, e)
 
 
 # ── 文件 API 模型 ───────────────────────────────────────────────────────────────

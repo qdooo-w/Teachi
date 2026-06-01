@@ -1208,6 +1208,15 @@ class AttachmentsFacade(_DataBase):
             rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
+    def list_by_anchor(self, anchor_msg_id: str, user_uuid: str) -> list[dict]:
+        with self._cursor() as cursor:
+            cursor.execute(
+                f"SELECT {self._COLUMNS} FROM attachments WHERE anchor_msg_id = ? AND user_uuid = ? ORDER BY created_at ASC",
+                (anchor_msg_id, user_uuid),
+            )
+            rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+
     def bind_anchor(self, *, attachment_ids: list[str], anchor_msg_id: str, user_uuid: str) -> int:
         """把一组附件的 anchor_msg_id 写入指定回合锚点。"""
         if not attachment_ids:
