@@ -80,20 +80,12 @@ def active_model_supports_vision(db, user_uuid: str) -> bool:
 
 def get_vision_assistant_provider(db, user_uuid: str) -> "OpenAIChatModel":
     """选取视觉辅助模型，按优先级：
-    1. 用户配置中 is_vision_assistant=True 的配置
-    2. 用户配置中 supports_vision=True 的任意一条（取第一条）
-    3. 系统 env 默认视觉模型（VISION_MODEL_*）
-    4. 抛出 RuntimeError
+    1. 用户配置中 supports_vision=True 的任意一条（取第一条）
+    2. 系统 env 默认视觉模型（VISION_MODEL_*）
+    3. 抛出 RuntimeError
     """
     configs = db.model_configs.list_by_user(user_uuid)
 
-    for c in configs:
-        if c.get("is_vision_assistant"):
-            return GetProvider(
-                api_key=c.get("api_key") or None,
-                base_url=c.get("base_url") or None,
-                model_name=c.get("model_name") or None,
-            )
     for c in configs:
         if c.get("supports_vision") or model_name_is_vision(c.get("model_name", "")):
             return GetProvider(

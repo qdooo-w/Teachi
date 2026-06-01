@@ -375,19 +375,126 @@ async def _generate_description(attachment: dict, db, user_uuid: str) -> str | N
     return description
 
 
+def _resolve_skill_resource_path(
+    ctx_deps: Any,
+    skill_path: str,
+) -> Path | None:
+    """解析 skill/{scope-prefix}-{skillname}/{filepath} 格式，返回物理文件路径。
+
+    例：skill/project-math-helper/references/notes.md
+    返回 None 表示路径非法或文件不存在。
+    """
+    from backend.context import ChatDeps
+    from backend.file import ProjectFile, UserFile
+
+    if not isinstance(ctx_deps, ChatDeps):
+        return None
+
+    # 去掉 "skill/" 前缀
+    if not skill_path.startswith("skill/"):
+        return None
+    rest = skill_path[len("skill/"):]
+    # 拆分成 scope-name 和 file_path
+    parts = rest.split("/", 1)
+    if len(parts) != 2 or not parts[1]:
+        return None
+
+    scope_name, file_path = parts[0], parts[1]
+
+    # 验证路径安全性（不允许越界）
+    path_parts = Path(file_path).parts
+    if any(p == ".." for p in path_parts):
+        return None
+    if file_path.startswith("/") or file_path.startswith("\\"):
+        return None
+
+    db = ctx_deps.db
+    user_uuid = ctx_deps.user_uuid
+    pid = ctx_deps.pid
+
+    try:
+        if scope_name.startswith("project-"):
+            skill_name = scope_name.removeprefix("project-")
+            if err := validate_skill_name(skill_name):
+                return None
+            fs = ProjectFile(pid=pid, user_uuid=user_uuid, db_facade=db)
+        elif scope_name.startswith("user-"):
+            skill_name = scope_name.removeprefix("user-")
+            if err := validate_skill_name(skill_name):
+                return None
+            fs = UserFile(user_uuid=user_uuid, db_facade=db)
+        elif scope_name.startswith("global-"):
+            skill_name = scope_name.removeprefix("global-")
+            if err := validate_skill_name(skill_name):
+                return None
+            fs = UserFile(user_uuid=user_uuid, db_facade=db)  # global 只读，走 user 空间验证
+        else:
+            return None
+
+        rel = f"skills/{skill_name}/{file_path}"
+        phys_path = fs._safe_path(rel)
+        return phys_path if phys_path.is_file() else None
+    except Exception:
+        return None
+
+
+@register_tool
+async def list_attachment(
+    ctx: RunContext[Any],
+) -> dict[str, Any]:
+    """列出当前会话中所有可用的附件（不含 Skill 内部资源）。
+
+    在需要处理附件前先调用此工具获取附件列表，
+    再用 view_attachment 读取具体内容。
+    Skill 文本资源通过 read_skill_resource 访问；
+    Skill 图片等二进制资源可用 view_attachment("skill/{scope}-{name}/{filepath}") 读取。
+
+    Returns:
+        {"attachments": [{"filename", "mime_type", "file_size"}]}
+    """
+    from backend.context import ChatDeps
+
+    if not isinstance(ctx.deps, ChatDeps):
+        return {"status": "error", "error": "deps_missing"}
+
+    db = ctx.deps.db
+    user_uuid = ctx.deps.user_uuid
+    sid = ctx.deps.sid
+
+    rows = db.attachments.list_by_session(sid=sid, user_uuid=user_uuid)
+    return {
+        "attachments": [
+            {
+                "filename": r["original_filename"],
+                "mime_type": r["mime_type"],
+                "file_size": r.get("file_size", 0),
+            }
+            for r in rows
+        ]
+    }
+
+
 @register_tool
 async def view_attachment(
     ctx: RunContext[Any],
-    attachment_id: str,
+    filename: str,
 ) -> Any:
-    """读取附件内容。当用户消息与上传的附件相关时，必须先调用此工具读取附件，再回答用户。
+    """读取附件内容。
+
+    支持两种调用格式：
+
+    1. 普通附件：filename 为会话内的友好文件名（例如 "图片1.png", "文档2.txt"）
+       - 图片：返回内容叙述文字（视觉模型生成），支持视觉的主模型同时获得原图；
+       - 文本/JSON/CSV/Markdown：直接返回文件内容；
+       - PDF：返回提示信息（暂不支持解析，请联系用户手动处理）。
+
+    2. Skill 资源路径：filename = "skill/{scope-prefix}-{skillname}/{filepath}"
+       例：skill/project-math-helper/references/notes.md
+       - 只支持文本类资源（.md/.txt/.json/.yaml/.yml/.csv/.xml）；
+       - 图片类 Skill 资源返回 BinaryContent 给主模型直接查看。
 
     Args:
-        attachment_id: 附件 ID，来自会话系统提示词中列出的附件列表。
-
-    Returns:
-        ToolReturn：return_value 为图片精确内容叙述文字；
-        若主模型支持视觉，content 中额外包含原始图片 BinaryContent。
+        filename: 友好文件名 或 "skill/{scope}-{name}/{filepath}" 格式路径。
     """
     from pydantic_ai import ToolReturn, BinaryContent
     from backend.context import ChatDeps
@@ -401,29 +508,95 @@ async def view_attachment(
     db = ctx.deps.db
     user_uuid = ctx.deps.user_uuid
 
-    attachment = db.attachments.get_for_user(attachment_id, user_uuid)
+    IMAGE_MIMES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+    TEXT_MIMES = {
+        "text/plain", "text/markdown", "text/csv", "text/html",
+        "application/json",
+    }
+
+    # ── 分支 1：Skill 资源路径 ──────────────────────────────
+    if filename.startswith("skill/"):
+        phys_path = _resolve_skill_resource_path(ctx.deps, filename)
+        if phys_path is None:
+            return ToolReturn(return_value="错误：Skill 资源路径不存在或非法。")
+
+        suffix = phys_path.suffix.lower()
+        # 文本资源
+        if suffix in SKILL_TEXT_EXTENSIONS:
+            try:
+                content = phys_path.read_text(encoding="utf-8")
+                return ToolReturn(return_value=content)
+            except Exception as e:
+                return ToolReturn(return_value=f"错误：读取 Skill 资源失败：{e}")
+
+        # 图片资源（直接返回 BinaryContent）
+        image_ext_to_mime = {
+            ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+            ".png": "image/png", ".webp": "image/webp", ".gif": "image/gif",
+        }
+        if suffix in image_ext_to_mime:
+            try:
+                img_bytes = phys_path.read_bytes()
+                mime = image_ext_to_mime[suffix]
+                return ToolReturn(
+                    return_value=f"Skill 图片资源：{phys_path.name}",
+                    content=[BinaryContent(data=img_bytes, media_type=mime)],
+                )
+            except Exception as e:
+                return ToolReturn(return_value=f"错误：读取 Skill 图片失败：{e}")
+
+        return ToolReturn(return_value=f"错误：不支持的 Skill 资源类型：{suffix}")
+
+    # ── 分支 2：普通附件 ───────────────────────────────────
+    attachment = db.attachments.get_by_filename(ctx.deps.sid, filename, user_uuid)
     if attachment is None:
         return ToolReturn(return_value="错误：附件不存在或无权访问。")
 
-    description: str | None = attachment.get("description")
-    if description is None:
-        description = await _generate_description(attachment, db, user_uuid)
-        if description is None:
-            return ToolReturn(return_value="错误：无法生成图片内容叙述，请检查视觉模型配置。")
+    mime_type: str = attachment["mime_type"]
+    file_path_str: str = attachment["file_path"]
+    file_path = (
+        Path(file_path_str)
+        if Path(file_path_str).is_absolute()
+        else BASE_DIR / file_path_str
+    )
 
-    if active_model_supports_vision(db, user_uuid):
-        file_path_str: str = attachment["file_path"]
-        file_path = (
-            Path(file_path_str)
-            if Path(file_path_str).is_absolute()
-            else BASE_DIR / file_path_str
+    if not file_path.is_file():
+        return ToolReturn(return_value="错误：附件文件不存在，可能已被删除。")
+
+    # 文本类型：直接返回内容
+    if mime_type in TEXT_MIMES:
+        try:
+            text = file_path.read_text(encoding="utf-8", errors="replace")
+            filename_orig = attachment.get("original_filename", file_path.name)
+            return ToolReturn(return_value=f"[{filename_orig}]\n\n{text}")
+        except Exception as e:
+            return ToolReturn(return_value=f"错误：读取文本附件失败：{e}")
+
+    # PDF：暂不解析
+    if mime_type == "application/pdf":
+        filename_orig = attachment.get("original_filename", "")
+        return ToolReturn(
+            return_value=(
+                f"附件「{filename_orig}」是 PDF 文件，当前版本暂不支持自动解析，"
+                "请告知用户手动提取所需内容后重新粘贴。"
+            )
         )
-        if file_path.is_file():
+
+    # 图片：生成叙述（走缓存），视觉模型同时返回 BinaryContent
+    if mime_type in IMAGE_MIMES:
+        description: str | None = attachment.get("description")
+        if description is None:
+            description = await _generate_description(attachment, db, user_uuid)
+            if description is None:
+                return ToolReturn(return_value="错误：无法生成图片内容叙述，请检查视觉模型配置。")
+
+        if active_model_supports_vision(db, user_uuid):
             image_bytes = file_path.read_bytes()
             return ToolReturn(
                 return_value=description,
-                content=[description, BinaryContent(data=image_bytes, media_type=attachment["mime_type"])],
+                content=[description, BinaryContent(data=image_bytes, media_type=mime_type)],
             )
+        return ToolReturn(return_value=description)
 
-    return ToolReturn(return_value=description)
+    return ToolReturn(return_value=f"错误：不支持的附件类型 {mime_type!r}。")
 

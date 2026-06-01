@@ -53,7 +53,6 @@ const form = ref({
   temperature: null as number | null,
   max_tokens: null as number | null,
   supports_vision: false,
-  is_vision_assistant: false,
 })
 const showAdvanced = ref(false)
 const showApiKey = ref(false)
@@ -71,13 +70,13 @@ async function loadConfigs(): Promise<void> {
 
 function startCreate(): void {
   editingId.value = 'create'
-  form.value = { config_name: '', api_key: '', base_url: '', model_name: '', user_instruction: '', temperature: null, max_tokens: null, supports_vision: false, is_vision_assistant: false }
+  form.value = { config_name: '', api_key: '', base_url: '', model_name: '', user_instruction: '', temperature: null, max_tokens: null, supports_vision: false }
   showAdvanced.value = false; showApiKey.value = false; apiKeyIsMasked.value = false; testResult.value = null; errorMsg.value = ''
 }
 
 function startEdit(config: ModelConfigItem): void {
   editingId.value = config.config_id
-  form.value = { config_name: config.config_name, api_key: config.api_key, base_url: config.base_url, model_name: config.model_name, user_instruction: config.user_instruction || '', temperature: config.temperature, max_tokens: config.max_tokens, supports_vision: !!config.supports_vision, is_vision_assistant: !!config.is_vision_assistant }
+  form.value = { config_name: config.config_name, api_key: config.api_key, base_url: config.base_url, model_name: config.model_name, user_instruction: config.user_instruction || '', temperature: config.temperature, max_tokens: config.max_tokens, supports_vision: !!config.supports_vision }
   showAdvanced.value = !!(config.temperature || config.max_tokens || config.user_instruction)
   showApiKey.value = false; apiKeyIsMasked.value = config.api_key.startsWith('*'); testResult.value = null; errorMsg.value = ''
 }
@@ -87,9 +86,9 @@ async function save(): Promise<void> {
   saving.value = true; errorMsg.value = ''
   try {
     if (isCreating.value) {
-      await createModelConfig({ config_name: form.value.config_name.trim(), api_key: form.value.api_key, base_url: form.value.base_url, model_name: form.value.model_name, user_instruction: form.value.user_instruction, temperature: form.value.temperature, max_tokens: form.value.max_tokens, supports_vision: form.value.supports_vision, is_vision_assistant: form.value.is_vision_assistant, is_active: false })
+      await createModelConfig({ config_name: form.value.config_name.trim(), api_key: form.value.api_key, base_url: form.value.base_url, model_name: form.value.model_name, user_instruction: form.value.user_instruction, temperature: form.value.temperature, max_tokens: form.value.max_tokens, supports_vision: form.value.supports_vision, is_active: false })
     } else if (editingId.value) {
-      const payload: UpdateModelConfigRequest = { config_name: form.value.config_name.trim(), ...(apiKeyIsMasked.value ? {} : { api_key: form.value.api_key }), base_url: form.value.base_url, model_name: form.value.model_name, user_instruction: form.value.user_instruction, temperature: form.value.temperature, max_tokens: form.value.max_tokens, supports_vision: form.value.supports_vision, is_vision_assistant: form.value.is_vision_assistant }
+      const payload: UpdateModelConfigRequest = { config_name: form.value.config_name.trim(), ...(apiKeyIsMasked.value ? {} : { api_key: form.value.api_key }), base_url: form.value.base_url, model_name: form.value.model_name, user_instruction: form.value.user_instruction, temperature: form.value.temperature, max_tokens: form.value.max_tokens, supports_vision: form.value.supports_vision }
       await updateModelConfig(editingId.value, payload)
     }
     editingId.value = null; await loadConfigs()
@@ -285,16 +284,6 @@ onMounted(() => { loadConfigs(); loadAccountInfo(); loadPreferences() })
                       class="h-4 w-4 rounded border-[#d1d5db] text-[#1f2937] focus:ring-[#1f2937]/20"
                     />
                     <span class="text-sm font-medium text-[#374151]">此模型支持视觉（图片输入）</span>
-                  </label>
-
-                  <!-- Is Vision Assistant -->
-                  <label class="flex items-center gap-2 cursor-pointer py-1">
-                    <input
-                      v-model="form.is_vision_assistant"
-                      type="checkbox"
-                      class="h-4 w-4 rounded border-[#d1d5db] text-[#1f2937] focus:ring-[#1f2937]/20"
-                    />
-                    <span class="text-sm font-medium text-[#374151]">设为视觉辅助模型（用于图片内容叙述）</span>
                   </label>
                 </div>
               </div>
