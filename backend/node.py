@@ -192,6 +192,7 @@ async def load_history_node(ctx: LoopContext) -> NodeOutput:
 
     adapter = TypeAdapter(ModelMessage)
     history: list[ModelMessage] = []
+    active_anchor_ids = set()
 
     for m in raw_messages:
         if ctx.action == ActionKind.REGENERATE and ctx.anchor_msg_id:
@@ -200,8 +201,11 @@ async def load_history_node(ctx: LoopContext) -> NodeOutput:
             if m["anchor_msg_id"] == ctx.anchor_msg_id:
                 break
         history.append(adapter.validate_json(m["raw_json"]))
+        if m["anchor_msg_id"]:
+            active_anchor_ids.add(m["anchor_msg_id"])
 
     ctx.history_messages = history
+    ctx.active_anchor_ids = active_anchor_ids
     return NodeOutput()
 
 
@@ -319,11 +323,15 @@ async def build_model_node(ctx: LoopContext) -> NodeOutput:
     try:
         ctx.agent = GetAgent(**agent_kwargs)
         session_attachments = db.attachments.list_by_session(ctx.sid, ctx.user_uuid)
+        active_attachments = [
+            a for a in session_attachments
+            if a["anchor_msg_id"] is None or a["anchor_msg_id"] in ctx.active_anchor_ids
+        ]
         attachment_constraint = ""
-        if session_attachments:
+        if active_attachments:
             lines = [
                 f"- {a['original_filename']} (attachment_id: {a['attachment_id']})"
-                for a in session_attachments
+                for a in active_attachments
             ]
             attachment_constraint = (
                 "\n\n用户在本会话中上传了以下附件：\n"

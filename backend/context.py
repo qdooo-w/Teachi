@@ -68,6 +68,7 @@ class LoopContext:
     attachment_ids: list[str] | None = None
     history_messages: list[ModelMessage] = field(default_factory=list)
     messages: list[ModelMessage] = field(default_factory=list)
+    active_anchor_ids: set[str] = field(default_factory=set)
 
     retries: int = 0
     tool_rounds: int = 0

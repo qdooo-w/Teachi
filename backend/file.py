@@ -57,6 +57,16 @@ class FileBase:
         except Exception as e:
             raise FileError(f"Failed to create file {path}: {e}")
 
+    def write_bytes(self, path: str, content: bytes) -> str:
+        """写入二进制数据到文件。"""
+        try:
+            target = self._safe_path(path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+            return f"File written: {path}"
+        except Exception as e:
+            raise FileError(f"Failed to write binary file {path}: {e}")
+
     def delete_file(self, path: str) -> str:
         """删除指定路径的文件。"""
         try:
