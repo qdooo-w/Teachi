@@ -4,6 +4,7 @@
 
 ## 近期变更
 
+- 2026-06-01：新增多模态附件系统及相关接口与 AI 工具。实现附件上传（`POST /sessions/{sid}/attachments`）、附件列表查询（`GET /sessions/{sid}/attachments`）和附件删除（`DELETE /sessions/{sid}/attachments/{attachment_id}`）。在物理存储上以 SHA-256 哈希命名文件以去重；会话内自动按文件类型生成友好文件名（如“图片1.png”）。引入 `list_attachment` 和 `view_attachment` AI 代理工具以统一处理附件、图片及 Skill 资源；完全移除了旧有的 `is_vision_assistant` 字段及数据库字段，模型配置的视觉支持通过 `supports_vision` 字段标识，并在 API 路由中完整支持该字段的读取与写入。
 - 2026-05-23（第二次）：状态机新增 `BUILD_MODEL` 节点（位于 `BUILD_MESSAGES` 与 `CALL_MODEL` 之间），负责构建 PydanticAI Agent 实例并存入 `ctx.agent`；构建失败立即跳转 `STREAM_ERROR`，错误码为 `MODEL_BUILD_FAILED`。系统提示词加载改为 `load_instruction()` 函数形式，当前仍从环境变量读取，后期可改为从文件加载。
 - 2026-05-23：新增用户模型配置相关 API 接口（`/settings`），允许用户自定义 API Key、Base URL、Model Name、System Instruction、Temperature 和 Max Tokens，并实现连通性测试与配置激活机制。
 - 2026-05-19：后端 API 无变更（前端参数整理不影响后端接口）。
@@ -170,6 +171,7 @@ FastAPI 和后端当前可能返回两类错误体：
 | `temperature` | float \| null | 温度参数，默认值为 null |
 | `max_tokens` | int \| null | 最大 token 数，默认值为 null |
 | `is_active` | bool | 是否激活 |
+| `supports_vision` | bool | 是否支持视觉 |
 | `created_at` | float | 创建时间 (Unix 时间戳) |
 | `updated_at` | float | 更新时间 (Unix 时间戳) |
 
@@ -192,6 +194,34 @@ FastAPI 和后端当前可能返回两类错误体：
 | `success` | bool | 测试连接是否成功 |
 | `message` | string | 详细结果消息（例如 "Connection successful" 或连接失败的具体错误信息） |
 | `model` | string \| null | 连接成功的模型名称 |
+
+### AttachmentUploadResponse
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `attachment_id` | string | 附件 ID |
+| `original_filename` | string | 自动生成的会话友好文件名（如 "图片1.png", "文档2.txt"） |
+| `mime_type` | string | MIME 类型 |
+| `file_size` | int | 文件大小（字节数） |
+| `created_at` | float | 创建时间 (Unix 时间戳) |
+
+### AttachmentListItem
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `attachment_id` | string | 附件 ID |
+| `anchor_msg_id` | string \| null | 绑定的消息回合 anchor ID，未绑定时为 null |
+| `original_filename` | string | 会话友好文件名 |
+| `mime_type` | string | MIME 类型 |
+| `file_size` | int | 文件大小（字节数），默认 0 |
+| `has_description` | bool | 是否已生成/缓存图片或文件的描述 |
+| `created_at` | float | 创建时间 (Unix 时间戳) |
+
+### AttachmentListResponse
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `attachments` | `AttachmentListItem[]` | 会话中的所有附件列表 |
 
 ## 认证接口
 
@@ -691,6 +721,92 @@ FastAPI 和后端当前可能返回两类错误体：
 |---|---|---|
 | 404 | `{ code: "RESOURCE_NOT_FOUND", message: "Active turn not found" }` | 该 anchor 没有当前活跃版本，或不属于当前用户 |
 
+## 附件接口
+
+### POST `/sessions/{sid}/attachments`
+
+意义：向当前会话上传文件附件。文件限制为 20MB。
+
+支持的 MIME 类型包括：
+- 图片：`image/jpeg`, `image/png`, `image/webp`, `image/gif`
+- 文本：`text/plain`, `text/markdown`, `text/csv`, `text/html`
+- 其他：`application/json`, `application/pdf`
+
+物理文件采用 SHA-256 哈希命名并在用户和会话目录下存储。同会话内相同文件只会物理写入一次（引用去重）。会话内根据上传文件的类型自动生成“图片1.png”、“文档2.txt”等友好文件名，以防 UUID 泄露给 AI 模型。对图片类型文件进行魔术字节强校验。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `sid` | string | 是 | 会话 ID |
+
+请求体：`multipart/form-data`，包含 `file` 文件字段。
+
+成功返回：`201 Created`
+
+返回体：`AttachmentUploadResponse`
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 400 | `{ code: "FILE_TOO_LARGE", message: "File size exceeds 20MB limit" }` | 文件超过 20MB 限制 |
+| 400 | `{ code: "INVALID_MIME_TYPE", message: ... }` | MIME 类型不在白名单中 |
+| 400 | `{ code: "INVALID_FILE_CONTENT", message: "Magic bytes validation failed" }` | 图片类型魔术字节校验失败 |
+| 404 | `{ code: "RESOURCE_NOT_FOUND", message: "Session not found" }` | 会话不存在或不属于该用户 |
+| 403 | `{ code: "PERMISSION_DENIED", message: ... }` | 权限不足或用户会话空间非法 |
+| 500 | `{ code: "FILE_WRITE_ERROR", message: ... }` | 文件写入失败 |
+
+### GET `/sessions/{sid}/attachments`
+
+意义：获取指定会话下的所有附件列表。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `sid` | string | 是 | 会话 ID |
+
+请求体：无。
+
+成功返回：`200 OK`
+
+返回体：`AttachmentListResponse`
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 404 | `{ code: "RESOURCE_NOT_FOUND", message: "Session not found" }` | 会话不存在或不属于该用户 |
+
+### DELETE `/sessions/{sid}/attachments/{attachment_id}`
+
+意义：删除指定的会话附件。当没有任何其他 DB 记录引用该物理文件路径时，会同步物理删除磁盘上的文件。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `sid` | string | 是 | 会话 ID |
+| `attachment_id` | string | 是 | 附件 ID |
+
+请求体：无。
+
+成功返回：`204 No Content`，无返回体。
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 404 | `{ code: "RESOURCE_NOT_FOUND", message: "Session not found" }` | 会话不存在或不属于该用户 |
+| 404 | `{ code: "RESOURCE_NOT_FOUND", message: "Attachment not found" }` | 附件不存在或与会话/用户不匹配 |
+
 ## 工具接口
 
 ### GET `/tools/registry`
@@ -707,10 +823,13 @@ FastAPI 和后端当前可能返回两类错误体：
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `tools` | `string[]` | 已通过 `@register_tool` 注册的工具名，按字母排序；当前为 `delete_skill`、`delete_skill_file`、`write_skill_file` |
+| `tools` | `string[]` | 已通过 `@register_tool` 注册的工具名，按字母排序；当前包含 `delete_skill`, `delete_skill_file`, `list_attachment`, `view_attachment`, `write_skill_file` |
 | `global_allowed_tools` | `string[]` | 当前实现与 `tools` 相同 |
 
-说明：这些注册表工具是 AI 可调用的工具，其中 `write_skill_file` / `delete_skill_file` / `delete_skill` 用于修改用户级或项目级 skill 目录。它们和模型在 `/loop/{sid}` 中通过 `SkillsCapability` 加载的「技能」不是同一个概念。
+说明：这些注册表工具是 AI 可调用的工具，其中：
+- `write_skill_file` / `delete_skill_file` / `delete_skill` 用于修改用户级或项目级 skill 目录。
+- `list_attachment` 用于列出当前会话中所有的附件（包含文件名、MIME类型、文件大小，不含 Skill 内部资源）。
+- `view_attachment` 用于按友好文件名或 `skill/` 前缀路径读取附件内容。对于图片文件返回视觉描述，普通文本（Markdown, JSON, CSV 等）直接返回文本内容，Skill 图片资源返回 BinaryContent 给主模型。
 
 这些工具使用带范围前缀的技能名作为参数：`project-<skill_name>` 表示当前项目级技能，`user-<skill_name>` 表示用户级技能。工具内部会移除前缀并写入对应的 `skills/<skill_name>/...` 目录；`global-<skill_name>` 只读，不允许通过工具修改。
 
@@ -1217,6 +1336,7 @@ SSE 数据帧格式：每帧为 `data: <JSON>`，以空行分隔。
 | `temperature` | float \| null | 否 | 0.0 - 2.0，默认 null | 温度参数 |
 | `max_tokens` | int \| null | 否 | 1 - 128000，默认 null | 最大 token 数 |
 | `is_active` | bool | 否 | 默认 false | 是否激活 |
+| `supports_vision` | bool | 否 | 默认 false | 是否支持视觉 |
 
 成功返回：`201 Created`
 
@@ -1262,6 +1382,7 @@ SSE 数据帧格式：每帧为 `data: <JSON>`，以空行分隔。
 | `model_name` | string \| null | 否 | max 200 字符，默认 null | 模型名称 |
 | `temperature` | float \| null | 否 | 0.0 - 2.0，默认 null | 温度参数 |
 | `max_tokens` | int \| null | 否 | 1 - 128000，默认 null | 最大 token 数 |
+| `supports_vision` | bool \| null | 否 | 默认 null | 是否支持视觉 |
 
 成功返回：`200 OK`
 
