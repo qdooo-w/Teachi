@@ -19,7 +19,6 @@ from pydantic_core import to_json
 
 logger = logging.getLogger(__name__)
 
-
 class _DataBase:
     """数据对象基类，统一访问根 Facade 的连接与工具能力。"""
 
@@ -36,7 +35,6 @@ class _DataBase:
 
     def _now_timestamp(self) -> float:
         return self._root._now_timestamp()
-
 
 class UsersFacade(_DataBase):
     def create(self, username: str, email: str, password_hash: str) -> dict:
@@ -79,6 +77,24 @@ class UsersFacade(_DataBase):
             affected = cursor.rowcount
         return affected > 0
 
+    def update_username(self, user_uuid: str, username: str) -> dict | None:
+        with self._cursor() as cursor:
+            cursor.execute(
+                "UPDATE users SET username = ? WHERE uuid = ?",
+                (username, user_uuid),
+            )
+            if cursor.rowcount == 0:
+                return None
+        return self.get_by_uuid(user_uuid)
+
+    def update_password(self, user_uuid: str, password_hash: str) -> bool:
+        with self._cursor() as cursor:
+            cursor.execute(
+                "UPDATE users SET password_hash = ? WHERE uuid = ?",
+                (password_hash, user_uuid),
+            )
+            affected = cursor.rowcount
+        return affected > 0
 
 class ProjectsFacade(_DataBase):
     def create(self, projectname: str, user_uuid: str) -> dict:
@@ -157,7 +173,6 @@ class ProjectsFacade(_DataBase):
             if cursor.rowcount == 0:
                 return None
         return self.get_for_user(pid=pid, user_uuid=user_uuid)
-
 
 class SessionsFacade(_DataBase):
     def create(self, pid: str, sessionname: str) -> dict:
@@ -273,7 +288,6 @@ class SessionsFacade(_DataBase):
             if cursor.rowcount == 0:
                 return None
         return self.get_for_user(sid=sid, user_uuid=user_uuid)
-
 
 class MessagesFacade(_DataBase):
     @staticmethod
@@ -666,7 +680,6 @@ class MessagesFacade(_DataBase):
 
         return final_msg_id, current_anchor
 
-
 class AccessFacade(_DataBase):
     """跨领域访问校验聚合。"""
 
@@ -680,7 +693,6 @@ class AccessFacade(_DataBase):
             return False
 
         return session.get("pid") == pid
-
 
 class NoncesFacade(_DataBase):
     """
@@ -717,7 +729,6 @@ class NoncesFacade(_DataBase):
             affected = cursor.rowcount
         return affected
 
-
 class ModelConfigsFacade(_DataBase):
     """用户模型配置管理。
 
@@ -727,7 +738,7 @@ class ModelConfigsFacade(_DataBase):
 
     _COLUMNS = (
         "config_id, user_uuid, config_name, api_key, base_url, model_name, "
-        "temperature, max_tokens, is_active, created_at, updated_at"
+        "user_instruction, temperature, max_tokens, is_active, created_at, updated_at"
     )
 
     def create(
@@ -737,6 +748,7 @@ class ModelConfigsFacade(_DataBase):
         api_key: str = "",
         base_url: str = "",
         model_name: str = "",
+        user_instruction: str = "",
         temperature: float | None = None,
         max_tokens: int | None = None,
         is_active: bool = False,
@@ -749,11 +761,11 @@ class ModelConfigsFacade(_DataBase):
                 INSERT INTO user_model_configs
                     (config_id, user_uuid, config_name, api_key, base_url, model_name,
                      user_instruction, temperature, max_tokens, is_active, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     config_id, user_uuid, config_name, api_key, base_url, model_name,
-                    temperature, max_tokens,
+                    user_instruction, temperature, max_tokens,
                     1 if is_active else 0,
                     now_ts, now_ts,
                 ),
@@ -809,6 +821,7 @@ class ModelConfigsFacade(_DataBase):
         api_key: str | None = None,
         base_url: str | None = None,
         model_name: str | None = None,
+        user_instruction: str | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> dict | None:
@@ -828,6 +841,9 @@ class ModelConfigsFacade(_DataBase):
         if model_name is not None:
             updates.append("model_name = ?")
             params.append(model_name)
+        if user_instruction is not None:
+            updates.append("user_instruction = ?")
+            params.append(user_instruction)
         if temperature is not None:
             updates.append("temperature = ?")
             params.append(temperature)
@@ -898,6 +914,48 @@ class ModelConfigsFacade(_DataBase):
             affected = cursor.rowcount
         return affected > 0
 
+class UserPreferencesFacade(_DataBase):
+    """用户偏好设置管理。"""
+
+    _COLUMNS = "user_uuid, enter_mode, updated_at"
+
+    def get_for_user(self, user_uuid: str) -> dict | None:
+        with self._cursor() as cursor:
+            cursor.execute(
+                f"SELECT {self._COLUMNS} FROM user_preferences WHERE user_uuid = ?",
+                (user_uuid,),
+            )
+            row = cursor.fetchone()
+        return self._row_to_dict(row)
+
+    def upsert_for_user(self, user_uuid: str, *, enter_mode: str | None = None) -> dict:
+        existing = self.get_for_user(user_uuid)
+        now_ts = self._now_timestamp()
+
+        if existing is None:
+            em = enter_mode or "enter"
+            with self._cursor() as cursor:
+                cursor.execute(
+                    "INSERT INTO user_preferences (user_uuid, enter_mode, updated_at) VALUES (?, ?, ?)",
+                    (user_uuid, em, now_ts),
+                )
+        else:
+            updates = []
+            params = []
+            if enter_mode is not None:
+                updates.append("enter_mode = ?")
+                params.append(enter_mode)
+            if updates:
+                updates.append("updated_at = ?")
+                params.append(now_ts)
+                params.append(user_uuid)
+                set_clause = ", ".join(updates)
+                with self._cursor() as cursor:
+                    cursor.execute(
+                        f"UPDATE user_preferences SET {set_clause} WHERE user_uuid = ?",
+                        params,
+                    )
+        return self.get_for_user(user_uuid)
 
 class CommunitySkillsFacade(_DataBase):
     """社区技能广场。每条记录指向一份归档 skill 文件夹。
@@ -1057,7 +1115,6 @@ class CommunitySkillsFacade(_DataBase):
             affected = cursor.rowcount
         return affected > 0
 
-
 class DatabaseFacade:
     """数据库门面对象：统一提供 users/projects/sessions/messages/access/nonces/community 能力。"""
 
@@ -1070,6 +1127,7 @@ class DatabaseFacade:
         self.access = AccessFacade(self)
         self.nonces = NoncesFacade(self)
         self.model_configs = ModelConfigsFacade(self)
+        self.preferences = UserPreferencesFacade(self)
         self.community = CommunitySkillsFacade(self)
 
     @staticmethod
@@ -1227,6 +1285,19 @@ class DatabaseFacade:
             );
             CREATE INDEX IF NOT EXISTS idx_model_configs_user ON user_model_configs(user_uuid);
             CREATE INDEX IF NOT EXISTS idx_model_configs_active ON user_model_configs(user_uuid, is_active);
+            CREATE TABLE IF NOT EXISTS user_preferences (
+                user_uuid TEXT PRIMARY KEY,
+                theme TEXT NOT NULL DEFAULT 'system',
+                language TEXT NOT NULL DEFAULT 'zh-CN',
+                font_size TEXT NOT NULL DEFAULT 'medium',
+                code_line_numbers INTEGER NOT NULL DEFAULT 0,
+                enter_mode TEXT NOT NULL DEFAULT 'enter',
+                loop_max_retries INTEGER,
+                test_connection_timeout INTEGER,
+                message_history_limit INTEGER,
+                updated_at REAL NOT NULL,
+                FOREIGN KEY (user_uuid) REFERENCES users(uuid) ON DELETE CASCADE
+            );
             """
             cursor.executescript(schema)
             cursor.execute("PRAGMA table_info(community_skills)")
@@ -1239,8 +1310,19 @@ class DatabaseFacade:
                 cursor.execute("ALTER TABLE community_skills ADD COLUMN display_name TEXT")
             self._migrate_legacy_community_skill_bodies(cursor)
 
-        logger.info("Database setup completed")
+            # Migrate user_model_configs: add columns if missing
+            cursor.execute("PRAGMA table_info(user_model_configs)")
+            mc_cols = {row[1] for row in cursor.fetchall()}
+            if "top_p" not in mc_cols:
+                cursor.execute("ALTER TABLE user_model_configs ADD COLUMN top_p REAL")
+            if "frequency_penalty" not in mc_cols:
+                cursor.execute("ALTER TABLE user_model_configs ADD COLUMN frequency_penalty REAL")
+            if "presence_penalty" not in mc_cols:
+                cursor.execute("ALTER TABLE user_model_configs ADD COLUMN presence_penalty REAL")
+            if "response_format" not in mc_cols:
+                cursor.execute("ALTER TABLE user_model_configs ADD COLUMN response_format TEXT")
 
+        logger.info("Database setup completed")
 
 if __name__ == "__main__":
     DatabaseFacade().setup_database()

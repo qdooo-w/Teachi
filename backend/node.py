@@ -278,6 +278,7 @@ async def build_model_node(ctx: LoopContext) -> NodeOutput:
     agent_kwargs: dict = {"tools": tools, "capabilities": [skills_capability]}
     user_config = db.model_configs.get_active_for_user(ctx.user_uuid)
     model_settings: dict = {}
+    user_instruction: str = ""
     if user_config:
         if user_config.get("api_key"):
             agent_kwargs["api_key"] = user_config["api_key"]
@@ -285,6 +286,8 @@ async def build_model_node(ctx: LoopContext) -> NodeOutput:
             agent_kwargs["base_url"] = user_config["base_url"]
         if user_config.get("model_name"):
             agent_kwargs["model_name"] = user_config["model_name"]
+        if user_config.get("user_instruction"):
+            user_instruction = user_config["user_instruction"]
         if user_config.get("temperature") is not None:
             model_settings["temperature"] = user_config["temperature"]
         if user_config.get("max_tokens") is not None:
@@ -300,6 +303,9 @@ async def build_model_node(ctx: LoopContext) -> NodeOutput:
     try:
         ctx.agent = GetAgent(**agent_kwargs)
         ctx.agent.instructions(load_prompt("init.md","harness.md","text_output.md"))
+        # Append user_instruction if provided
+        if user_instruction:
+            ctx.agent.instructions(user_instruction)
     except Exception as exc:
         ctx.error = str(exc)
         ctx.error_code = "MODEL_BUILD_FAILED"
