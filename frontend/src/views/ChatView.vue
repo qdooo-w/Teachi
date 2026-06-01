@@ -9,6 +9,7 @@ import ConfirmDialog from '../components/ConfirmDialog.vue'
 import {
   deleteTurn,
   getErrorMessage,
+  getPreferences,
   listDisplayMessages,
   listMessageVersions,
   listSessions,
@@ -444,13 +445,31 @@ async function stopStreaming(): Promise<void> {
   }
 }
 
+const sendKeyPref = ref<'enter' | 'ctrl_enter'>('enter')
+
+async function loadSendKeyPref(): Promise<void> {
+  try {
+    const prefs = await getPreferences()
+    sendKeyPref.value = prefs.enter_mode as 'enter' | 'ctrl_enter'
+  } catch { /* ignore */ }
+}
+
 function handleComposerKeydown(event: KeyboardEvent): void {
   if (showSkillPicker.value && (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Enter' || event.key === 'Escape')) {
     return
   }
-  if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
-    event.preventDefault()
-    void sendMessage()
+  if (sendKeyPref.value === 'ctrl_enter') {
+    // Ctrl+Enter sends, plain Enter = newline
+    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault()
+      void sendMessage()
+    }
+  } else {
+    // Enter sends, Shift+Enter = newline
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault()
+      void sendMessage()
+    }
   }
 }
 
@@ -633,6 +652,7 @@ async function validateAndLoad(): Promise<void> {
 }
 
 onMounted(() => {
+  loadSendKeyPref()
   void validateAndLoad()
   nextTick(autosizeComposer)
 })
@@ -808,7 +828,7 @@ watch(
             v-model="draft"
             class="composer-textarea w-full resize-none bg-transparent text-[15px] leading-relaxed outline-none placeholder:text-[#9ca3af]"
             :disabled="streaming || preparing"
-            placeholder="给 Teachi 发送消息... (Enter 换行，Ctrl/⌘ + Enter 发送，@ 呼出技能选择)"
+            :placeholder="sendKeyPref === 'ctrl_enter' ? '给 Teachi 发送消息... (Enter 换行，Ctrl/⌘ + Enter 发送，@ 呼出技能选择)' : '给 Teachi 发送消息... (Enter 发送，Shift + Enter 换行，@ 呼出技能选择)'"
             rows="2"
             @keydown="handleComposerKeydown"
             @input="handleComposerInput"

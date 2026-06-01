@@ -1,0 +1,164 @@
+
+"""Settings module tests: account, preferences, user_instruction."""
+from __future__ import annotations
+
+import pytest
+from fastapi.testclient import TestClient
+from tests.conftest import auth_headers
+
+
+@pytest.fixture
+def settings_app(tmp_path, monkeypatch):
+    db_path = tmp_path / 'test.db'
+    data_dir = tmp_path / 'data'
+    data_dir.mkdir()
+    skills_dir = data_dir / 'skills'
+    skills_dir.mkdir()
+
+    monkeypatch.setattr('backend.config.BASE_DIR', tmp_path)
+    monkeypatch.setattr('backend.config.DATABASE_PATH', str(db_path))
+    monkeypatch.setattr('backend.config.SKILL_STORAGE_DIR', str(skills_dir))
+    monkeypatch.setattr('backend.config.JWT_SECRET', 'test-secret')
+    monkeypatch.setattr('backend.auth.JWT_SECRET', 'test-secret')
+    monkeypatch.setattr('backend.file.BASE_DIR', tmp_path)
+
+    from backend.db import DatabaseFacade
+    from backend.db_dep import get_db
+    from backend.auth import router as auth_router
+    from backend.settings import router as settings_router
+    from fastapi import FastAPI
+
+    facade = DatabaseFacade(db_path=str(db_path))
+    facade.setup_database()
+
+    app = FastAPI()
+    app.dependency_overrides[get_db] = lambda: facade
+    app.include_router(auth_router)
+    app.include_router(settings_router)
+
+    return app, facade
+
+
+@pytest.fixture
+def sclient(settings_app):
+    app, _facade = settings_app
+    with TestClient(app) as c:
+        yield c
+
+
+def _reg(client, email='user@test.com', username='testuser', password='password123'):
+    r = client.post('/auth/register', json={'username': username, 'email': email, 'password': password})
+    assert r.status_code == 201
+    r = client.post('/auth/login', json={'email': email, 'password': password})
+    assert r.status_code == 200
+    return r.json()['access_token']
+
+
+class TestAccountInfo:
+    def test_get_account_info(self, sclient):
+        token = _reg(sclient)
+        r = sclient.get('/settings/account', headers=auth_headers(token))
+        assert r.status_code == 200
+        data = r.json()
+        assert data['username'] == 'testuser'
+        assert data['email'] == 'user@test.com'
+
+    def test_unauthenticated(self, sclient):
+        r = sclient.get('/settings/account')
+        assert r.status_code == 401
+
+
+class TestUpdateUsername:
+    def test_update_username(self, sclient):
+        token = _reg(sclient)
+        r = sclient.patch('/settings/account/username', headers=auth_headers(token), json={'username': 'newname'})
+        assert r.status_code == 200
+        assert r.json()['username'] == 'newname'
+
+    def test_update_username_empty_rejected(self, sclient):
+        token = _reg(sclient)
+        r = sclient.patch('/settings/account/username', headers=auth_headers(token), json={'username': ''})
+        assert r.status_code == 422
+
+
+class TestChangePassword:
+    def test_change_password_success(self, sclient):
+        token = _reg(sclient)
+        r = sclient.post('/settings/account/change-password', headers=auth_headers(token), json={
+            'current_password': 'password123',
+            'new_password': 'newpass456',
+        })
+        assert r.status_code == 204
+
+        r2 = sclient.post('/auth/login', json={'email': 'user@test.com', 'password': 'newpass456'})
+        assert r2.status_code == 200
+
+    def test_change_password_wrong_current(self, sclient):
+        token = _reg(sclient)
+        r = sclient.post('/settings/account/change-password', headers=auth_headers(token), json={
+            'current_password': 'wrongpassword',
+            'new_password': 'newpass456',
+        })
+        assert r.status_code == 400
+        assert r.json()['detail']['code'] == 'INVALID_PASSWORD'
+
+    def test_change_password_clears_refresh_cookie(self, sclient):
+        token = _reg(sclient)
+        r = sclient.post('/settings/account/change-password', headers=auth_headers(token), json={
+            'current_password': 'password123',
+            'new_password': 'newpass456',
+        })
+        assert r.status_code == 204
+        # Verify refresh cookie is cleared via Set-Cookie header
+        set_cookie_header = r.headers.get('set-cookie', '')
+        assert 'refresh_token' in set_cookie_header or 'Max-Age=0' in set_cookie_header
+
+
+class TestPreferences:
+    def test_default_preferences(self, sclient):
+        token = _reg(sclient)
+        r = sclient.get('/settings/preferences', headers=auth_headers(token))
+        assert r.status_code == 200
+        data = r.json()
+        assert data['enter_mode'] == 'enter'
+        assert data['updated_at'] is None
+
+    def test_update_enter_mode(self, sclient):
+        token = _reg(sclient)
+        r = sclient.patch('/settings/preferences', headers=auth_headers(token), json={'enter_mode': 'ctrl_enter'})
+        assert r.status_code == 200
+        assert r.json()['enter_mode'] == 'ctrl_enter'
+        assert r.json()['updated_at'] is not None
+
+    def test_invalid_enter_mode(self, sclient):
+        token = _reg(sclient)
+        r = sclient.patch('/settings/preferences', headers=auth_headers(token), json={'enter_mode': 'invalid'})
+        assert r.status_code == 422
+
+
+class TestModelConfigUserInstruction:
+    def test_create_with_instruction(self, sclient):
+        token = _reg(sclient)
+        r = sclient.post('/settings/model-configs', headers=auth_headers(token), json={
+            'config_name': 'Test',
+            'user_instruction': 'Answer in Chinese',
+        })
+        assert r.status_code == 201
+        assert r.json()['user_instruction'] == 'Answer in Chinese'
+
+    def test_update_instruction(self, sclient):
+        token = _reg(sclient)
+        create_r = sclient.post('/settings/model-configs', headers=auth_headers(token), json={
+            'config_name': 'Test', 'user_instruction': 'Old',
+        })
+        cid = create_r.json()['config_id']
+        r = sclient.patch(f'/settings/model-configs/{cid}', headers=auth_headers(token), json={
+            'user_instruction': 'New',
+        })
+        assert r.status_code == 200
+        assert r.json()['user_instruction'] == 'New'
+
+    def test_default_empty(self, sclient):
+        token = _reg(sclient)
+        r = sclient.post('/settings/model-configs', headers=auth_headers(token), json={'config_name': 'NoInst'})
+        assert r.json()['user_instruction'] == ''

@@ -630,6 +630,7 @@ export interface ModelConfigItem {
   api_key: string
   base_url: string
   model_name: string
+  user_instruction: string
   temperature: number | null
   max_tokens: number | null
   is_active: boolean
@@ -646,6 +647,7 @@ export interface CreateModelConfigRequest {
   api_key?: string
   base_url?: string
   model_name?: string
+  user_instruction?: string
   temperature?: number | null
   max_tokens?: number | null
   is_active?: boolean
@@ -656,6 +658,7 @@ export interface UpdateModelConfigRequest {
   api_key?: string
   base_url?: string
   model_name?: string
+  user_instruction?: string
   temperature?: number | null
   max_tokens?: number | null
 }
@@ -819,6 +822,64 @@ export async function installCommunitySkill(id: string, payload?: InstallSkillRe
 
 export async function deleteCommunitySkill(id: string): Promise<void> {
   await request<void>(`/community/skills/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+// ─── 账号设置 ──────────────────────────────────────────────────────────────
+
+export interface AccountInfo {
+  uuid: string
+  username: string
+  email: string
+  created_at: number
+}
+
+export interface UpdateUsernameRequest {
+  username: string
+}
+
+export interface ChangePasswordRequest {
+  current_password: string
+  new_password: string
+}
+
+export async function getAccountInfo(): Promise<AccountInfo> {
+  return request<AccountInfo>('/settings/account')
+}
+
+export async function updateUsername(payload: UpdateUsernameRequest): Promise<AccountInfo> {
+  return request<AccountInfo>('/settings/account/username', {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function changePassword(payload: ChangePasswordRequest): Promise<void> {
+  await request<void>('/settings/account/change-password', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+// ─── 偏好设置 ──────────────────────────────────────────────────────────────
+
+export interface Preferences {
+  enter_mode: string
+  updated_at: number | null
+}
+
+export interface UpdatePreferencesRequest {
+  enter_mode?: string
+}
+
+export async function getPreferences(): Promise<Preferences> {
+  return request<Preferences>('/settings/preferences')
+}
+
+export async function updatePreferences(payload: UpdatePreferencesRequest): Promise<Preferences> {
+  return request<Preferences>('/settings/preferences', {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
 }
 
 // ── 错误处理 ────────────────────────────────────────────────────────────────────
