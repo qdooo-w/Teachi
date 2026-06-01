@@ -575,7 +575,11 @@ def delete_active_turn(
     # 物理删除与数据库清理关联的附件
     for a in attachments:
         file_path_str = a["file_path"]
-        if file_path_str:
+        # 先在数据库中删除该条记录，以便正确统计剩余引用计数
+        db.attachments.delete(a["attachment_id"], user_uuid)
+
+        # 仅当没有其他记录引用同一物理路径时，才尝试删除物理文件
+        if file_path_str and db.attachments.count_by_path(file_path_str, user_uuid) == 0:
             try:
                 session = db.sessions.get_for_user(sid=a["sid"], user_uuid=user_uuid)
                 if session:
@@ -593,7 +597,6 @@ def delete_active_turn(
                         full_path.unlink()
                 except Exception as e2:
                     logger.warning("Failed to delete physical file %s: %s (SessionFile error: %s)", file_path_str, e2, e)
-        db.attachments.delete(a["attachment_id"], user_uuid)
 
 
 # ── 附件 API 模型 ───────────────────────────────────────────────────────────────
