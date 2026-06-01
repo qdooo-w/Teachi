@@ -146,6 +146,25 @@ class UserFile(FileBase):
         super().__init__(user_path)
 
 
+class SessionFile(FileBase):
+    """
+    会话文件子类，限制在 data/{user_uuid}/{pid}/{sid}/。
+    用于存储会话级附件（图片等）。
+    """
+    def __init__(self, sid: str, pid: str, user_uuid: str, db_facade):
+        session = db_facade.sessions.get_for_user(sid=sid, user_uuid=user_uuid)
+        if not session:
+            raise PermissionError(
+                f"Access Denied: Session {sid} does not belong to user {user_uuid}"
+            )
+        if session["pid"] != pid:
+            raise PermissionError(
+                f"Access Denied: Session {sid} does not belong to project {pid}"
+            )
+        session_path = BASE_DIR / "data" / user_uuid / pid / sid
+        super().__init__(session_path)
+
+
 # ── Skill 文件门面 ──────────────────────────────────────────────
 # 设计目标：让 AI 在人类指令下读写 skill 目录中的文本文件，
 # 但操作面被严格收敛，不能逃出 skills/ 子目录、不能写非文本文件、不能超大。

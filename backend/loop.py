@@ -235,6 +235,7 @@ class ChatRequest(BaseModel):
         description="regenerate 必填：要重放回合的 anchor msg_id（即原回合首条 user 消息 ID）",
     )
     allowed_tools: list[str] | None = Field(default=None, description="前端请求允许的工具列表")
+    attachment_ids: list[str] | None = Field(default=None, description="本轮附件 ID 列表，save_node 执行后写入 anchor_msg_id")
 
 
 @router.post("/{sid}")
@@ -261,6 +262,7 @@ async def chat_loop(
         user_input=payload.message,
         anchor_msg_id=payload.anchor_msg_id,
         allowed_tools=payload.allowed_tools,
+        attachment_ids=payload.attachment_ids,
         db=db,
     )
 
