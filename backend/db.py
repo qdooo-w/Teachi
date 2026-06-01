@@ -738,7 +738,7 @@ class ModelConfigsFacade(_DataBase):
 
     _COLUMNS = (
         "config_id, user_uuid, config_name, api_key, base_url, model_name, "
-        "user_instruction, temperature, max_tokens, is_active, created_at, updated_at"
+        "user_instruction, temperature, max_tokens, is_active, supports_vision, created_at, updated_at"
     )
 
     def create(
@@ -752,6 +752,8 @@ class ModelConfigsFacade(_DataBase):
         temperature: float | None = None,
         max_tokens: int | None = None,
         is_active: bool = False,
+        supports_vision: bool = False,
+        is_vision_assistant: bool = False,
     ) -> dict:
         config_id = str(uuid.uuid4())
         now_ts = self._now_timestamp()
@@ -760,14 +762,25 @@ class ModelConfigsFacade(_DataBase):
                 """
                 INSERT INTO user_model_configs
                     (config_id, user_uuid, config_name, api_key, base_url, model_name,
-                     user_instruction, temperature, max_tokens, is_active, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     user_instruction, temperature, max_tokens, is_active,
+                     supports_vision, is_vision_assistant, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    config_id, user_uuid, config_name, api_key, base_url, model_name,
-                    user_instruction, temperature, max_tokens,
+                    config_id,
+                    user_uuid,
+                    config_name,
+                    api_key,
+                    base_url,
+                    model_name,
+                    user_instruction,
+                    temperature,
+                    max_tokens,
                     1 if is_active else 0,
-                    now_ts, now_ts,
+                    1 if supports_vision else 0,
+                    1 if is_vision_assistant else 0,
+                    now_ts,
+                    now_ts,
                 ),
             )
         config = self.get_by_id(config_id)
@@ -824,6 +837,8 @@ class ModelConfigsFacade(_DataBase):
         user_instruction: str | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        supports_vision: bool | None = None,
+        is_vision_assistant: bool | None = None,
     ) -> dict | None:
         """更新模型配置，仅更新非 None 的字段。"""
         updates: list[str] = []
@@ -850,6 +865,12 @@ class ModelConfigsFacade(_DataBase):
         if max_tokens is not None:
             updates.append("max_tokens = ?")
             params.append(max_tokens)
+        if supports_vision is not None:
+            updates.append("supports_vision = ?")
+            params.append(1 if supports_vision else 0)
+        if is_vision_assistant is not None:
+            updates.append("is_vision_assistant = ?")
+            params.append(1 if is_vision_assistant else 0)
 
         if not updates:
             return self.get_for_user(config_id, user_uuid)
@@ -913,6 +934,13 @@ class ModelConfigsFacade(_DataBase):
             )
             affected = cursor.rowcount
         return affected > 0
+
+    def user_model_config_supports_vision(self, user_uuid: str) -> bool:
+        """检查用户当前激活的配置是否支持视觉。"""
+        active_config = self.get_active_for_user(user_uuid)
+        if active_config is None:
+            return False
+        return bool(active_config.get("supports_vision", 0))
 
 class UserPreferencesFacade(_DataBase):
     """用户偏好设置管理。"""
@@ -1115,6 +1143,109 @@ class CommunitySkillsFacade(_DataBase):
             affected = cursor.rowcount
         return affected > 0
 
+
+class AttachmentsFacade(_DataBase):
+    """附件管理门面。"""
+
+    _COLUMNS = (
+        "attachment_id, sid, user_uuid, anchor_msg_id, original_filename, "
+        "file_path, mime_type, description, description_generated_at, created_at"
+    )
+
+    def create(
+        self,
+        sid: str,
+        user_uuid: str,
+        original_filename: str,
+        file_path: str,
+        mime_type: str,
+        description: str | None = None,
+        description_generated_at: float | None = None,
+        attachment_id: str | None = None,
+    ) -> dict:
+        aid = attachment_id or str(uuid.uuid4())
+        now_ts = self._now_timestamp()
+        with self._cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO attachments
+                    (attachment_id, sid, user_uuid, anchor_msg_id, original_filename,
+                     file_path, mime_type, description, description_generated_at, created_at)
+                VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    aid,
+                    sid,
+                    user_uuid,
+                    original_filename,
+                    file_path,
+                    mime_type,
+                    description,
+                    description_generated_at,
+                    now_ts,
+                ),
+            )
+        record = self.get_for_user(aid, user_uuid)
+        if record is None:
+            raise RuntimeError("Attachment was inserted but could not be loaded.")
+        return record
+
+    def get_for_user(self, attachment_id: str, user_uuid: str) -> dict | None:
+        with self._cursor() as cursor:
+            cursor.execute(
+                f"SELECT {self._COLUMNS} FROM attachments WHERE attachment_id = ? AND user_uuid = ?",
+                (attachment_id, user_uuid),
+            )
+            row = cursor.fetchone()
+        return self._row_to_dict(row)
+
+    def list_by_session(self, sid: str, user_uuid: str) -> list[dict]:
+        with self._cursor() as cursor:
+            cursor.execute(
+                f"SELECT {self._COLUMNS} FROM attachments WHERE sid = ? AND user_uuid = ? ORDER BY created_at ASC",
+                (sid, user_uuid),
+            )
+            rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+
+    def bind_anchor(self, attachment_id: str, user_uuid: str, anchor_msg_id: str) -> bool:
+        with self._cursor() as cursor:
+            cursor.execute(
+                "UPDATE attachments SET anchor_msg_id = ? WHERE attachment_id = ? AND user_uuid = ?",
+                (anchor_msg_id, attachment_id, user_uuid),
+            )
+            affected = cursor.rowcount
+        return affected > 0
+
+    def update_description(
+        self,
+        attachment_id: str,
+        user_uuid: str,
+        description: str,
+        description_generated_at: float | None = None,
+    ) -> bool:
+        now_ts = description_generated_at or self._now_timestamp()
+        with self._cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE attachments
+                SET description = ?, description_generated_at = ?
+                WHERE attachment_id = ? AND user_uuid = ?
+                """,
+                (description, now_ts, attachment_id, user_uuid),
+            )
+            affected = cursor.rowcount
+        return affected > 0
+
+    def delete(self, attachment_id: str, user_uuid: str) -> bool:
+        with self._cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM attachments WHERE attachment_id = ? AND user_uuid = ?",
+                (attachment_id, user_uuid),
+            )
+            affected = cursor.rowcount
+        return affected > 0
+
 class DatabaseFacade:
     """数据库门面对象：统一提供 users/projects/sessions/messages/access/nonces/community 能力。"""
 
@@ -1129,6 +1260,7 @@ class DatabaseFacade:
         self.model_configs = ModelConfigsFacade(self)
         self.preferences = UserPreferencesFacade(self)
         self.community = CommunitySkillsFacade(self)
+        self.attachments = AttachmentsFacade(self)
 
     @staticmethod
     def _configure_connection(conn: sqlite3.Connection) -> None:
@@ -1279,12 +1411,31 @@ class DatabaseFacade:
                 temperature REAL,
                 max_tokens INTEGER,
                 is_active INTEGER NOT NULL DEFAULT 0,
+                supports_vision INTEGER NOT NULL DEFAULT 0,
+                is_vision_assistant INTEGER NOT NULL DEFAULT 0,
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL,
                 FOREIGN KEY (user_uuid) REFERENCES users(uuid) ON DELETE CASCADE
             );
             CREATE INDEX IF NOT EXISTS idx_model_configs_user ON user_model_configs(user_uuid);
             CREATE INDEX IF NOT EXISTS idx_model_configs_active ON user_model_configs(user_uuid, is_active);
+            CREATE TABLE IF NOT EXISTS attachments (
+                attachment_id TEXT PRIMARY KEY,
+                sid TEXT NOT NULL,
+                user_uuid TEXT NOT NULL,
+                anchor_msg_id TEXT,
+                original_filename TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                mime_type TEXT NOT NULL,
+                description TEXT,
+                description_generated_at REAL,
+                created_at REAL NOT NULL,
+                FOREIGN KEY (sid) REFERENCES sessions(sid) ON DELETE CASCADE,
+                FOREIGN KEY (anchor_msg_id) REFERENCES messages(msg_id) ON DELETE SET NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_attachments_sid ON attachments(sid);
+            CREATE INDEX IF NOT EXISTS idx_attachments_user ON attachments(user_uuid);
+            CREATE INDEX IF NOT EXISTS idx_attachments_anchor ON attachments(anchor_msg_id);
             CREATE TABLE IF NOT EXISTS user_preferences (
                 user_uuid TEXT PRIMARY KEY,
                 theme TEXT NOT NULL DEFAULT 'system',
@@ -1300,6 +1451,18 @@ class DatabaseFacade:
             );
             """
             cursor.executescript(schema)
+
+            cursor.execute("PRAGMA table_info(user_model_configs)")
+            user_model_configs_columns = {row[1] for row in cursor.fetchall()}
+            if "supports_vision" not in user_model_configs_columns:
+                cursor.execute(
+                    "ALTER TABLE user_model_configs ADD COLUMN supports_vision INTEGER NOT NULL DEFAULT 0"
+                )
+            if "is_vision_assistant" not in user_model_configs_columns:
+                cursor.execute(
+                    "ALTER TABLE user_model_configs ADD COLUMN is_vision_assistant INTEGER NOT NULL DEFAULT 0"
+                )
+
             cursor.execute("PRAGMA table_info(community_skills)")
             columns = {row[1] for row in cursor.fetchall()}
             if "archive_path" not in columns:
