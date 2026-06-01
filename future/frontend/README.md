@@ -256,16 +256,23 @@ Mermaid 渲染失败降级为可见的 error 卡片而不是白屏。
 
 - 侧边栏「设置」按钮点击可打开 `AIConfigDialog`（已解除原有的禁用状态）。
 - 支持列出当前用户创建的所有自定义模型配置。
-- 支持创建、更新、删除模型配置，表单参数包括配置名称、API Key、Base URL、Model Name、系统指令、Temperature 和 Max Tokens。
+- 支持创建、更新、删除模型配置，表单参数包括配置名称、API Key、Base URL、Model Name、温度（Temperature）、最大 Token 数（Max Tokens）以及“是否支持视觉”（`supports_vision`，已完全移除并替换了旧版 `is_vision_assistant` 选项）。
 - 支持激活/取消激活模型配置，实现对当前活跃配置的原子性切换。
 - 支持一键连通性测试（Test Connection），可针对已保存的配置或临时填写的参数发送极简测试请求，验证 API 连通性。
 
+### 12. 附件上传与多模态支持
+
+- **多选与拖拽/粘贴上传**：支持从本地选择多文件并发上传，或通过拖放文件、粘贴剪贴板中的图片（Ctrl+V）直接上传至当前会话中。
+- **文件白名单与容量限制**：限制单文件最大不超过 20MB。允许的类型包括图片（PNG, JPG, WEBP, GIF）、文本文件（Markdown, TXT, JSON, CSV, HTML）以及 PDF 文档。
+- **物理文件哈希去重与友好名称映射**：后端在物理存储上根据 SHA-256 哈希命名和去重，防止同会话内相同文件重复落盘；同时自动为文件命名为“图片1.png”、“文档2.txt”等，以防底层物理存储路径或 UUID 暴露给大模型。
+- **多模态与工具链配合**：AI 代理会在会话开始或需要时自动调用 `list_attachment` 获取会话内所有已上传文件列表，并可通过 `view_attachment` 读取文件具体内容。若主模型不支持视觉多模态，系统会自动调用视觉辅助模型对图片进行内容理解与叙述缓存。
+
 ## 尚未实现 / 有意省略
 
-- 附件、图片、语音输入
+- 语音输入
 - 多客户端会话广播、通知
 - 侧边栏「文档 / 仪表盘」按钮仅占位、禁用点击（「设置」已激活用于 AI 模型配置）
-- 通用文件浏览器 UI（目前文件 API 仅被 Skill 管理使用）
+- 通用文件浏览器 UI（目前文件 API 仅被 Skill 管理使用，附件由 ChatView 内部管理）
 - 项目技能在对话框中增删后由 `useProjectSkills(pidRef)` composable 统一管理：ChatView 订阅 skills ref，App.vue 在对话框关闭时调 `refresh()`，无需额外事件总线
 - 「跨页刷新后保持版本切换位置」：当前 `displayedPosByAnchor` 仅活在内存里，跨页刷新会重置为 1。要做绝对定位需要后端引入稳定的 branch_id，本期未做
 
