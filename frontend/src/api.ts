@@ -430,6 +430,7 @@ async function streamLoop(
     action: 'send' | 'regenerate' | 'stop'
     message?: string
     anchor_msg_id?: string | null
+    attachment_ids?: string[] | null
   },
   callbacks: {
     onTextDelta?: (content: string) => void
@@ -522,9 +523,10 @@ export async function sendChatMessage(
     onToolEvent?: (event: StreamEvent) => void
     onDone?: (event: DoneEvent) => void
   },
+  attachmentIds?: string[] | null,
   signal?: AbortSignal,
 ): Promise<DoneEvent> {
-  return streamLoop(sid, { pid, action: 'send', message }, callbacks, signal)
+  return streamLoop(sid, { pid, action: 'send', message, attachment_ids: attachmentIds }, callbacks, signal)
 }
 
 export async function regenerateChatMessage(
@@ -634,6 +636,8 @@ export interface ModelConfigItem {
   temperature: number | null
   max_tokens: number | null
   is_active: boolean
+  supports_vision: boolean
+  is_vision_assistant: boolean
   created_at: number
   updated_at: number
 }
@@ -651,6 +655,8 @@ export interface CreateModelConfigRequest {
   temperature?: number | null
   max_tokens?: number | null
   is_active?: boolean
+  supports_vision?: boolean
+  is_vision_assistant?: boolean
 }
 
 export interface UpdateModelConfigRequest {
@@ -661,6 +667,8 @@ export interface UpdateModelConfigRequest {
   user_instruction?: string
   temperature?: number | null
   max_tokens?: number | null
+  supports_vision?: boolean
+  is_vision_assistant?: boolean
 }
 
 export interface ActiveConfigResponse {
@@ -879,6 +887,51 @@ export async function updatePreferences(payload: UpdatePreferencesRequest): Prom
   return request<Preferences>('/settings/preferences', {
     method: 'PATCH',
     body: JSON.stringify(payload),
+  })
+}
+
+// ── 附件 API ────────────────────────────────────────────────────────────────
+
+export interface AttachmentUploadResult {
+  attachment_id: string
+  original_filename: string
+  mime_type: string
+  created_at: number
+}
+
+export interface AttachmentItem {
+  attachment_id: string
+  anchor_msg_id: string | null
+  original_filename: string
+  mime_type: string
+  has_description: boolean
+  created_at: number
+}
+
+export interface AttachmentListResponse {
+  attachments: AttachmentItem[]
+}
+
+export async function uploadAttachment(
+  sid: string,
+  file: File,
+): Promise<AttachmentUploadResult> {
+  const formData = new FormData()
+  formData.append('file', file)
+  return request<AttachmentUploadResult>(`/sessions/${encodeURIComponent(sid)}/attachments`, {
+    method: 'POST',
+    body: formData,
+  })
+}
+
+export async function listAttachments(sid: string): Promise<AttachmentItem[]> {
+  const data = await request<AttachmentListResponse>(`/sessions/${encodeURIComponent(sid)}/attachments`)
+  return data.attachments
+}
+
+export async function deleteAttachment(sid: string, attachmentId: string): Promise<void> {
+  await request<void>(`/sessions/${encodeURIComponent(sid)}/attachments/${encodeURIComponent(attachmentId)}`, {
+    method: 'DELETE',
   })
 }
 
