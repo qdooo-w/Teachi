@@ -41,6 +41,17 @@ from backend.skill_parser import (
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/community", tags=["community"])
 
+db: DatabaseFacade | None = None
+
+
+def _resolve_db(db_param: Any) -> DatabaseFacade:
+    if isinstance(db_param, DatabaseFacade):
+        return db_param
+    global_db = globals().get("db")
+    if isinstance(global_db, DatabaseFacade):
+        return global_db
+    raise RuntimeError("DatabaseFacade not initialized in community module")
+
 
 # ── 响应/请求模型 ───────────────────────────────────────────────────────────────
 
@@ -147,7 +158,9 @@ def _copy_skill_dir(src: Path, dst: Path) -> None:
 def _install_target_fs(
     payload: InstallSkillRequest,
     user_uuid: str,
+    db_facade: DatabaseFacade | None = None,
 ) -> FileBase:
+    active_db = _resolve_db(db_facade)
     if payload.target == "project":
         if not payload.pid:
             raise HTTPException(
@@ -155,7 +168,7 @@ def _install_target_fs(
                 detail={"code": "VALIDATION_ERROR", "message": "pid is required when target is project"},
             )
         try:
-            return ProjectFile(pid=payload.pid, user_uuid=user_uuid, db_facade=db)
+            return ProjectFile(pid=payload.pid, user_uuid=user_uuid, db_facade=active_db)
         except PermissionError:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -163,7 +176,7 @@ def _install_target_fs(
             )
 
     try:
-        return UserFile(user_uuid=user_uuid, db_facade=db)
+        return UserFile(user_uuid=user_uuid, db_facade=active_db)
     except PermissionError:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -183,6 +196,7 @@ def list_community_skills(
     db: DatabaseFacade = Depends(get_db),
 ) -> CommunitySkillListResponse:
     """社区列表。默认按 downloads 降序（并列时 created_at 兜底）。"""
+    db = _resolve_db(db)
     skills = db.community.list(keyword=keyword, limit=limit, offset=offset, sort=sort)
     total = db.community.count(keyword=keyword)
     return CommunitySkillListResponse(
@@ -201,6 +215,7 @@ def get_community_skill(
     db: DatabaseFacade = Depends(get_db),
 ) -> CommunitySkillDetail:
     """详情。"""
+    db = _resolve_db(db)
     record = db.community.get_by_id(skill_id)
     if record is None:
         raise HTTPException(
@@ -227,6 +242,7 @@ def publish_community_skill(
     - 后端**重新解析** SKILL.md frontmatter，不信任前端元信息
     - 同一作者可重复发布同名 skill：每次都是独立条目
     """
+    db = _resolve_db(db)
     skill_name = payload.skill_name.strip()
     if name_err := validate_skill_name(skill_name):
         raise HTTPException(
@@ -331,6 +347,7 @@ def install_community_skill(
     - 本地已存在同名目录（不论是否含 SKILL.md）→ 409，由用户改名后重试
     - 安装成功后社区记录 downloads += 1
     """
+    db = _resolve_db(db)
     payload = payload or InstallSkillRequest()
     record = db.community.get_by_id(skill_id)
     if record is None:
@@ -349,7 +366,7 @@ def install_community_skill(
             detail={"code": "INVALID_SKILL_NAME", "message": "Skill name in record is not safe"},
         )
 
-    target_fs = _install_target_fs(payload, user_uuid)
+    target_fs = _install_target_fs(payload, user_uuid, db)
 
     # 目录冲突检测：直接看 skills/{name} 目录是否已存在
     try:
@@ -394,6 +411,7 @@ def delete_community_skill(
     db: DatabaseFacade = Depends(get_db),
 ) -> None:
     """删除社区 skill，仅作者可调用。"""
+    db = _resolve_db(db)
     record = db.community.get_by_id(skill_id)
     if record is None:
         raise HTTPException(
