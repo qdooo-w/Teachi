@@ -30,14 +30,14 @@
 | Router | 文件 | 职责 |
 |---|---|---|
 | Auth | `auth.py` | 注册、登录、刷新 token、登出 |
-| Data | `data.py` (~1293 行) | 项目/会话/消息 CRUD、文件管理、ZIP 上传 |
+| Data | `data.py` (~1315 行) | 项目/会话/消息 CRUD、会话附件管理、文件管理、ZIP 上传 |
 | Loop | `loop.py` | AI 聊天循环入口，SSE 流式响应 |
 | Community | `community.py` | 社区技能市场（列表/发布/安装/删除） |
-| Settings | `settings.py` | 用户模型配置 CRUD + 连接测试 |
+| Settings | `settings.py` | 设置中心（模型配置 CRUD、测试连接、账户设置、用户偏好设置） |
 
-### 2. 数据库门面（`db.py` ~1247 行）
+### 2. 数据库门面（`db.py` ~1568 行）
 
-`DatabaseFacade` 持有 7 个子门面，共享连接工厂：
+`DatabaseFacade` 持有 10 个子门面，共享连接工厂：
 
 ```
 db.users        → UsersFacade
@@ -48,9 +48,11 @@ db.access       → AccessFacade（跨域所有权校验）
 db.nonces       → NoncesFacade（防重放）
 db.model_configs → ModelConfigsFacade
 db.community    → CommunitySkillsFacade
+db.attachments  → AttachmentsFacade
+db.preferences  → UserPreferencesFacade
 ```
 
-**7 张表**：`users`、`projects`、`sessions`、`messages`、`nonces`、`community_skills`、`user_model_configs`
+**9 张表**：`users`、`projects`、`sessions`、`messages`、`nonces`、`community_skills`、`user_model_configs`、`attachments`、`user_preferences`
 
 **连接配置**：外键开启、WAL 模式、synchronous OFF、`sqlite3.Row` 行工厂
 
@@ -81,7 +83,7 @@ VALIDATE → LOAD_HISTORY → BUILD_MESSAGES → BUILD_MODEL → CALL_MODEL → 
 | `build_messages_node` | 组装最终消息列表 |
 | `build_model_node` | 构建 PydanticAI Agent（含工具、技能、用户模型配置） |
 | `call_model_node` | 流式调用模型，推送 text_delta / tool_call SSE 事件 |
-| `save_node` | 持久化消息，处理 regenerate 的版本递增 |
+| `save_node` | 持久化消息，处理 regenerate 的版本递增，绑定未绑定的会话附件到回合 anchor |
 | `release_lock_node` | 始终最后执行，释放锁 |
 
 ### 4. 文件系统门面（`file.py`）
@@ -151,6 +153,9 @@ VALIDATE → LOAD_HISTORY → BUILD_MESSAGES → BUILD_MODEL → CALL_MODEL → 
 | PUT | `/projects/{pid}/files` | 写入项目文件 |
 | POST | `/projects/{pid}/files/directories` | 创建项目目录 |
 | DELETE | `/projects/{pid}/files` | 删除项目文件/目录 |
+| POST | `/sessions/{sid}/attachments` | 上传会话文件附件 |
+| GET | `/sessions/{sid}/attachments` | 获取会话的所有附件 |
+| DELETE | `/sessions/{sid}/attachments/{attachment_id}` | 删除会话文件附件 |
 | POST | `/community/skills/upload` | ZIP 上传技能到社区 |
 
 ### Loop（`/loop`）
@@ -173,15 +178,20 @@ VALIDATE → LOAD_HISTORY → BUILD_MESSAGES → BUILD_MODEL → CALL_MODEL → 
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/settings/model-configs` | 列出用户模型配置 |
-| POST | `/settings/model-configs` | 创建模型配置 |
-| GET | `/settings/model-configs/active` | 获取当前激活配置 |
-| PATCH | `/settings/model-configs/{config_id}` | 更新配置 |
-| POST | `/settings/model-configs/{config_id}/activate` | 激活配置 |
-| POST | `/settings/model-configs/deactivate` | 停用所有配置 |
-| DELETE | `/settings/model-configs/{config_id}` | 删除配置 |
-| POST | `/settings/model-configs/test-connection` | 用原始参数测试连接 |
-| POST | `/settings/model-configs/{config_id}/test-connection` | 用已保存配置测试连接 |
+| GET | `/settings/configs` | 列出用户模型配置 |
+| POST | `/settings/configs` | 创建模型配置 |
+| GET | `/settings/configs/active` | 获取当前激活配置 |
+| PUT | `/settings/configs/{config_id}` | 更新配置 |
+| POST | `/settings/configs/{config_id}/activate` | 激活配置 |
+| POST | `/settings/configs/deactivate` | 停用所有配置 |
+| DELETE | `/settings/configs/{config_id}` | 删除配置 |
+| POST | `/settings/test-connection` | 用原始参数测试连接 |
+| POST | `/settings/configs/{config_id}/test-connection` | 用已保存配置测试连接 |
+| GET | `/settings/account` | 获取当前账号信息 |
+| PATCH | `/settings/account/username` | 修改用户名 |
+| POST | `/settings/account/password` | 修改密码 |
+| GET | `/settings/preferences` | 获取当前用户偏好设置 |
+| PATCH | `/settings/preferences` | 更新当前用户偏好设置 |
 
 ---
 
@@ -211,11 +221,17 @@ VALIDATE → LOAD_HISTORY → BUILD_MESSAGES → BUILD_MODEL → CALL_MODEL → 
 - DB 操作：`db_cursor()` 上下文管理器，异常 rollback，成功 commit
 - 文件操作：所有异常包装为 `FileError`
 
+### 附件与多模态视觉处理
+
+- **物理存储与去重**：支持并发上传图片、文本、PDF 等类型附件，在物理存储上以 SHA-256 哈希命名文件以去重，维护文件的引用计数以进行安全删除。
+- **多模态与工具链配合**：AI 代理会在会话开始或需要时通过 `view_attachment` 读取文件具体内容。
+- **图片叙述生成**：若用户当前激活的主模型不支持视觉，系统会利用辅助视觉模型（可通过环境变量配置 `VISION_MODEL_` 等相关变量）生成图片描述，缓存到 DB 中作为文字背景供主模型使用。
+
 ---
 
 ## 当前薄弱点
 
 1. **测试覆盖极低**：仅 `test_community_zip_upload.py` 一个文件（6 个测试），无 auth/CRUD/状态机/工具测试
 2. **无正式迁移框架**：`CREATE TABLE IF NOT EXISTS` + 手动 `ALTER TABLE`，靠 `scripts/` 下的独立脚本
-3. **`data.py` 过大**（~1293 行）：混合了项目/会话/消息/文件/ZIP 上传多种职责
+3. **`data.py` 过大**（~1315 行）：混合了项目/会话/消息/文件/ZIP 上传多种职责
 4. **无 Service 层**：业务逻辑直接写在路由处理器中，授权检查内联
