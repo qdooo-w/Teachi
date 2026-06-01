@@ -21,6 +21,8 @@ import {
   type MessageVersionItem,
   type ProjectItem,
   type SessionItem,
+  uploadAttachment,
+  deleteAttachment,
 } from '../api'
 import { type SkillMeta } from '../skills'
 import { useAuth } from '../composables/useAuth'
@@ -94,6 +96,79 @@ const pidOrNull = computed(() => pid.value || null)
 const { skills: projectSkills } = useProjectSkills(pidOrNull)
 const selectedSkills = ref<SkillMeta[]>([])
 const showSkillPicker = ref(false)
+
+// ── 附件状态与处理函数 ───────────────────────────────────────────────────────
+const fileInputRef = ref<HTMLInputElement | null>(null)
+const pendingAttachments = ref<Array<{
+  attachment_id?: string
+  temp_id: string
+  original_filename: string
+  mime_type: string
+  uploading: boolean
+}>>([])
+
+function triggerFileSelect(): void {
+  fileInputRef.value?.click()
+}
+
+async function handleFileChange(event: Event): Promise<void> {
+  const target = event.target as HTMLInputElement
+  if (!target.files || target.files.length === 0) return
+  
+  const file = target.files[0]
+  
+  // 校验大小 (10MB)
+  if (file.size > 10 * 1024 * 1024) {
+    errorMessage.value = '文件大小不能超过 10MB'
+    target.value = ''
+    return
+  }
+  
+  // 校验格式
+  const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/gif']
+  if (!allowed.includes(file.type)) {
+    errorMessage.value = '只支持图片格式 (JPEG, PNG, WebP, GIF)'
+    target.value = ''
+    return
+  }
+  
+  const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  const pendingItem = {
+    temp_id: tempId,
+    original_filename: file.name,
+    mime_type: file.type,
+    uploading: true
+  }
+  pendingAttachments.value.push(pendingItem)
+  errorMessage.value = ''
+  
+  try {
+    const result = await uploadAttachment(sid.value, file)
+    const idx = pendingAttachments.value.findIndex(item => item.temp_id === tempId)
+    if (idx !== -1) {
+      pendingAttachments.value[idx].attachment_id = result.attachment_id
+      pendingAttachments.value[idx].uploading = false
+    }
+  } catch (error) {
+    errorMessage.value = '上传附件失败: ' + getErrorMessage(error)
+    pendingAttachments.value = pendingAttachments.value.filter(item => item.temp_id !== tempId)
+  } finally {
+    target.value = ''
+  }
+}
+
+async function removePendingAttachment(att: typeof pendingAttachments.value[0]): Promise<void> {
+  if (att.uploading) return
+  if (att.attachment_id) {
+    try {
+      await deleteAttachment(sid.value, att.attachment_id)
+    } catch (error) {
+      errorMessage.value = '删除附件失败: ' + getErrorMessage(error)
+      return
+    }
+  }
+  pendingAttachments.value = pendingAttachments.value.filter(item => item.temp_id !== att.temp_id)
+}
 
 // ── 工具函数 ──────────────────────────────────────────────────────────────────
 function scrollToBottom(force = false): void {
@@ -357,8 +432,13 @@ async function sendMessage(): Promise<void> {
     pending: true,
   }
 
+  const attachmentIds = pendingAttachments.value
+    .map((att) => att.attachment_id)
+    .filter((id): id is string => !!id)
+
   draft.value = ''
   selectedSkills.value = []
+  pendingAttachments.value = []
   errorMessage.value = ''
   toolStatus.value = ''
   messages.value.push(userMessage, assistantMessage)
@@ -389,6 +469,7 @@ async function sendMessage(): Promise<void> {
           }
         },
       },
+      attachmentIds,
       abortController.signal,
     )
 
@@ -823,6 +904,32 @@ watch(
             :skills="selectedSkills"
             @remove="removeSkill"
           />
+
+          <!-- Pending Attachments -->
+          <div v-if="pendingAttachments.length > 0" class="mb-3 flex flex-wrap gap-2">
+            <div
+              v-for="att in pendingAttachments"
+              :key="att.attachment_id || att.temp_id"
+              class="relative flex items-center gap-1.5 rounded-lg border border-[#e5e7eb] bg-[#f9fafb] px-2 py-1 text-xs text-[#374151]"
+            >
+              <svg class="h-3.5 w-3.5 text-[#6b7280]" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+              <span class="max-w-[120px] truncate" :title="att.original_filename">{{ att.original_filename }}</span>
+              <span v-if="att.uploading" class="text-[10px] text-[#9ca3af] animate-pulse">上传中...</span>
+              <button
+                v-else
+                type="button"
+                class="flex h-4 w-4 items-center justify-center rounded-full text-[#9ca3af] hover:bg-[#e5e7eb] hover:text-[#1f2937]"
+                @click="removePendingAttachment(att)"
+              >
+                <svg class="h-3 w-3" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          </div>
+
           <textarea
             ref="composerTextarea"
             v-model="draft"
@@ -835,17 +942,40 @@ watch(
             @click="checkAtTrigger"
           />
           <div class="mt-2 flex items-center justify-between">
-            <button
-              class="flex h-8 w-8 items-center justify-center rounded-full text-[#6b7280] transition hover:bg-[#f3f4f6] hover:text-[#1f2937] disabled:cursor-not-allowed disabled:opacity-50"
-              :disabled="streaming || preparing"
-              title="添加技能"
-              type="button"
-              @click="showSkillPicker = !showSkillPicker"
-            >
-              <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v14m7-7H5" />
-              </svg>
-            </button>
+            <div class="flex items-center gap-1">
+              <button
+                class="flex h-8 w-8 items-center justify-center rounded-full text-[#6b7280] transition hover:bg-[#f3f4f6] hover:text-[#1f2937] disabled:cursor-not-allowed disabled:opacity-50"
+                :disabled="streaming || preparing"
+                title="添加技能"
+                type="button"
+                @click="showSkillPicker = !showSkillPicker"
+              >
+                <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v14m7-7H5" />
+                </svg>
+              </button>
+              
+              <!-- Upload Attachment Button -->
+              <button
+                class="flex h-8 w-8 items-center justify-center rounded-full text-[#6b7280] transition hover:bg-[#f3f4f6] hover:text-[#1f2937] disabled:cursor-not-allowed disabled:opacity-50"
+                :disabled="streaming || preparing"
+                title="上传图片附件"
+                type="button"
+                @click="triggerFileSelect"
+              >
+                <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                </svg>
+              </button>
+              
+              <input
+                ref="fileInputRef"
+                type="file"
+                class="hidden"
+                accept="image/jpeg,image/png,image/webp,image/gif"
+                @change="handleFileChange"
+              />
+            </div>
             <button
               v-if="streaming"
               class="flex h-9 items-center justify-center gap-1 rounded-2xl border border-[#d1d5db] bg-white px-5 text-[#6b7280] transition hover:border-[#9ca3af] hover:text-[#1f2937]"
