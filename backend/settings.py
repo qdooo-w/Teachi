@@ -1,4 +1,4 @@
-﻿"""settings.py - 用户模型配置 API 路由
+"""settings.py - 用户模型配置 API 路由
 
 提供用户自定义模型配置的 CRUD 端点：
 - 列出所有配置
@@ -34,6 +34,7 @@ class ModelConfigItem(BaseModel):
     temperature: float | None = None
     max_tokens: int | None = None
     is_active: bool
+    supports_vision: bool
     created_at: float
     updated_at: float
 
@@ -53,6 +54,7 @@ class CreateModelConfigRequest(BaseModel):
     temperature: float | None = Field(default=None, ge=0.0, le=2.0, description="温度参数")
     max_tokens: int | None = Field(default=None, ge=1, le=128000, description="最大 token 数")
     is_active: bool = Field(default=False, description="是否激活")
+    supports_vision: bool = Field(default=False, description="是否支持视觉")
 
 class UpdateModelConfigRequest(BaseModel):
     """更新模型配置请求"""
@@ -64,6 +66,7 @@ class UpdateModelConfigRequest(BaseModel):
     user_instruction: str | None = Field(default=None, max_length=2000, description="用户自定义指令")
     temperature: float | None = Field(default=None, ge=0.0, le=2.0, description="温度参数")
     max_tokens: int | None = Field(default=None, ge=1, le=128000, description="最大 token 数")
+    supports_vision: bool | None = Field(default=None, description="是否支持视觉")
 
 class ActiveConfigResponse(BaseModel):
     """当前激活配置响应"""
@@ -110,6 +113,7 @@ def _row_to_item(row: dict) -> ModelConfigItem:
         temperature=row["temperature"],
         max_tokens=row["max_tokens"],
         is_active=bool(row["is_active"]),
+        supports_vision=bool(row.get("supports_vision", False)),
         created_at=float(row["created_at"]),
         updated_at=float(row["updated_at"]),
     )
@@ -144,6 +148,7 @@ def create_model_config(
         temperature=payload.temperature,
         max_tokens=payload.max_tokens,
         is_active=payload.is_active,
+        supports_vision=payload.supports_vision,
     )
     return _row_to_item(config)
 
@@ -187,6 +192,7 @@ def update_model_config(
         user_instruction=payload.user_instruction,
         temperature=payload.temperature,
         max_tokens=payload.max_tokens,
+        supports_vision=payload.supports_vision,
     )
     if updated is None:
         raise HTTPException(
