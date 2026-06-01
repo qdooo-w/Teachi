@@ -371,7 +371,7 @@ async def _generate_description(attachment: dict, db, user_uuid: str) -> str | N
     except Exception:
         return None
 
-    db.attachments.update_description(attachment["attachment_id"], description)
+    db.attachments.update_description(attachment["attachment_id"], user_uuid, description)
     return description
 
 
