@@ -1208,14 +1208,21 @@ class AttachmentsFacade(_DataBase):
             rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
-    def bind_anchor(self, attachment_id: str, user_uuid: str, anchor_msg_id: str) -> bool:
+    def bind_anchor(self, *, attachment_ids: list[str], anchor_msg_id: str, user_uuid: str) -> int:
+        """把一组附件的 anchor_msg_id 写入指定回合锚点。"""
+        if not attachment_ids:
+            return 0
+        placeholders = ",".join("?" * len(attachment_ids))
         with self._cursor() as cursor:
             cursor.execute(
-                "UPDATE attachments SET anchor_msg_id = ? WHERE attachment_id = ? AND user_uuid = ?",
-                (anchor_msg_id, attachment_id, user_uuid),
+                f"""
+                UPDATE attachments SET anchor_msg_id = ?
+                WHERE attachment_id IN ({placeholders}) AND user_uuid = ? AND anchor_msg_id IS NULL
+                """,
+                [anchor_msg_id, *attachment_ids, user_uuid],
             )
             affected = cursor.rowcount
-        return affected > 0
+        return affected
 
     def update_description(
         self,
@@ -1301,7 +1308,7 @@ class DatabaseFacade:
     def _migrate_legacy_community_skill_bodies(cursor: sqlite3.Cursor) -> None:
         """Move old DB-stored SKILL.md text into archived_skill/{id}/SKILL.md."""
         cursor.execute("PRAGMA table_info(community_skills)")
-        columns = {row[1] for row in cursor.fetchall()}
+        columns = {row["name"] for row in cursor.fetchall()}
         if "body_md" not in columns or "archive_path" not in columns:
             return
 
@@ -1431,7 +1438,8 @@ class DatabaseFacade:
                 description_generated_at REAL,
                 created_at REAL NOT NULL,
                 FOREIGN KEY (sid) REFERENCES sessions(sid) ON DELETE CASCADE,
-                FOREIGN KEY (anchor_msg_id) REFERENCES messages(msg_id) ON DELETE SET NULL
+                FOREIGN KEY (anchor_msg_id) REFERENCES messages(msg_id) ON DELETE SET NULL,
+                FOREIGN KEY (user_uuid) REFERENCES users(uuid) ON DELETE CASCADE
             );
             CREATE INDEX IF NOT EXISTS idx_attachments_sid ON attachments(sid);
             CREATE INDEX IF NOT EXISTS idx_attachments_user ON attachments(user_uuid);
@@ -1453,7 +1461,7 @@ class DatabaseFacade:
             cursor.executescript(schema)
 
             cursor.execute("PRAGMA table_info(user_model_configs)")
-            user_model_configs_columns = {row[1] for row in cursor.fetchall()}
+            user_model_configs_columns = {row["name"] for row in cursor.fetchall()}
             if "supports_vision" not in user_model_configs_columns:
                 cursor.execute(
                     "ALTER TABLE user_model_configs ADD COLUMN supports_vision INTEGER NOT NULL DEFAULT 0"
@@ -1464,7 +1472,7 @@ class DatabaseFacade:
                 )
 
             cursor.execute("PRAGMA table_info(community_skills)")
-            columns = {row[1] for row in cursor.fetchall()}
+            columns = {row["name"] for row in cursor.fetchall()}
             if "archive_path" not in columns:
                 cursor.execute(
                     "ALTER TABLE community_skills ADD COLUMN archive_path TEXT NOT NULL DEFAULT ''"
