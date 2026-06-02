@@ -39,8 +39,9 @@ export async function renderMermaidInElement(root: HTMLElement): Promise<void> {
     try {
       const { svg } = await mermaid.render(id, source)
       const container = document.createElement('div')
-      container.className = 'mermaid-block'
+      container.className = 'mermaid-block cursor-pointer hover:opacity-90 transition-opacity'
       container.dataset.rendered = 'mermaid'
+      container.dataset.source = source
       container.innerHTML = svg
       node.replaceWith(container)
     } catch (error) {

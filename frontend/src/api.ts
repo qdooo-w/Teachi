@@ -45,6 +45,7 @@ export interface DisplayMessage {
   version?: number
   pending?: boolean
   previewUrls?: string[]
+  localAttachments?: AttachmentItem[]
 }
 
 export interface ChatWorkspace {
