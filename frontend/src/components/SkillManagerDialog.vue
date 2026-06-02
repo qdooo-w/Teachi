@@ -569,15 +569,15 @@ onBeforeUnmount(() => {
 <template>
   <div class="fixed inset-0 z-[1000] flex items-center justify-center bg-black/40 backdrop-blur-sm" @click.self="handleClose">
     <div class="modal-card flex h-[680px] w-[1080px] max-w-[96vw] flex-col rounded-2xl bg-white shadow-xl overflow-hidden">
-      <div class="flex h-14 flex-shrink-0 items-center justify-between px-5 border-b border-[#e5e7eb]">
+      <div class="flex h-12 flex-shrink-0 items-center justify-between px-4 bg-slate-50/80 border-b border-slate-100">
         <div class="flex items-center gap-2 min-w-0">
-          <span class="font-semibold text-[#1f2937] flex-shrink-0">{{ title }}</span>
-          <span v-if="selectedName || isNew" class="truncate text-xs text-[#6b7280]">
+          <span class="font-semibold text-slate-800 flex-shrink-0 text-sm">{{ title }}</span>
+          <span v-if="selectedName || isNew" class="truncate text-xs text-slate-400">
             / {{ isNew ? '新建技能' : selectedName }}{{ selectedPath && selectedPath !== 'SKILL.md' ? ` / ${selectedPath}` : '' }}
           </span>
         </div>
         <button
-          class="flex h-8 w-8 items-center justify-center rounded-lg text-[#6b7280] hover:bg-[#f3f4f6] hover:text-[#1f2937]"
+          class="flex h-8 w-8 items-center justify-center rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition-colors"
           type="button"
           @click="handleClose"
         >
@@ -588,32 +588,34 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="flex min-h-0 flex-1">
-        <div class="flex w-52 flex-shrink-0 flex-col">
-          <div class="flex-1 overflow-y-auto p-2">
-            <div v-if="loading" class="px-3 py-4 text-sm text-[#9ca3af]">加载中...</div>
-            <div v-else-if="skills.length === 0" class="px-3 py-4 text-sm text-[#9ca3af]">暂无技能</div>
+        <div class="flex w-48 flex-shrink-0 flex-col border-r border-slate-100">
+          <div class="flex-1 overflow-y-auto p-1.5 space-y-1">
+            <div v-if="loading" class="px-2.5 py-3 text-xs text-slate-400">加载中...</div>
+            <div v-else-if="skills.length === 0" class="px-2.5 py-3 text-xs text-slate-400">暂无技能</div>
             <button
               v-for="skill in skills"
               :key="skill.name"
               :class="[
-                'w-full rounded-md px-3 py-2 text-left transition-colors',
+                'w-full rounded-lg px-2.5 py-1.5 text-left transition-colors duration-150',
                 selectedName === skill.name && !isNew
-                  ? 'bg-[#e5e7eb] text-[#1f2937] font-medium'
-                  : 'text-[#374151] hover:bg-[#f3f4f6]',
+                  ? 'bg-slate-100 text-slate-900 font-semibold'
+                  : 'text-slate-600 hover:bg-slate-50',
               ]"
               type="button"
               @click="selectSkill(skill.name)"
             >
-              <div class="truncate text-sm font-medium">{{ skill.display_name || skill.name }}</div>
-              <div v-if="skill.display_name" class="truncate text-[10px] text-[#9ca3af]">{{ skill.name }}</div>
-              <div class="truncate text-xs text-[#9ca3af]">{{ skill.description || '无描述' }}</div>
+              <div class="truncate text-xs font-semibold">{{ skill.display_name || skill.name }}</div>
+              <div v-if="skill.display_name" class="truncate text-[9px] text-slate-400">{{ skill.name }}</div>
+              <div class="truncate text-[10px] text-slate-400 mt-0.5">{{ skill.description || '无描述' }}</div>
             </button>
           </div>
-          <div class="p-2">
+          <div class="p-1.5 border-t border-slate-100">
             <button
               :class="[
-                'flex w-full items-center gap-1.5 rounded-md px-3 py-2 text-sm transition-colors',
-                isNew ? 'bg-[#e5e7eb] text-[#1f2937] font-medium' : 'text-[#374151] hover:bg-[#f3f4f6]',
+                'flex w-full items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold transition-colors duration-150',
+                isNew
+                  ? 'bg-slate-100 text-slate-900 font-semibold'
+                  : 'text-slate-600 hover:bg-slate-50',
               ]"
               type="button"
               @click="startNew"
@@ -628,13 +630,13 @@ onBeforeUnmount(() => {
 
         <div
           v-if="selectedName && !isNew"
-          class="flex w-60 flex-shrink-0 flex-col bg-[#fafafa]"
+          class="flex w-52 flex-shrink-0 flex-col bg-slate-50/50 border-r border-slate-100"
         >
-          <div class="flex h-12 items-center justify-between px-3">
-            <span class="truncate text-sm font-medium text-[#374151]">{{ selectedName }}</span>
-            <div class="flex items-center gap-1">
+          <div class="flex h-10 items-center justify-between px-2.5 border-b border-slate-100 flex-shrink-0">
+            <span class="truncate text-xs font-semibold text-slate-700">{{ selectedName }}</span>
+            <div class="flex items-center gap-0.5">
               <button
-                class="flex h-7 w-7 items-center justify-center rounded-md text-[#6b7280] hover:bg-[#e5e7eb] hover:text-[#1f2937]"
+                class="flex h-6 w-6 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition-colors"
                 title="新建文件"
                 type="button"
                 @click="addFile('')"
@@ -644,7 +646,7 @@ onBeforeUnmount(() => {
                 </svg>
               </button>
               <button
-                class="flex h-7 w-7 items-center justify-center rounded-md text-[#6b7280] hover:bg-[#e5e7eb] hover:text-[#1f2937]"
+                class="flex h-6 w-6 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition-colors"
                 title="新建文件夹"
                 type="button"
                 @click="addFolder"
@@ -655,23 +657,23 @@ onBeforeUnmount(() => {
               </button>
             </div>
           </div>
-          <div class="min-h-0 flex-1 overflow-y-auto p-2">
-            <div v-if="treeLoading" class="px-3 py-4 text-sm text-[#9ca3af]">加载文件...</div>
+          <div class="min-h-0 flex-1 overflow-y-auto p-1.5 space-y-0.5">
+            <div v-if="treeLoading" class="px-2.5 py-3 text-xs text-slate-400">加载文件...</div>
             <template v-else>
               <template v-for="entry in tree" :key="entry.relPath">
                 <div
                   v-if="entry.isDir"
-                  class="group mt-1 flex h-8 items-center justify-between rounded-md px-2 text-sm text-[#6b7280]"
+                  class="group mt-1 flex h-7 items-center justify-between rounded-lg px-2 text-xs text-slate-500 font-medium"
                 >
                   <div class="flex min-w-0 items-center gap-1.5">
-                    <svg class="h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg class="h-3.5 w-3.5 flex-shrink-0 text-slate-400" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7h7l2 2h9v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
                     </svg>
                     <span class="truncate">{{ entry.name }}</span>
-                    <span v-if="entry.virtual" class="text-[10px] text-[#9ca3af]">virtual</span>
+                    <span v-if="entry.virtual" class="text-[9px] text-slate-400 font-normal scale-95">virtual</span>
                   </div>
                   <button
-                    class="flex h-6 w-6 items-center justify-center rounded text-[#9ca3af] hover:bg-[#e5e7eb] hover:text-[#1f2937]"
+                    class="flex h-5 w-5 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition-colors"
                     :title="`在 ${entry.name}/ 中新建文件`"
                     type="button"
                     @click.stop="addFile(entry.name as SkillResourceDir)"
@@ -684,16 +686,16 @@ onBeforeUnmount(() => {
                 <button
                   v-else
                   :class="[
-                    'flex h-8 w-full items-center gap-1.5 rounded-md px-2 text-left text-sm transition-colors',
+                    'flex h-7 w-full items-center gap-1.5 rounded-lg px-2 text-left text-xs transition-colors duration-150',
                     entry.parent ? 'pl-7' : '',
                     selectedPath === entry.relPath
-                      ? 'bg-[#e5e7eb] text-[#1f2937] font-medium'
-                      : 'text-[#374151] hover:bg-white',
+                      ? 'bg-slate-100 text-slate-900 font-semibold'
+                      : 'text-slate-600 hover:bg-slate-100/40',
                   ]"
                   type="button"
                   @click="openFile(entry.relPath)"
                 >
-                  <svg class="h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg class="h-3.5 w-3.5 flex-shrink-0 text-slate-400" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 3h7l5 5v13H7V3Z" />
                   </svg>
                   <span class="truncate">{{ entry.name }}</span>
@@ -710,43 +712,38 @@ onBeforeUnmount(() => {
 
           <template v-else>
 
-            <!-- Scroll Area Wrapper with top and bottom gradient overlays -->
+            <!-- Scroll Area Wrapper -->
             <div class="relative min-h-0 flex-1">
-              <!-- Top fade gradient overlay -->
-              <div class="pointer-events-none absolute left-0 right-0 top-0 h-6 bg-gradient-to-b from-white via-white/70 to-transparent z-10" />
-              <!-- Bottom fade gradient overlay -->
-              <div class="pointer-events-none absolute left-0 right-0 bottom-0 h-6 bg-gradient-to-t from-white via-white/70 to-transparent z-10" />
-
               <!-- Scroll Area -->
-              <div class="h-full overflow-y-auto px-5 pb-5 pt-3">
+              <div class="h-full overflow-y-auto px-5 pb-20 pt-3">
                 <div v-if="fileLoading" class="py-10 text-center text-sm text-[#9ca3af]">加载文件...</div>
 
                 <div v-else class="space-y-6">
                   <template v-if="selectedEditorKind === 'skill'">
                     <template v-if="!rawMode">
-                      <div class="mb-4">
-                        <label class="mb-1 block text-xs font-medium text-[#6b7280]">技能名称</label>
+                      <div class="mb-3.5">
+                        <label class="mb-1 block text-xs font-medium text-slate-500">技能名称</label>
                         <input
                           v-if="isNew"
                           v-model="form.name"
-                          class="h-9 w-full rounded-md border border-[#d1d5db] bg-white px-3 text-sm outline-none transition focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20"
+                          class="h-9 w-full rounded-xl border border-slate-200/80 bg-slate-50/50 px-3 text-xs outline-none transition duration-150 focus:bg-white focus:border-slate-400 focus:ring-2 focus:ring-slate-900/5"
                           placeholder="my-skill-name（小写字母、数字、连字符）"
                           type="text"
                         />
-                        <div v-else class="flex h-9 items-center rounded-md bg-[#e5e7eb] px-3 text-sm text-[#374151]">
+                        <div v-else class="flex h-9 items-center rounded-xl border border-slate-200 bg-slate-100/50 px-3 text-xs font-medium text-slate-700">
                           {{ selectedName }}
                         </div>
                         <p v-if="nameError" class="mt-1 text-xs text-[#9a3412]">{{ nameError }}</p>
                         <p v-if="parseWarning && !rawMode" class="mt-1 text-xs text-[#92400e]">{{ parseWarning }}</p>
                       </div>
 
-                      <div class="mb-4">
+                      <div class="mb-3.5">
                         <div class="mb-1 flex items-baseline justify-between">
-                          <label class="block text-xs font-medium text-[#6b7280]">展示名</label>
+                          <label class="block text-xs font-medium text-slate-500">展示名</label>
                           <span
                             :class="[
                               'text-[10px] tabular-nums',
-                              (form.display_name ?? '').length > DISPLAY_NAME_MAX ? 'text-[#9a3412]' : 'text-[#9ca3af]',
+                              (form.display_name ?? '').length > DISPLAY_NAME_MAX ? 'text-[#9a3412]' : 'text-slate-400',
                             ]"
                           >
                             {{ (form.display_name ?? '').length }} / {{ DISPLAY_NAME_MAX }}
@@ -755,22 +752,22 @@ onBeforeUnmount(() => {
                         <input
                           v-model="form.display_name"
                           :maxlength="DISPLAY_NAME_MAX"
-                          class="h-9 w-full rounded-md border border-[#d1d5db] bg-white px-3 text-sm outline-none transition focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20"
+                          class="h-9 w-full rounded-xl border border-slate-200/80 bg-slate-50/50 px-3 text-xs outline-none transition duration-150 focus:bg-white focus:border-slate-400 focus:ring-2 focus:ring-slate-900/5"
                           placeholder="例如：数学解题助手"
                           type="text"
                         />
                         <p v-if="displayNameError" class="mt-1 text-xs text-[#9a3412]">{{ displayNameError }}</p>
                       </div>
 
-                      <div class="mb-4">
+                      <div class="mb-3.5">
                         <div class="mb-1 flex items-baseline justify-between">
-                          <label class="block text-xs font-medium text-[#6b7280]">
+                          <label class="block text-xs font-medium text-slate-500">
                             描述 <span class="text-[#9a3412]">*</span>
                           </label>
                           <span
                             :class="[
                               'text-[10px] tabular-nums',
-                              form.description.length > DESCRIPTION_MAX ? 'text-[#9a3412]' : 'text-[#9ca3af]',
+                              form.description.length > DESCRIPTION_MAX ? 'text-[#9a3412]' : 'text-slate-400',
                             ]"
                           >
                             {{ form.description.length }} / {{ DESCRIPTION_MAX }}
@@ -779,15 +776,15 @@ onBeforeUnmount(() => {
                         <textarea
                           v-model="form.description"
                           :maxlength="DESCRIPTION_MAX"
-                          class="w-full resize-y rounded-md border border-[#d1d5db] bg-white p-2.5 text-sm outline-none transition focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20"
+                          class="w-full resize-y rounded-xl border border-slate-200/80 bg-slate-50/50 p-2.5 text-xs outline-none transition duration-150 focus:bg-white focus:border-slate-400 focus:ring-2 focus:ring-slate-900/5"
                           rows="2"
                         />
                         <p v-if="descriptionError" class="mt-1 text-xs text-[#9a3412]">{{ descriptionError }}</p>
                       </div>
 
-                      <div class="mb-4">
+                      <div class="mb-3.5">
                         <button
-                          class="flex items-center gap-1 text-xs font-medium text-[#6b7280] hover:text-[#1f2937]"
+                          class="flex items-center gap-1 text-xs font-medium text-slate-500 hover:text-slate-800"
                           type="button"
                           @click="showAdvanced = !showAdvanced"
                         >
@@ -801,21 +798,21 @@ onBeforeUnmount(() => {
                         </button>
                         <div v-if="showAdvanced" class="mt-2 grid grid-cols-2 gap-3">
                           <label class="block">
-                            <span class="mb-1 block text-xs text-[#6b7280]">license</span>
+                            <span class="mb-1 block text-xs text-slate-500">license</span>
                             <input
                               v-model="form.license"
-                              class="h-9 w-full rounded-md border border-[#d1d5db] bg-white px-3 text-sm outline-none transition focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20"
+                              class="h-9 w-full rounded-xl border border-slate-200/80 bg-slate-50/50 px-3 text-xs outline-none transition duration-150 focus:bg-white focus:border-slate-400 focus:ring-2 focus:ring-slate-900/5"
                               placeholder="例如 MIT"
                               type="text"
                             />
                           </label>
                           <label class="block">
                             <div class="mb-1 flex items-baseline justify-between">
-                              <span class="block text-xs text-[#6b7280]">compatibility</span>
+                              <span class="block text-xs text-slate-500">compatibility</span>
                               <span
                                 :class="[
                                   'text-[10px] tabular-nums',
-                                  (form.compatibility ?? '').length > COMPATIBILITY_MAX ? 'text-[#9a3412]' : 'text-[#9ca3af]',
+                                  (form.compatibility ?? '').length > COMPATIBILITY_MAX ? 'text-[#9a3412]' : 'text-slate-400',
                                 ]"
                               >
                                 {{ (form.compatibility ?? '').length }} / {{ COMPATIBILITY_MAX }}
@@ -824,7 +821,7 @@ onBeforeUnmount(() => {
                             <input
                               v-model="form.compatibility"
                               :maxlength="COMPATIBILITY_MAX"
-                              class="h-9 w-full rounded-md border border-[#d1d5db] bg-white px-3 text-sm outline-none transition focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20"
+                              class="h-9 w-full rounded-xl border border-slate-200/80 bg-slate-50/50 px-3 text-xs outline-none transition duration-150 focus:bg-white focus:border-slate-400 focus:ring-2 focus:ring-slate-900/5"
                               placeholder="兼容性说明"
                               type="text"
                             />
@@ -833,40 +830,40 @@ onBeforeUnmount(() => {
                         </div>
                       </div>
 
-                      <div class="mb-5">
+                      <div class="mb-4">
                         <div class="mb-1 flex items-baseline justify-between">
-                          <label class="block text-xs font-medium text-[#6b7280]">技能内容（Markdown）</label>
-                          <span class="text-[10px] tabular-nums text-[#9ca3af]">
+                          <label class="block text-xs font-medium text-slate-500">技能内容（Markdown）</label>
+                          <span class="text-[10px] tabular-nums text-slate-400">
                             {{ bodyCharCount.toLocaleString() }} 字符 · {{ bodyLineCount }} 行
                           </span>
                         </div>
                         <textarea
                           v-model="form.body"
-                          class="w-full resize-y rounded-md border border-[#d1d5db] bg-white p-3 font-mono text-sm outline-none transition focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20"
+                          class="w-full resize-y rounded-xl border border-slate-200/80 bg-slate-50/50 p-3 font-mono text-xs outline-none transition duration-150 focus:bg-white focus:border-slate-400 focus:ring-2 focus:ring-slate-900/5"
                           style="min-height: 250px"
                           spellcheck="false"
                         />
-                        <p class="mt-1 text-[10px] text-[#9ca3af]">前端会自动生成合法的 frontmatter（name/description 等），你无需手动写 `---` 分隔块。</p>
+                        <p class="mt-1 text-[10px] text-slate-400">前端会自动生成合法的 frontmatter（name/description 等），你无需手动写 `---` 分隔块。</p>
                       </div>
                     </template>
 
                     <template v-else>
-                      <div class="mb-3 flex items-center justify-between">
-                        <span class="text-xs font-medium text-[#6b7280]">原始 SKILL.md 编辑</span>
+                      <div class="mb-2 flex items-center justify-between">
+                        <span class="text-xs font-medium text-slate-500">原始 SKILL.md 编辑</span>
                         <button
-                          class="text-xs text-[#1f2937] hover:underline"
+                          class="text-xs font-semibold text-slate-800 hover:underline"
                           type="button"
                           @click="switchToStructured"
                         >
                           尝试切换到结构化表单
                         </button>
                       </div>
-                      <p class="mb-3 rounded-md border border-[#fcd34d] bg-[#fffbeb] px-3 py-2 text-xs text-[#92400e]">
+                      <p class="mb-3 rounded-xl bg-amber-50/70 border border-amber-200/50 px-3 py-2 text-xs text-amber-800">
                         {{ parseWarning }}
                       </p>
                       <textarea
                         v-model="rawContent"
-                        class="w-full resize-y rounded-md border border-[#d1d5db] bg-white p-3 font-mono text-sm outline-none transition focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20"
+                        class="w-full resize-y rounded-xl border border-slate-200/80 bg-slate-50/50 p-3 font-mono text-xs outline-none transition duration-150 focus:bg-white focus:border-slate-400 focus:ring-2 focus:ring-slate-900/5"
                         style="min-height: 360px"
                         spellcheck="false"
                       />
@@ -874,21 +871,21 @@ onBeforeUnmount(() => {
                   </template>
 
                   <template v-else>
-                    <div v-if="isImageFile" class="flex flex-col items-center justify-center p-8 border border-[#e5e7eb] rounded-md bg-[#f9fafb]" style="min-height: 420px">
+                    <div v-if="isImageFile" class="flex flex-col items-center justify-center p-8 rounded-2xl bg-slate-50/50 border border-slate-100" style="min-height: 420px">
                       <span class="text-3xl mb-2">🖼️</span>
-                      <p class="text-sm text-[#4b5563] font-medium">图片文件仅支持管理，无法直接编辑内容。</p>
-                      <p class="text-xs text-[#9ca3af] mt-1">{{ selectedPath }}</p>
+                      <p class="text-xs text-slate-600 font-semibold">图片文件仅支持管理，无法直接编辑内容。</p>
+                      <p class="text-[10px] text-slate-400 mt-1">{{ selectedPath }}</p>
                     </div>
                     <template v-else>
                       <div class="mb-1 flex items-baseline justify-between">
-                        <label class="block text-xs font-medium text-[#6b7280]">文本内容</label>
-                        <span class="text-[10px] tabular-nums text-[#9ca3af]">
+                        <label class="block text-xs font-medium text-slate-500">文本内容</label>
+                        <span class="text-[10px] tabular-nums text-slate-400">
                           {{ plainCharCount.toLocaleString() }} 字符 · {{ plainLineCount }} 行
                         </span>
                       </div>
                       <textarea
                         v-model="plainContent"
-                        class="w-full resize-y rounded-md border border-[#d1d5db] bg-white p-3 font-mono text-sm outline-none transition focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20"
+                        class="w-full resize-y rounded-xl border border-slate-200/80 bg-slate-50/50 p-3 font-mono text-xs outline-none transition duration-150 focus:bg-white focus:border-slate-400 focus:ring-2 focus:ring-slate-900/5"
                         style="min-height: 420px"
                         spellcheck="false"
                       />
@@ -896,17 +893,17 @@ onBeforeUnmount(() => {
                   </template>
 
                   <!-- Actions inside the card -->
-                  <div class="mt-4 border-t border-gray-200/50 pt-3.5">
-                    <p v-if="errorMsg" class="mb-3 rounded-md border border-[#efb3a7] bg-[#fff7ed] px-3 py-2 text-xs text-[#9a3412]">
+                  <div class="mt-4 pt-3.5 border-t border-slate-100 flex-shrink-0 bg-white">
+                    <p v-if="errorMsg" class="mb-3 rounded-xl bg-rose-50/60 border border-rose-200/50 px-3 py-2 text-xs text-rose-800">
                       {{ errorMsg }}
                     </p>
-                    <p v-if="publishMsg" class="mb-3 rounded-md border border-[#bbf7d0] bg-[#f0fdf4] px-3 py-2 text-xs text-[#166534]">
+                    <p v-if="publishMsg" class="mb-3 rounded-xl bg-emerald-50/60 border border-emerald-200/50 px-3 py-2 text-xs text-emerald-800">
                       {{ publishMsg }}
                     </p>
                     <div class="flex items-center justify-between">
                       <button
                         v-if="!isNew && selectedName && selectedPath === 'SKILL.md'"
-                        class="rounded-lg px-3 py-1.5 text-sm text-[#9a3412] transition hover:bg-[#fff7ed] disabled:opacity-50"
+                        class="rounded-xl bg-rose-600 hover:bg-rose-700 active:scale-95 text-white px-3.5 py-1.5 text-xs font-semibold transition-all duration-200 disabled:opacity-50"
                         :disabled="deleting"
                         type="button"
                         @click="remove"
@@ -915,7 +912,7 @@ onBeforeUnmount(() => {
                       </button>
                       <button
                         v-else-if="canDeleteSelectedFile"
-                        class="rounded-lg px-3 py-1.5 text-sm text-[#9a3412] transition hover:bg-[#fff7ed] disabled:opacity-50"
+                        class="rounded-xl bg-rose-600 hover:bg-rose-700 active:scale-95 text-white px-3.5 py-1.5 text-xs font-semibold transition-all duration-200 disabled:opacity-50"
                         :disabled="deletingFile"
                         type="button"
                         @click="removeSelectedFile"
@@ -926,7 +923,7 @@ onBeforeUnmount(() => {
                       <div class="flex items-center gap-2">
                         <button
                           v-if="canPublish"
-                          class="rounded-lg bg-[#f3f4f6] px-3 py-1.5 text-sm text-[#1f2937] transition hover:bg-[#e5e7eb] disabled:cursor-not-allowed disabled:opacity-50"
+                          class="rounded-xl bg-slate-100 px-3.5 py-1.5 text-xs text-slate-700 font-semibold transition-all duration-200 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
                           :disabled="publishing"
                           type="button"
                           title="把当前技能发布到社区"
@@ -934,19 +931,28 @@ onBeforeUnmount(() => {
                         >
                           {{ publishing ? '发布中...' : '发布到社区' }}
                         </button>
-                        <button
-                          class="rounded-lg bg-[#1f2937] px-4 py-1.5 text-sm text-white transition hover:bg-[#111827] disabled:cursor-not-allowed disabled:bg-[#9ca3af]"
-                          :disabled="!canSave"
-                          type="button"
-                          @click="save"
-                        >
-                          {{ saving ? '保存中...' : '保存' }}
-                        </button>
                       </div>
                     </div>
                   </div>
                 </div>
               </div>
+
+              <!-- Floating Save Button -->
+              <Transition name="fade">
+                <button
+                  v-if="dirty"
+                  class="absolute bottom-6 right-8 z-30 flex items-center gap-2 rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white shadow-xl hover:bg-slate-800 active:scale-95 transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-50"
+                  :disabled="!canSave"
+                  type="button"
+                  @click="save"
+                >
+                  <span v-if="saving" class="h-4 w-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  <svg v-else class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+                  </svg>
+                  <span>{{ saving ? '保存中...' : '保存修改' }}</span>
+                </button>
+              </Transition>
             </div>
           </template>
         </div>
@@ -954,3 +960,15 @@ onBeforeUnmount(() => {
     </div>
   </div>
 </template>
+
+<style scoped>
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+</style>
+

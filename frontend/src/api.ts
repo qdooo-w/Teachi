@@ -44,6 +44,7 @@ export interface DisplayMessage {
   anchor_msg_id?: string | null
   version?: number
   pending?: boolean
+  previewUrls?: string[]
 }
 
 export interface ChatWorkspace {
@@ -933,6 +934,37 @@ export async function deleteAttachment(sid: string, attachmentId: string): Promi
   await request<void>(`/sessions/${encodeURIComponent(sid)}/attachments/${encodeURIComponent(attachmentId)}`, {
     method: 'DELETE',
   })
+}
+
+export async function getAttachmentBlobUrl(sid: string, attachmentId: string): Promise<string> {
+  const url = apiUrl(`/sessions/${encodeURIComponent(sid)}/attachments/${encodeURIComponent(attachmentId)}`)
+  const makeRequest = async (token: string | null) => {
+    const headers = new Headers()
+    if (token) {
+      headers.set('Authorization', `Bearer ${token}`)
+    }
+    return fetch(url, { headers })
+  }
+
+  let token = getStoredToken()
+  let response = await makeRequest(token)
+
+  if (response.status === 401) {
+    try {
+      const refreshed = await refreshAccessToken()
+      token = refreshed.access_token
+      response = await makeRequest(token)
+    } catch {
+      setStoredToken(null)
+    }
+  }
+
+  if (!response.ok) {
+    throw await readResponseError(response)
+  }
+
+  const blob = await response.blob()
+  return URL.createObjectURL(blob)
 }
 
 // ── 错误处理 ────────────────────────────────────────────────────────────────────
