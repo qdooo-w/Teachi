@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from backend.auth import get_current_user
 from backend.db import DatabaseFacade
@@ -56,6 +56,15 @@ class CreateModelConfigRequest(BaseModel):
     is_active: bool = Field(default=False, description="是否激活")
     supports_vision: bool = Field(default=False, description="是否支持视觉")
 
+
+    @field_validator('base_url')
+    @classmethod
+    def _validate_base_url(cls, v: str | None) -> str | None:
+        from backend.config.model import validate_base_url
+        if v:
+            validate_base_url(v)
+        return v
+
 class UpdateModelConfigRequest(BaseModel):
     """更新模型配置请求"""
 
@@ -67,6 +76,15 @@ class UpdateModelConfigRequest(BaseModel):
     temperature: float | None = Field(default=None, ge=0.0, le=2.0, description="温度参数")
     max_tokens: int | None = Field(default=None, ge=1, le=128000, description="最大 token 数")
     supports_vision: bool | None = Field(default=None, description="是否支持视觉")
+
+
+    @field_validator('base_url')
+    @classmethod
+    def _validate_base_url(cls, v: str | None) -> str | None:
+        from backend.config.model import validate_base_url
+        if v:
+            validate_base_url(v)
+        return v
 
 class ActiveConfigResponse(BaseModel):
     """当前激活配置响应"""
@@ -80,6 +98,15 @@ class TestConnectionRequest(BaseModel):
     base_url: str = Field(default="", max_length=500, description="API Base URL")
     model_name: str = Field(default="", max_length=200, description="模型名称")
     supports_vision: bool = Field(default=False, description="是否支持视觉")
+
+
+    @field_validator('base_url')
+    @classmethod
+    def _validate_base_url(cls, v: str | None) -> str | None:
+        from backend.config.model import validate_base_url
+        if v:
+            validate_base_url(v)
+        return v
 
 class TestConnectionResponse(BaseModel):
     """测试连接响应"""
@@ -99,7 +126,7 @@ def _mask_api_key(api_key: str) -> str:
     if not api_key:
         return ""
     if len(api_key) <= 4:
-        return "**" + api_key[-2:]
+        return "****"
     return "*" * (len(api_key) - 4) + api_key[-4:]
 
 def _row_to_item(row: dict) -> ModelConfigItem:
@@ -348,7 +375,7 @@ def change_password(
     from backend.auth import verify_password, hash_password, _clear_refresh_cookie
 
     user_uuid: str = current_user["uuid"]
-    stored_hash: str = current_user["password_hash"]
+    stored_hash: str = db.users.get_by_uuid(user_uuid)["password_hash"]
 
     if not verify_password(payload.current_password, stored_hash):
         raise HTTPException(

@@ -1,5 +1,8 @@
+import logging
 from typing import Literal, cast
 
+
+_logger = logging.getLogger(__name__)
 
 SameSiteType = Literal["lax", "strict", "none"]
 
@@ -13,13 +16,21 @@ def env_bool(value: str | None, default: bool) -> bool:
 def env_int(value: str | None, default: int) -> int:
     if value is None:
         return default
-    return int(value)
+    try:
+        return int(value)
+    except ValueError:
+        _logger.warning("Invalid integer env value %r, using default %s", value, default)
+        return default
 
 
 def env_float(value: str | None, default: float) -> float:
     if value is None:
         return default
-    return float(value)
+    try:
+        return float(value)
+    except ValueError:
+        _logger.warning("Invalid float env value %r, using default %s", value, default)
+        return default
 
 
 def env_csv(value: str | None, default: str) -> list[str]:

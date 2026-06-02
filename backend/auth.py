@@ -46,6 +46,14 @@ class UserRecord(TypedDict):
     created_at: float
 
 
+class SafeUser(TypedDict):
+    """User object safe for use in endpoints - excludes password_hash."""
+
+    uuid: str
+    username: str
+    email: str
+    created_at: float
+
 class TokenPayload(TypedDict):
     """JWT 载荷对象。"""
 
@@ -322,11 +330,12 @@ def logout(response: Response) -> Response:
     return response#返回空响应保证可读性
 
 
-def get_current_user(user_uuid: str = Depends(get_current_user_uuid), db: DatabaseFacade = Depends(get_db)) -> UserRecord:
+def get_current_user(user_uuid: str = Depends(get_current_user_uuid), db: DatabaseFacade = Depends(get_db)) -> SafeUser:
     """根据用户 UUID 获取当前用户信息，供其他接口使用"""
     user = db.users.get_by_uuid(user_uuid)
-    return _ensure_user_record(user)
+    user = _ensure_user_record(user)
 
+    return SafeUser(uuid=user["uuid"], username=user["username"], email=user["email"], created_at=user["created_at"])
 
 @router.get("/me", response_model=UserOut)
 def read_current_user(current_user: UserRecord = Depends(get_current_user)) -> UserOut:

@@ -1,5 +1,3 @@
-import importlib
-
 from backend.config import app as _app
 from backend.config import auth as _auth
 from backend.config import community as _community
@@ -8,13 +6,6 @@ from backend.config import model as _model
 from backend.config import paths as _paths
 from backend.config import skill as _skill
 
-_app = importlib.reload(_app)
-_auth = importlib.reload(_auth)
-_community = importlib.reload(_community)
-_loop = importlib.reload(_loop)
-_model = importlib.reload(_model)
-_paths = importlib.reload(_paths)
-_skill = importlib.reload(_skill)
 
 APP_NAME = _app.APP_NAME
 CORS_ALLOW_ORIGINS = _app.CORS_ALLOW_ORIGINS
@@ -41,7 +32,8 @@ LOOP_MAX_RETRIES = _loop.LOOP_MAX_RETRIES
 
 GetAgent = _model.GetAgent
 GetProvider = _model.GetProvider
-INSTUCTION = _model.INSTUCTION
+INSTRUCTION = _model.INSTRUCTION
+INSTUCTION = _model.INSTRUCTION  # compat alias
 load_instruction = _model.load_instruction
 load_prompt = _model.load_prompt
 MODEL_BASE_URL = _model.MODEL_BASE_URL
@@ -78,6 +70,7 @@ __all__ = [
     "DISPLAY_NAME_MAX",
     "GetAgent",
     "GetProvider",
+    "INSTRUCTION",
     "INSTUCTION",
     "load_instruction",
     "load_prompt",
