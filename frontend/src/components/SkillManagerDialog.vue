@@ -911,7 +911,7 @@ onBeforeUnmount(() => {
                           ref="bodyTextarea"
                           v-model="form.body"
                           class="w-full resize-none overflow-hidden rounded-xl border border-slate-200/80 bg-slate-50/50 p-3 font-mono text-xs outline-none transition duration-150 focus:bg-white focus:border-slate-400 focus:ring-2 focus:ring-slate-900/5"
-                          style="min-height: 300px"
+                          style="min-height: 380px"
                           spellcheck="false"
                           @input="autoGrow($event.target as HTMLTextAreaElement)"
                         />
@@ -937,7 +937,7 @@ onBeforeUnmount(() => {
                         ref="rawTextarea"
                         v-model="rawContent"
                         class="w-full resize-none overflow-hidden rounded-xl border border-slate-200/80 bg-slate-50/50 p-3 font-mono text-xs outline-none transition duration-150 focus:bg-white focus:border-slate-400 focus:ring-2 focus:ring-slate-900/5"
-                        style="min-height: 440px"
+                        style="min-height: 540px"
                         spellcheck="false"
                         @input="autoGrow($event.target as HTMLTextAreaElement)"
                       />
@@ -945,7 +945,7 @@ onBeforeUnmount(() => {
                   </template>
 
                   <template v-else>
-                    <div v-if="isImageFile" class="flex flex-col items-center justify-center p-8 rounded-2xl bg-slate-50/50 border border-slate-100" style="min-height: 440px">
+                    <div v-if="isImageFile" class="flex flex-col items-center justify-center p-8 rounded-2xl bg-slate-50/50 border border-slate-100" style="min-height: 540px">
                       <span class="text-3xl mb-2">🖼️</span>
                       <p class="text-xs text-slate-600 font-semibold">图片文件仅支持管理，无法直接编辑内容。</p>
                       <p class="text-[10px] text-slate-400 mt-1">{{ selectedPath }}</p>
@@ -961,7 +961,7 @@ onBeforeUnmount(() => {
                         ref="plainTextarea"
                         v-model="plainContent"
                         class="w-full resize-none overflow-hidden rounded-xl border border-slate-200/80 bg-slate-50/50 p-3 font-mono text-xs outline-none transition duration-150 focus:bg-white focus:border-slate-400 focus:ring-2 focus:ring-slate-900/5"
-                        style="min-height: 480px"
+                        style="min-height: 540px"
                         spellcheck="false"
                         @input="autoGrow($event.target as HTMLTextAreaElement)"
                       />
