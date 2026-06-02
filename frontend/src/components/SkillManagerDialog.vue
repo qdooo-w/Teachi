@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onBeforeUnmount, onMounted } from 'vue'
+import { ref, computed, onBeforeUnmount, onMounted, watch, nextTick } from 'vue'
 import {
   type FileSpace,
   type SkillFields,
@@ -71,6 +71,43 @@ const rawMode = ref(false)
 const rawContent = ref('')
 const parseWarning = ref('')
 const plainContent = ref('')
+
+const descTextarea = ref<HTMLTextAreaElement | null>(null)
+const bodyTextarea = ref<HTMLTextAreaElement | null>(null)
+const rawTextarea = ref<HTMLTextAreaElement | null>(null)
+const plainTextarea = ref<HTMLTextAreaElement | null>(null)
+
+function autoGrow(el: HTMLTextAreaElement | null): void {
+  if (!el) return
+  el.style.height = 'auto'
+  el.style.height = `${el.scrollHeight}px`
+}
+
+watch(() => form.value.description, () => {
+  nextTick(() => autoGrow(descTextarea.value))
+})
+watch(() => form.value.body, () => {
+  nextTick(() => autoGrow(bodyTextarea.value))
+})
+watch(rawContent, () => {
+  nextTick(() => autoGrow(rawTextarea.value))
+})
+watch(plainContent, () => {
+  nextTick(() => autoGrow(plainTextarea.value))
+})
+
+watch(descTextarea, (el) => {
+  if (el) autoGrow(el)
+})
+watch(bodyTextarea, (el) => {
+  if (el) autoGrow(el)
+})
+watch(rawTextarea, (el) => {
+  if (el) autoGrow(el)
+})
+watch(plainTextarea, (el) => {
+  if (el) autoGrow(el)
+})
 
 const DESCRIPTION_MAX = SKILL_DESCRIPTION_MAX
 const DISPLAY_NAME_MAX = SKILL_DISPLAY_NAME_MAX
@@ -805,10 +842,12 @@ onBeforeUnmount(() => {
                           </span>
                         </div>
                         <textarea
+                          ref="descTextarea"
                           v-model="form.description"
                           :maxlength="DESCRIPTION_MAX"
-                          class="w-full resize-y rounded-xl border border-slate-200/80 bg-slate-50/50 p-2.5 text-xs outline-none transition duration-150 focus:bg-white focus:border-slate-400 focus:ring-2 focus:ring-slate-900/5"
+                          class="w-full resize-none overflow-hidden rounded-xl border border-slate-200/80 bg-slate-50/50 p-2.5 text-xs outline-none transition duration-150 focus:bg-white focus:border-slate-400 focus:ring-2 focus:ring-slate-900/5"
                           rows="2"
+                          @input="autoGrow($event.target as HTMLTextAreaElement)"
                         />
                         <p v-if="descriptionError" class="mt-1 text-xs text-[#9a3412]">{{ descriptionError }}</p>
                       </div>
@@ -869,10 +908,12 @@ onBeforeUnmount(() => {
                           </span>
                         </div>
                         <textarea
+                          ref="bodyTextarea"
                           v-model="form.body"
-                          class="w-full resize-y rounded-xl border border-slate-200/80 bg-slate-50/50 p-3 font-mono text-xs outline-none transition duration-150 focus:bg-white focus:border-slate-400 focus:ring-2 focus:ring-slate-900/5"
+                          class="w-full resize-none overflow-hidden rounded-xl border border-slate-200/80 bg-slate-50/50 p-3 font-mono text-xs outline-none transition duration-150 focus:bg-white focus:border-slate-400 focus:ring-2 focus:ring-slate-900/5"
                           style="min-height: 250px"
                           spellcheck="false"
+                          @input="autoGrow($event.target as HTMLTextAreaElement)"
                         />
                         <p class="mt-1 text-[10px] text-slate-400">前端会自动生成合法的 frontmatter（name/description 等），你无需手动写 `---` 分隔块。</p>
                       </div>
@@ -893,10 +934,12 @@ onBeforeUnmount(() => {
                         {{ parseWarning }}
                       </p>
                       <textarea
+                        ref="rawTextarea"
                         v-model="rawContent"
-                        class="w-full resize-y rounded-xl border border-slate-200/80 bg-slate-50/50 p-3 font-mono text-xs outline-none transition duration-150 focus:bg-white focus:border-slate-400 focus:ring-2 focus:ring-slate-900/5"
+                        class="w-full resize-none overflow-hidden rounded-xl border border-slate-200/80 bg-slate-50/50 p-3 font-mono text-xs outline-none transition duration-150 focus:bg-white focus:border-slate-400 focus:ring-2 focus:ring-slate-900/5"
                         style="min-height: 360px"
                         spellcheck="false"
+                        @input="autoGrow($event.target as HTMLTextAreaElement)"
                       />
                     </template>
                   </template>
@@ -915,10 +958,12 @@ onBeforeUnmount(() => {
                         </span>
                       </div>
                       <textarea
+                        ref="plainTextarea"
                         v-model="plainContent"
-                        class="w-full resize-y rounded-xl border border-slate-200/80 bg-slate-50/50 p-3 font-mono text-xs outline-none transition duration-150 focus:bg-white focus:border-slate-400 focus:ring-2 focus:ring-slate-900/5"
+                        class="w-full resize-none overflow-hidden rounded-xl border border-slate-200/80 bg-slate-50/50 p-3 font-mono text-xs outline-none transition duration-150 focus:bg-white focus:border-slate-400 focus:ring-2 focus:ring-slate-900/5"
                         style="min-height: 420px"
                         spellcheck="false"
+                        @input="autoGrow($event.target as HTMLTextAreaElement)"
                       />
                     </template>
                   </template>
