@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, nextTick } from 'vue'
+import { ref, onMounted, nextTick, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import RowMenu from '../components/RowMenu.vue'
 import RenameInline from '../components/RenameInline.vue'
@@ -128,15 +128,30 @@ const showCreatePanel = ref(false)
 const newProjectName = ref('')
 const newProjectDesc = ref('')
 const nameInput = ref<HTMLInputElement | null>(null)
+const descTextarea = ref<HTMLTextAreaElement | null>(null)
 const creatingProject = ref(false)
 const errorMessage = ref('')
 
 const DESC_MAX = 100
+// 描述输入框自动增高的最大高度（像素），超出后出现滚动条
+const DESC_TEXTAREA_MAX_HEIGHT = 180
+
+/** 让描述 textarea 自适应内容高度，上限 DESC_TEXTAREA_MAX_HEIGHT px */
+function autosizeDesc(): void {
+  const el = descTextarea.value
+  if (!el) return
+  el.style.height = 'auto'
+  const next = Math.min(el.scrollHeight, DESC_TEXTAREA_MAX_HEIGHT)
+  el.style.height = `${next}px`
+  el.style.overflowY = el.scrollHeight > DESC_TEXTAREA_MAX_HEIGHT ? 'auto' : 'hidden'
+}
 
 async function openCreatePanel(): Promise<void> {
   showCreatePanel.value = true
   await nextTick()
   nameInput.value?.focus()
+  // 面板展开后让描述框高度与当前内容匹配（通常为空，恢复初始高度）
+  autosizeDesc()
 }
 
 function closeCreatePanel(): void {
@@ -145,7 +160,12 @@ function closeCreatePanel(): void {
   newProjectName.value = ''
   newProjectDesc.value = ''
   errorMessage.value = ''
+  // 重置 textarea 高度，确保再次打开时从初始尺寸开始
+  nextTick(autosizeDesc)
 }
+
+// 描述内容变化时同步更新高度（处理粘贴、程序赋值等 @input 触发不到的场景）
+watch(newProjectDesc, () => { nextTick(autosizeDesc) })
 
 async function handleCreateProject(): Promise<void> {
   const name = newProjectName.value.trim()
@@ -442,12 +462,14 @@ onMounted(async () => {
               <div class="mx-2 border-t border-[#f3f4f6]" />
               <div class="relative">
                 <textarea
+                  ref="descTextarea"
                   v-model="newProjectDesc"
-                  class="w-full resize-none border-none bg-transparent py-2 text-sm leading-relaxed text-[#374151] outline-none placeholder:text-[#9ca3af]"
+                  class="w-full resize-none overflow-hidden border-none bg-transparent py-2 text-sm leading-relaxed text-[#374151] outline-none placeholder:text-[#9ca3af]"
                   :placeholder="`一句话描述这个科目（可选，${DESC_MAX} 字以内）`"
                   rows="2"
                   :maxlength="DESC_MAX"
                   :disabled="creatingProject"
+                  @input="autosizeDesc"
                   @keydown.esc.prevent="closeCreatePanel"
                   @click.stop
                 />

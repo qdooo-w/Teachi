@@ -44,6 +44,27 @@ const {
 const router = useRouter()
 const route = useRoute()
 
+// ── 路由层级深度：overview/community=0，subject=1，chat=2 ──────────────────
+const ROUTE_DEPTH: Record<string, number> = {
+  overview: 0,
+  community: 0,
+  subject: 1,
+  chat: 2,
+}
+
+function getRouteDepth(name: string | null | undefined): number {
+  return ROUTE_DEPTH[name ?? ''] ?? 0
+}
+
+// direction='forward' 表示向下导航（右进左出），'backward' 表示向上导航（左进右出）
+const navDirection = ref<'forward' | 'backward'>('forward')
+
+watch(route, (to, from) => {
+  const toDepth = getRouteDepth(to.name as string)
+  const fromDepth = getRouteDepth(from.name as string)
+  navDirection.value = toDepth >= fromDepth ? 'forward' : 'backward'
+})
+
 const { projects, loadProjects, resetProjects, upsertProject, removeProject } = useProjects()
 const { sidebarOpen, isMobile, handleResize, closeSidebarOnMobile } = useLayout()
 
@@ -598,11 +619,19 @@ onBeforeUnmount(() => {
 
         <div class="relative flex-1 overflow-hidden">
           <RouterView v-slot="{ Component, route: rv }">
-            <component
-              :is="Component"
-              v-if="Component"
-              :key="rv.name === 'chat' ? `${rv.params.pid}:${rv.params.sid}` : String(rv.name ?? '')"
-            />
+            <!-- 侧向淡出过渡：forward=右进左出，backward=左进右出。
+                 用单根 <div> 包裹路由组件再套 <Transition>：<Transition> 只能对单根子节点
+                 应用过渡，而部分视图（如 SubjectView）是多根（主体 + 弹窗），直接包裹会失效。
+                 包裹层 absolute inset-0 充满容器，内部视图的 absolute inset-0 仍正确解析。 -->
+            <Transition :name="`view-slide-${navDirection}`" mode="out-in">
+              <div
+                v-if="Component"
+                :key="rv.name === 'chat' ? `${rv.params.pid}:${rv.params.sid}` : String(rv.name ?? '')"
+                class="absolute inset-0"
+              >
+                <component :is="Component" />
+              </div>
+            </Transition>
           </RouterView>
 
         </div>
@@ -646,3 +675,60 @@ onBeforeUnmount(() => {
     </Transition>
   </main>
 </template>
+
+<style>
+/*
+ * 路由视图侧向淡出过渡
+ * 使用 cubic-bezier(0.2, 0.8, 0.2, 1) 与项目其他动画保持一致
+ * 向前（overview→subject→chat）：新视图从右进入，旧视图向左退出
+ * 向后（chat→subject→overview）：新视图从左进入，旧视图向右退出
+ */
+
+/* ── 向前导航（进入右侧，退出左侧） ── */
+.view-slide-forward-enter-active,
+.view-slide-forward-leave-active {
+  transition:
+    opacity 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.view-slide-forward-enter-from {
+  opacity: 0;
+  transform: translateX(20px);
+}
+.view-slide-forward-enter-to {
+  opacity: 1;
+  transform: translateX(0);
+}
+.view-slide-forward-leave-from {
+  opacity: 1;
+  transform: translateX(0);
+}
+.view-slide-forward-leave-to {
+  opacity: 0;
+  transform: translateX(-20px);
+}
+
+/* ── 向后导航（进入左侧，退出右侧） ── */
+.view-slide-backward-enter-active,
+.view-slide-backward-leave-active {
+  transition:
+    opacity 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.view-slide-backward-enter-from {
+  opacity: 0;
+  transform: translateX(-20px);
+}
+.view-slide-backward-enter-to {
+  opacity: 1;
+  transform: translateX(0);
+}
+.view-slide-backward-leave-from {
+  opacity: 1;
+  transform: translateX(0);
+}
+.view-slide-backward-leave-to {
+  opacity: 0;
+  transform: translateX(20px);
+}
+</style>
