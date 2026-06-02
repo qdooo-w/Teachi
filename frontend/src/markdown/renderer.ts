@@ -30,6 +30,34 @@ md.use(texmath, {
   },
 })
 
+/**
+ * texmath 默认不在 <eq>/<eqn> 上携带原始公式，需注入 data-math 属性，
+ * 供 MessageContent.vue 中的 attachMathCopyButtons 读取并复制 LaTeX 源码。
+ *
+ * 注入策略：包装 texmath 注册的每条渲染规则，调用原规则获取 HTML 字符串后，
+ * 向第一个 <eq> 或 <eqn> 开标签注入 data-math="<转义后的原始公式>"。
+ * 规则名称（来自 texmath.js 源码）：
+ *   内联：math_inline（→ <eq>）、math_inline_double（→ <section><eqn>）
+ *   块级：math_block（→ <section><eqn>）、math_block_eqno（→ <section class="eqno"><eqn>）
+ */
+const MATH_RULE_NAMES = ['math_inline', 'math_inline_double', 'math_block', 'math_block_eqno'] as const
+
+for (const ruleName of MATH_RULE_NAMES) {
+  const originalRule = md.renderer.rules[ruleName]
+  if (!originalRule) continue
+
+  md.renderer.rules[ruleName] = (tokens, idx, options, env, self) => {
+    const html = originalRule(tokens, idx, options, env, self)
+    const rawLatex = tokens[idx].content
+    const escapedLatex = attr(rawLatex)
+    // 向首个 <eq> 或 <eqn> 开标签注入 data-math 属性。
+    // math_inline 规则输出以 <eq> 开头；
+    // math_inline_double / math_block / math_block_eqno 输出以 <section> 开头，
+    // 内部首个 <eqn> 才是公式容器，因此用非锚定匹配查找第一个 <eq> 或 <eqn>。
+    return html.replace(/(<(?:eq|eqn)(?:\s[^>]*)?)>/, `$1 data-math="${escapedLatex}">`)
+  }
+}
+
 const defaultLinkOpen =
   md.renderer.rules.link_open ??
   ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options))

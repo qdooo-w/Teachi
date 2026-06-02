@@ -293,13 +293,25 @@ input {
   font-size: 12.5px;
 }
 
-/* KaTeX 覆盖 */
+/* KaTeX 覆盖与滚动控制
+ * 外层 <eq>/<eqn> 仅负责定位（position:relative），不做 overflow 裁剪，
+ * 这样 position:absolute 的复制按钮不会随公式内容横向滚动而偏移。
+ * 实际水平滚动由 JS 注入的 .math-scroll-inner 承担。
+ */
 .markdown-body eq {
   display: inline-block;
+  position: relative;
+  max-width: 100%;
+  vertical-align: middle;
+}
+.markdown-body eqn {
+  display: block;
+  position: relative;
+  max-width: 100%;
 }
 .markdown-body section {
   margin: 0.75em 0;
-  overflow-x: auto;
+  max-width: 100%;
   text-align: center;
 }
 .markdown-body section.eqno {
@@ -307,6 +319,71 @@ input {
   align-items: center;
   justify-content: space-between;
   gap: 1em;
+}
+
+/* 内层滚动容器，由 attachMathCopyButtons 在 JS 中注入 */
+.markdown-body eq .math-scroll-inner {
+  display: inline-block;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  vertical-align: middle;
+}
+.markdown-body eqn .math-scroll-inner {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+/* 未注入 inner 时（非 JS 环境降级），<section> 本身仍可滚动 */
+.markdown-body section:not(:has(.math-scroll-inner)) {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* LaTeX Hover Copy Button
+ * position:absolute 相对于外层 <eq>/<eqn>，不进入 .math-scroll-inner，
+ * 因此横向滚动时按钮始终固定在可视左上角。
+ */
+.markdown-body eq .math-copy-btn,
+.markdown-body eqn .math-copy-btn {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  opacity: 0;
+  pointer-events: auto;
+  transition: opacity 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  color: #374151;
+  cursor: pointer;
+}
+.markdown-body eq:hover .math-copy-btn,
+.markdown-body eqn:hover .math-copy-btn {
+  opacity: 1;
+}
+.markdown-body eq .math-copy-btn:hover,
+.markdown-body eqn .math-copy-btn:hover {
+  background: #1f2937;
+  color: #ffffff;
+  border-color: #1f2937;
+}
+.markdown-body eq .math-copy-btn.copied,
+.markdown-body eqn .math-copy-btn.copied {
+  width: auto;
+  height: auto;
+  padding: 2px 6px;
+  font-size: 10px;
+  background: #1f2937;
+  color: #ffffff;
+  border-color: #1f2937;
 }
 
 /* ---------- Skill Picker 抽屉过渡 ---------- */

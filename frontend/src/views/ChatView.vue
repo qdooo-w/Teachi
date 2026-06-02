@@ -324,7 +324,10 @@ async function loadMessages(): Promise<void> {
   sessionAttachments.value = atts
   await refreshVersionMap()
   await loadAttachmentUrls()
-  scrollToBottom(true)
+  // 不强制贴底：仅当用户当前停留在底部（stickToBottom）时才跟随到底部。
+  // 首次打开会话时 stickToBottom 默认为 true，故首屏仍落在底部；
+  // 之后重新拉取（版本切换 / 重放 / 删除回合等）若用户正在上方阅读则不打断。
+  scrollToBottom()
 }
 
 async function refreshVersionMap(): Promise<void> {
@@ -914,9 +917,11 @@ watch(
 </script>
 
 <template>
-  <div class="absolute inset-0 flex flex-col">
-    <div ref="chatContainer" class="min-h-0 flex-1 overflow-y-auto px-4 py-5 md:px-6" @scroll.passive="handleChatScroll">
-      <div class="mx-auto flex max-w-3xl flex-col gap-5 pb-4">
+  <div class="absolute inset-0">
+    <!-- 消息滚动区铺满整个区域，消息可滚动到浮动 composer 之下（composer 叠在其上层） -->
+    <div ref="chatContainer" class="absolute inset-0 overflow-y-auto px-4 py-5 md:px-6" @scroll.passive="handleChatScroll">
+      <!-- pb-40 预留空间，使最后一条消息可滚动至浮动 composer 上方而不被永久遮挡 -->
+      <div class="mx-auto flex max-w-3xl flex-col gap-5 pb-40">
         <div v-if="messages.length === 0" class="mt-16 rounded-lg border border-dashed border-[#d1d5db] bg-white px-4 py-8 text-center text-sm text-[#6b7280]">
           还没有消息。
         </div>
@@ -1060,8 +1065,16 @@ watch(
       </div>
     </div>
 
-    <footer class="flex-shrink-0 bg-[#f3f4f6] px-4 pb-4 pt-2 md:px-6">
-      <div class="mx-auto max-w-3xl">
+    <!-- 底部整宽渐变：叠在消息层之上、composer 之下（z-10），让消息在界面最下方淡出到页面底色 -->
+    <div
+      class="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-40"
+      style="background: linear-gradient(to bottom, transparent, #f3f4f6 78%);"
+      aria-hidden="true"
+    />
+    <!-- 浮动 composer：绝对贴底并叠在消息层最上方（z-20）；外层透明且不拦截事件，
+         消息可在其下方/周围透出，仅内部 composer 区域接收点击 -->
+    <footer class="pointer-events-none absolute inset-x-0 bottom-0 z-20 px-4 pb-4 pt-2 md:px-6">
+      <div class="pointer-events-auto mx-auto max-w-3xl">
         <p v-if="errorMessage" class="mb-2 rounded-md border border-[#efb3a7] bg-[#fff7ed] px-3 py-2 text-sm text-[#9a3412]">
           {{ errorMessage }}
         </p>
@@ -1140,21 +1153,10 @@ watch(
             @click="checkAtTrigger"
             @paste="handleComposerPaste"
           />
-          <div class="mt-2 flex items-center justify-between">
+          <!-- mt-1 比原 mt-2 稍小，使图标行更贴近 composer 底部 -->
+          <div class="mt-1 flex items-center justify-between">
             <div class="flex items-center gap-1">
-              <button
-                class="flex h-8 w-8 items-center justify-center rounded-full text-[#6b7280] transition hover:bg-[#f3f4f6] hover:text-[#1f2937] disabled:cursor-not-allowed disabled:opacity-50"
-                :disabled="streaming || preparing"
-                title="添加技能"
-                type="button"
-                @click="showSkillPicker = !showSkillPicker"
-              >
-                <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v14m7-7H5" />
-                </svg>
-              </button>
-              
-              <!-- Upload Attachment Button -->
+              <!-- 上传附件按钮（现在排第一） -->
               <button
                 class="flex h-8 w-8 items-center justify-center rounded-full text-[#6b7280] transition hover:bg-[#f3f4f6] hover:text-[#1f2937] disabled:cursor-not-allowed disabled:opacity-50"
                 :disabled="streaming || preparing"
@@ -1166,7 +1168,8 @@ watch(
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
                 </svg>
               </button>
-              
+
+              <!-- 隐藏的文件选择 input，紧跟上传按钮 -->
               <input
                 ref="fileInputRef"
                 type="file"
@@ -1175,6 +1178,19 @@ watch(
                 accept="image/jpeg,image/png,image/webp,image/gif,text/plain,text/markdown,text/csv,application/json,application/pdf"
                 @change="handleFileChange"
               />
+
+              <!-- 添加技能按钮（现在排第二） -->
+              <button
+                class="flex h-8 w-8 items-center justify-center rounded-full text-[#6b7280] transition hover:bg-[#f3f4f6] hover:text-[#1f2937] disabled:cursor-not-allowed disabled:opacity-50"
+                :disabled="streaming || preparing"
+                title="添加技能"
+                type="button"
+                @click="showSkillPicker = !showSkillPicker"
+              >
+                <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v14m7-7H5" />
+                </svg>
+              </button>
             </div>
             <button
               v-if="streaming"
