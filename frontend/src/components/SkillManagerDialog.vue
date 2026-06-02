@@ -783,7 +783,7 @@ onBeforeUnmount(() => {
             <!-- Scroll Area Wrapper -->
             <div class="relative min-h-0 flex-1">
               <!-- Scroll Area -->
-              <div class="h-full overflow-y-auto px-5 pb-12 pt-3">
+              <div class="h-full overflow-y-auto px-5 pt-3" :class="dirty ? 'pb-16' : 'pb-4'">
                 <div v-if="fileLoading" class="py-10 text-center text-sm text-[#9ca3af]">加载文件...</div>
 
                 <div v-else class="space-y-6">
@@ -911,7 +911,7 @@ onBeforeUnmount(() => {
                           ref="bodyTextarea"
                           v-model="form.body"
                           class="w-full resize-none overflow-hidden rounded-xl border border-slate-200/80 bg-slate-50/50 p-3 font-mono text-xs outline-none transition duration-150 focus:bg-white focus:border-slate-400 focus:ring-2 focus:ring-slate-900/5"
-                          style="min-height: 250px"
+                          style="min-height: 300px"
                           spellcheck="false"
                           @input="autoGrow($event.target as HTMLTextAreaElement)"
                         />
@@ -937,7 +937,7 @@ onBeforeUnmount(() => {
                         ref="rawTextarea"
                         v-model="rawContent"
                         class="w-full resize-none overflow-hidden rounded-xl border border-slate-200/80 bg-slate-50/50 p-3 font-mono text-xs outline-none transition duration-150 focus:bg-white focus:border-slate-400 focus:ring-2 focus:ring-slate-900/5"
-                        style="min-height: 360px"
+                        style="min-height: 440px"
                         spellcheck="false"
                         @input="autoGrow($event.target as HTMLTextAreaElement)"
                       />
@@ -945,7 +945,7 @@ onBeforeUnmount(() => {
                   </template>
 
                   <template v-else>
-                    <div v-if="isImageFile" class="flex flex-col items-center justify-center p-8 rounded-2xl bg-slate-50/50 border border-slate-100" style="min-height: 420px">
+                    <div v-if="isImageFile" class="flex flex-col items-center justify-center p-8 rounded-2xl bg-slate-50/50 border border-slate-100" style="min-height: 440px">
                       <span class="text-3xl mb-2">🖼️</span>
                       <p class="text-xs text-slate-600 font-semibold">图片文件仅支持管理，无法直接编辑内容。</p>
                       <p class="text-[10px] text-slate-400 mt-1">{{ selectedPath }}</p>
@@ -961,7 +961,7 @@ onBeforeUnmount(() => {
                         ref="plainTextarea"
                         v-model="plainContent"
                         class="w-full resize-none overflow-hidden rounded-xl border border-slate-200/80 bg-slate-50/50 p-3 font-mono text-xs outline-none transition duration-150 focus:bg-white focus:border-slate-400 focus:ring-2 focus:ring-slate-900/5"
-                        style="min-height: 420px"
+                        style="min-height: 480px"
                         spellcheck="false"
                         @input="autoGrow($event.target as HTMLTextAreaElement)"
                       />
