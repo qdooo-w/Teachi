@@ -212,7 +212,7 @@ watch(
 watch(
   () => currentProject.value?.projectname,
   (name) => {
-    if (name) document.title = `${name} · Teachi`
+    if (name) document.title = `${name} · Learnova`
   },
   { immediate: true },
 )

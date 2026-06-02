@@ -1,4 +1,4 @@
-export const TOKEN_STORAGE_KEY = 'teachi.access_token'
+export const TOKEN_STORAGE_KEY = 'learnova.access_token'
 
 export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')
 

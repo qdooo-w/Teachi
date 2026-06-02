@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import {
   type ModelConfigItem,
   type UpdateModelConfigRequest,
@@ -44,6 +44,9 @@ const testResult = ref<TestConnectionResponse | null>(null)
 const editingId = ref<string | null>(null)
 const isCreating = computed(() => editingId.value === 'create')
 
+const testPassed = ref(false)
+const isInitializing = ref(false)
+
 const form = ref({
   config_name: '',
   api_key: '',
@@ -59,7 +62,16 @@ const showApiKey = ref(false)
 const apiKeyIsMasked = ref(false)
 const confirmDeleteId = ref<string | null>(null)
 const confirmDeleteName = ref('')
-const canSave = computed(() => form.value.config_name.trim().length > 0)
+const canSave = computed(() => form.value.config_name.trim().length > 0 && testPassed.value)
+
+watch(
+  () => [form.value.api_key, form.value.base_url, form.value.model_name, form.value.supports_vision],
+  () => {
+    if (isInitializing.value) return
+    testPassed.value = false
+    testResult.value = null
+  }
+)
 
 async function loadConfigs(): Promise<void> {
   loading.value = true; errorMsg.value = ''
@@ -69,16 +81,26 @@ async function loadConfigs(): Promise<void> {
 }
 
 function startCreate(): void {
+  isInitializing.value = true
   editingId.value = 'create'
   form.value = { config_name: '', api_key: '', base_url: '', model_name: '', user_instruction: '', temperature: null, max_tokens: null, supports_vision: false }
   showAdvanced.value = false; showApiKey.value = false; apiKeyIsMasked.value = false; testResult.value = null; errorMsg.value = ''
+  testPassed.value = false
+  setTimeout(() => {
+    isInitializing.value = false
+  }, 0)
 }
 
 function startEdit(config: ModelConfigItem): void {
+  isInitializing.value = true
   editingId.value = config.config_id
   form.value = { config_name: config.config_name, api_key: config.api_key, base_url: config.base_url, model_name: config.model_name, user_instruction: config.user_instruction || '', temperature: config.temperature, max_tokens: config.max_tokens, supports_vision: !!config.supports_vision }
   showAdvanced.value = !!(config.temperature || config.max_tokens || config.user_instruction)
   showApiKey.value = false; apiKeyIsMasked.value = config.api_key.startsWith('*'); testResult.value = null; errorMsg.value = ''
+  testPassed.value = true
+  setTimeout(() => {
+    isInitializing.value = false
+  }, 0)
 }
 
 
@@ -119,8 +141,12 @@ async function testConnection(): Promise<void> {
   testing.value = true; errorMsg.value = ''; testResult.value = null
   try {
     if (editingId.value && apiKeyIsMasked.value) { testResult.value = await testConnectionWithConfig(editingId.value) }
-    else { testResult.value = await testConnectionWithParams({ api_key: form.value.api_key, base_url: form.value.base_url, model_name: form.value.model_name }) }
-  } catch (e) { testResult.value = { success: false, message: getErrorMessage(e), model: null } }
+    else { testResult.value = await testConnectionWithParams({ api_key: form.value.api_key, base_url: form.value.base_url, model_name: form.value.model_name, supports_vision: form.value.supports_vision }) }
+    testPassed.value = !!testResult.value.success
+  } catch (e) {
+    testResult.value = { success: false, message: getErrorMessage(e), model: null }
+    testPassed.value = false
+  }
   finally { testing.value = false }
 }
 
@@ -370,7 +396,7 @@ onMounted(() => { loadConfigs(); loadAccountInfo(); loadPreferences() })
               <svg class="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
               {{ testing ? '测试中...' : '测试连接' }}
             </button>
-            <button class="h-9 rounded-md bg-[#1f2937] px-5 text-sm font-medium text-white transition-colors hover:bg-[#111827] disabled:cursor-not-allowed disabled:bg-[#9ca3af]" type="button" :disabled="!canSave || saving" @click="save">{{ saving ? '保存中...' : '保存' }}</button>
+            <button class="h-9 rounded-md bg-[#1f2937] px-5 text-sm font-medium text-white transition-colors hover:bg-[#111827] disabled:cursor-not-allowed disabled:bg-[#9ca3af]" type="button" :disabled="!canSave || saving" :title="!testPassed ? '需要先测试连接成功后才能保存' : ''" @click="save">{{ saving ? '保存中...' : '保存' }}</button>
           </template>
           <button class="h-9 rounded-md border border-[#d1d5db] px-4 text-sm text-[#374151] transition-colors hover:bg-[#f3f4f6]" type="button" @click="emit('close')">关闭</button>
         </div>

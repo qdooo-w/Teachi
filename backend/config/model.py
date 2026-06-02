@@ -165,10 +165,13 @@ async def test_connection(
     api_key: str | None = None,
     base_url: str | None = None,
     model_name: str | None = None,
+    supports_vision: bool = False,
 ) -> dict:
     """测试模型 API 连通性。
 
-    发送一个极简请求（max_tokens=1）来验证 API Key、Base URL 和模型名称是否有效。
+    对于普通模型，发送一个极简文本请求验证有效性。
+    对于支持视觉的模型，发送一个测试图片以专门验证其视觉接收与解析能力。
+    如果视觉测试失败，会尝试回退到纯文本测试，以区分是 API 连接错误还是模型本身不支持视觉。
     返回 {"success": bool, "message": str, "model": str | None}。
     """
     try:
@@ -176,29 +179,97 @@ async def test_connection(
         # 使用 openai 异步客户端发送极简请求，避免 pydantic-ai Agent 的复杂依赖
         # 注意：max_tokens 不能设太小，部分模型（如思考模型）有最低 token 限制
         client = model.client  # AsyncOpenAI 客户端
-        response = await asyncio.wait_for(
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"连接初始化失败：{e}",
+            "model": None,
+        }
+
+    # 1. 尝试主测试（如果 supports_vision 为 True 则测试视觉，否则测试文本）
+    primary_success = False
+    primary_error = None
+
+    # 构造视觉消息
+    vision_messages = []
+    if supports_vision:
+        from backend.config import BASE_DIR
+        import base64
+        image_path = BASE_DIR / "image.png"
+        if image_path.is_file():
+            image_bytes = image_path.read_bytes()
+        else:
+            # 备用单像素透明 PNG，防止文件缺失导致报错
+            image_bytes = base64.b64decode(
+                b"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+            )
+        base64_image = base64.b64encode(image_bytes).decode("utf-8")
+        vision_messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Hi, please describe this image briefly in one sentence to test our API connection."},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/png;base64,{base64_image}"
+                        }
+                    }
+                ]
+            }
+        ]
+
+    # 尝试进行主测试
+    try:
+        messages = vision_messages if supports_vision else [{"role": "user", "content": "Hi"}]
+        await asyncio.wait_for(
             client.chat.completions.create(
                 model=model.model_name,
-                messages=[{"role": "user", "content": "Hi"}],
+                messages=messages,
                 max_tokens=64,
             ),
             timeout=TEST_CONNECTION_TIMEOUT,
         )
-        # 能走到这里说明连接成功
+        primary_success = True
+    except Exception as e:
+        primary_error = e
+
+    if primary_success:
         return {
             "success": True,
-            "message": "Connection successful",
+            "message": "Connection successful" if not supports_vision else "Vision connection successful",
             "model": model.model_name,
         }
-    except asyncio.TimeoutError:
-        return {
-            "success": False,
-            "message": f"Connection timed out after {TEST_CONNECTION_TIMEOUT} seconds. Please check your Base URL and network.",
-            "model": None,
-        }
-    except Exception as e:
-        return {
-            "success": False,
-            "message": str(e),
-            "model": None,
-        }
+
+    # 2. 如果主测试失败，且当前勾选了 supports_vision，我们需要回退测试纯文本，来排查原因
+    if supports_vision:
+        try:
+            # 回退进行纯文本测试
+            await asyncio.wait_for(
+                client.chat.completions.create(
+                    model=model.model_name,
+                    messages=[{"role": "user", "content": "Hi"}],
+                    max_tokens=64,
+                ),
+                timeout=TEST_CONNECTION_TIMEOUT,
+            )
+            # 纯文本测试通了，说明接口地址和 API Key 是对的，但是不支持视觉
+            return {
+                "success": False,
+                "message": f"视觉能力测试失败（API 连通正常，但该模型可能不支持视觉输入，请更换多模态/支持视觉的模型）。错误详情：{primary_error}",
+                "model": model.model_name,
+            }
+        except Exception as text_err:
+            # 纯文本也失败了，说明是 API 连通性本身的问题（例如 API Key 错误、地址无效、网络不通）
+            return {
+                "success": False,
+                "message": f"连接失败（API 地址或 API Key 配置有误，网络超时等，且纯文本测试也未通过）。错误详情：{text_err}",
+                "model": model.model_name,
+            }
+
+    # 普通文本测试失败
+    return {
+        "success": False,
+        "message": f"连接失败（可能是 API 地址或 API Key 有误，网络超时等）。错误详情：{primary_error}",
+        "model": model.model_name,
+    }

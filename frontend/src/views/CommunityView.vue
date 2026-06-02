@@ -292,7 +292,7 @@ watch(triggerSearch, () => {
 })
 
 onMounted(() => {
-  document.title = '社区 · Teachi'
+  document.title = '社区 · Learnova'
   void load()
   void loadProjects()
 })

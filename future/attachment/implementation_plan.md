@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 为 Teachi 后端添加图片附件上传功能，并通过 PydanticAI `view_attachment` 工具统一处理多模态/非多模态分流。
+**Goal:** 为 Learnova 后端添加图片附件上传功能，并通过 PydanticAI `view_attachment` 工具统一处理多模态/非多模态分流。
 
 **Architecture:** 附件记录存 `attachments` 表（绑定会话和回合），图片文件存 `data/{user_uuid}/{pid}/{sid}/attachments/` 目录。`view_attachment` 工具懒生成图片内容叙述缓存，按主模型视觉能力决定返回 `BinaryContent`（原图）或纯文字叙述。`build_model_node` 查询会话附件后动态注入强约束系统提示词。
 

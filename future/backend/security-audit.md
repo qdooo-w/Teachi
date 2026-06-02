@@ -1,4 +1,4 @@
-# Teachi Backend 安全审计报告
+# Learnova Backend 安全审计报告
 
 基于对后端全部 Python 文件的全面审查，按严重程度分类列出安全问题及修复建议。
 

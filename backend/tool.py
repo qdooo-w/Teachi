@@ -23,6 +23,7 @@ register_tool -> build_tools(allowed=...) -> Agent(tools=...) -> 工具函数执
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,8 @@ from pydantic_ai import RunContext
 from pydantic_ai.tools import Tool
 
 from backend.config.skill import SKILL_TEXT_EXTENSIONS, validate_skill_name
+
+logger = logging.getLogger(__name__)
 
 # 已注册工具名称集合，用于快速查找和权限校验
 _REGISTERED_TOOL_NAMES: set[str] = set()
@@ -337,11 +340,6 @@ async def _generate_description(attachment: dict, db, user_uuid: str) -> str | N
     from backend.config import BASE_DIR
     from pydantic_ai import Agent, BinaryContent
 
-    try:
-        vision_model = get_vision_assistant_provider(db, user_uuid)
-    except RuntimeError:
-        return None
-
     file_path_str: str = attachment["file_path"]
     from pathlib import Path
     file_path = (
@@ -349,11 +347,22 @@ async def _generate_description(attachment: dict, db, user_uuid: str) -> str | N
         if Path(file_path_str).is_absolute()
         else BASE_DIR / file_path_str
     )
+    mime_type: str = attachment["mime_type"]
+    filename_orig = attachment.get("original_filename", file_path.name)
+
+    logger.info("Calling vision assistant model to generate description for image: %s (mime: %s)", filename_orig, mime_type)
+
+    try:
+        vision_model = get_vision_assistant_provider(db, user_uuid)
+    except RuntimeError as e:
+        logger.warning("Failed to get vision assistant provider for user %s: %s", user_uuid, e)
+        return None
+
     if not file_path.is_file():
+        logger.warning("Image file does not exist: %s", file_path)
         return None
 
     image_bytes = file_path.read_bytes()
-    mime_type: str = attachment["mime_type"]
 
     describe_prompt = (
         "请对这张图片的所有可见内容进行精确、完整的叙述。"
@@ -368,7 +377,9 @@ async def _generate_description(attachment: dict, db, user_uuid: str) -> str | N
             [describe_prompt, BinaryContent(data=image_bytes, media_type=mime_type)]
         )
         description = result.output if hasattr(result, "output") else str(result.data)
-    except Exception:
+        logger.info("Successfully generated description using vision assistant model (length: %d chars)", len(description))
+    except Exception as e:
+        logger.exception("Failed to generate description using vision assistant model for %s: %s", filename_orig, e)
         return None
 
     db.attachments.update_description(attachment["attachment_id"], user_uuid, description)
@@ -584,19 +595,29 @@ async def view_attachment(
 
     # 图片：生成叙述（走缓存），视觉模型同时返回 BinaryContent
     if mime_type in IMAGE_MIMES:
+        filename_orig = attachment.get("original_filename", file_path.name)
+        logger.info("view_attachment called for image: %s (mime: %s)", filename_orig, mime_type)
+
         description: str | None = attachment.get("description")
         if description is None:
+            logger.info("No cached description found for %s. Generating new description...", filename_orig)
             description = await _generate_description(attachment, db, user_uuid)
             if description is None:
-                return ToolReturn(return_value="错误：无法生成图片内容叙述，请检查视觉模型配置。")
+                logger.error("Failed to generate description for %s", filename_orig)
+                return ToolReturn(return_value="错误：无法生成图片内容叙述，请让用户检查/反馈视觉模型配置。")
+        else:
+            logger.info("Using cached description for %s", filename_orig)
 
         if active_model_supports_vision(db, user_uuid):
+            logger.info("Active model supports vision. Returning both description and BinaryContent for %s", filename_orig)
             image_bytes = file_path.read_bytes()
             return ToolReturn(
                 return_value=description,
                 content=[description, BinaryContent(data=image_bytes, media_type=mime_type)],
             )
-        return ToolReturn(return_value=description)
+        else:
+            logger.info("Active model does NOT support vision. Returning description text only for %s", filename_orig)
+            return ToolReturn(return_value=description)
 
     return ToolReturn(return_value=f"错误：不支持的附件类型 {mime_type!r}。")
 
