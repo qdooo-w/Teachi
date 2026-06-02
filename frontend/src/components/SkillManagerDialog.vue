@@ -430,18 +430,21 @@ async function save(): Promise<void> {
   }
 }
 
-async function remove(): Promise<void> {
-  if (!selectedName.value) return
-  if (!confirm(`确定要删除技能 "${selectedName.value}" 吗？此操作不可撤销。`)) return
+async function remove(skillName?: string): Promise<void> {
+  const targetName = skillName || selectedName.value
+  if (!targetName) return
+  if (!confirm(`确定要删除技能 "${targetName}" 吗？此操作不可撤销。`)) return
   deleting.value = true
   errorMsg.value = ''
   publishMsg.value = ''
   try {
-    await deleteSkill(props.space, selectedName.value)
-    selectedName.value = null
-    selectedPath.value = null
-    tree.value = []
-    resetEditor()
+    await deleteSkill(props.space, targetName)
+    if (selectedName.value === targetName) {
+      selectedName.value = null
+      selectedPath.value = null
+      tree.value = []
+      resetEditor()
+    }
     await loadSkills()
   } catch (e) {
     errorMsg.value = getErrorMessage(e)
@@ -592,22 +595,36 @@ onBeforeUnmount(() => {
           <div class="flex-1 overflow-y-auto p-1.5 space-y-1">
             <div v-if="loading" class="px-2.5 py-3 text-xs text-slate-400">加载中...</div>
             <div v-else-if="skills.length === 0" class="px-2.5 py-3 text-xs text-slate-400">暂无技能</div>
-            <button
+            <div
               v-for="skill in skills"
               :key="skill.name"
+              class="group relative flex w-full items-center justify-between rounded-lg transition-colors duration-150"
               :class="[
-                'w-full rounded-lg px-2.5 py-1.5 text-left transition-colors duration-150',
                 selectedName === skill.name && !isNew
                   ? 'bg-slate-100 text-slate-900 font-semibold'
                   : 'text-slate-600 hover:bg-slate-50',
               ]"
-              type="button"
-              @click="selectSkill(skill.name)"
             >
-              <div class="truncate text-xs font-semibold">{{ skill.display_name || skill.name }}</div>
-              <div v-if="skill.display_name" class="truncate text-[9px] text-slate-400">{{ skill.name }}</div>
-              <div class="truncate text-[10px] text-slate-400 mt-0.5">{{ skill.description || '无描述' }}</div>
-            </button>
+              <button
+                class="flex-1 min-w-0 px-2.5 py-1.5 text-left select-none cursor-pointer outline-none"
+                type="button"
+                @click="selectSkill(skill.name)"
+              >
+                <div class="truncate text-xs font-semibold">{{ skill.display_name || skill.name }}</div>
+                <div v-if="skill.display_name" class="truncate text-[9px] text-slate-400">{{ skill.name }}</div>
+                <div class="truncate text-[10px] text-slate-400 mt-0.5">{{ skill.description || '无描述' }}</div>
+              </button>
+              <button
+                class="mr-1.5 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md text-slate-400 hover:bg-red-50 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-all duration-150"
+                title="删除技能"
+                type="button"
+                @click.stop="remove(skill.name)"
+              >
+                <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
           </div>
           <div class="p-1.5 border-t border-slate-100">
             <button
@@ -902,16 +919,7 @@ onBeforeUnmount(() => {
                     </p>
                     <div class="flex items-center justify-between">
                       <button
-                        v-if="!isNew && selectedName && selectedPath === 'SKILL.md'"
-                        class="rounded-xl bg-rose-600 hover:bg-rose-700 active:scale-95 text-white px-3.5 py-1.5 text-xs font-semibold transition-all duration-200 disabled:opacity-50"
-                        :disabled="deleting"
-                        type="button"
-                        @click="remove"
-                      >
-                        {{ deleting ? '删除中...' : '删除技能' }}
-                      </button>
-                      <button
-                        v-else-if="canDeleteSelectedFile"
+                        v-if="canDeleteSelectedFile"
                         class="rounded-xl bg-rose-600 hover:bg-rose-700 active:scale-95 text-white px-3.5 py-1.5 text-xs font-semibold transition-all duration-200 disabled:opacity-50"
                         :disabled="deletingFile"
                         type="button"
