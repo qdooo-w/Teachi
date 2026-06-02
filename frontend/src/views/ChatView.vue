@@ -23,6 +23,9 @@ import {
   type SessionItem,
   uploadAttachment,
   deleteAttachment,
+  listAttachments,
+  getAttachmentBlobUrl,
+  type AttachmentItem,
 } from '../api'
 import { type SkillMeta } from '../skills'
 import { useAuth } from '../composables/useAuth'
@@ -105,7 +108,60 @@ const pendingAttachments = ref<Array<{
   original_filename: string
   mime_type: string
   uploading: boolean
+  preview_url?: string
 }>>([])
+
+const sessionAttachments = ref<AttachmentItem[]>([])
+const attachmentUrls = ref<Record<string, string>>({})
+
+async function loadAttachmentUrls(): Promise<void> {
+  if (!currentSession.value) return
+  const sidVal = currentSession.value.sid
+  const activeImageIds = new Set<string>()
+
+  const promises = sessionAttachments.value
+    .filter((att) => att.mime_type.startsWith('image/'))
+    .map(async (att) => {
+      activeImageIds.add(att.attachment_id)
+      if (!attachmentUrls.value[att.attachment_id]) {
+        try {
+          const blobUrl = await getAttachmentBlobUrl(sidVal, att.attachment_id)
+          attachmentUrls.value[att.attachment_id] = blobUrl
+        } catch (error) {
+          console.error(`Failed to get blob url for attachment ${att.attachment_id}:`, error)
+        }
+      }
+    })
+
+  await Promise.all(promises)
+
+  // Clean up unused object URLs
+  for (const id of Object.keys(attachmentUrls.value)) {
+    if (!activeImageIds.has(id)) {
+      URL.revokeObjectURL(attachmentUrls.value[id])
+      delete attachmentUrls.value[id]
+    }
+  }
+}
+
+function clearAttachmentUrls(): void {
+  for (const url of Object.values(attachmentUrls.value)) {
+    URL.revokeObjectURL(url)
+  }
+  attachmentUrls.value = {}
+}
+
+function getMessageImages(message: DisplayMessage): string[] {
+  if (message.role !== 'user') return []
+  if (message.previewUrls && message.previewUrls.length > 0) {
+    return message.previewUrls
+  }
+  if (!message.anchor_msg_id) return []
+  return sessionAttachments.value
+    .filter((att) => att.anchor_msg_id === message.anchor_msg_id && att.mime_type.startsWith('image/'))
+    .map((att) => attachmentUrls.value[att.attachment_id])
+    .filter((url): url is string => !!url)
+}
 
 const ALLOWED_MIMES = new Set([
   'image/jpeg', 'image/png', 'image/webp', 'image/gif',
@@ -130,11 +186,13 @@ async function uploadFile(file: File): Promise<void> {
   }
 
   const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  const preview_url = mime.startsWith('image/') ? URL.createObjectURL(file) : undefined
   pendingAttachments.value.push({
     temp_id: tempId,
     original_filename: file.name,
     mime_type: mime,
     uploading: true,
+    preview_url,
   })
   errorMessage.value = ''
 
@@ -148,6 +206,9 @@ async function uploadFile(file: File): Promise<void> {
     }
   } catch (error) {
     errorMessage.value = `上传"${file.name}"失败：` + getErrorMessage(error)
+    if (preview_url) {
+      URL.revokeObjectURL(preview_url)
+    }
     pendingAttachments.value = pendingAttachments.value.filter((item) => item.temp_id !== tempId)
   }
 }
@@ -180,6 +241,9 @@ async function removePendingAttachment(att: typeof pendingAttachments.value[0]):
       return
     }
   }
+  if (att.preview_url) {
+    URL.revokeObjectURL(att.preview_url)
+  }
   pendingAttachments.value = pendingAttachments.value.filter((item) => item.temp_id !== att.temp_id)
 }
 
@@ -206,8 +270,14 @@ function handleChatScroll(): void {
 
 async function loadMessages(): Promise<void> {
   if (!currentSession.value) return
-  messages.value = await listDisplayMessages(currentSession.value.sid)
+  const [msgs, atts] = await Promise.all([
+    listDisplayMessages(currentSession.value.sid),
+    listAttachments(currentSession.value.sid),
+  ])
+  messages.value = msgs
+  sessionAttachments.value = atts
   await refreshVersionMap()
+  await loadAttachmentUrls()
   scrollToBottom(true)
 }
 
@@ -430,11 +500,17 @@ async function sendMessage(): Promise<void> {
   const rawContent = draft.value.trim()
   const content = buildPayload(rawContent, selectedSkills.value)
   const now = Date.now() / 1000
+
+  const imagePreviews = pendingAttachments.value
+    .filter((att) => att.mime_type.startsWith('image/') && att.preview_url)
+    .map((att) => att.preview_url as string)
+
   const userMessage: DisplayMessage = {
     id: `local-user-${Date.now()}`,
     role: 'user',
     content: rawContent,
     timestamp: now,
+    previewUrls: imagePreviews,
   }
   const assistantId = `stream-assistant-${Date.now()}`
   const assistantMessage: DisplayMessage = {
@@ -512,6 +588,9 @@ async function sendMessage(): Promise<void> {
     toolStatus.value = ''
     currentAbort.value = null
     inflightUserPrompt.value = ''
+    for (const url of imagePreviews) {
+      URL.revokeObjectURL(url)
+    }
     scrollToBottom()
   }
 }
@@ -754,6 +833,12 @@ onMounted(() => {
 onBeforeUnmount(() => {
   currentAbort.value?.abort()
   if (copyResetTimer) window.clearTimeout(copyResetTimer)
+  for (const att of pendingAttachments.value) {
+    if (att.preview_url) {
+      URL.revokeObjectURL(att.preview_url)
+    }
+  }
+  clearAttachmentUrls()
 })
 
 watch(draft, () => { nextTick(autosizeComposer) })
@@ -779,34 +864,45 @@ watch(
 
         <div v-for="message in messages" :key="message.id" class="flex w-full flex-col">
           <div v-if="message.role === 'user'" class="group flex justify-end">
-            <div class="flex max-w-[85%] items-end gap-1">
-              <button
-                v-if="message.anchor_msg_id && !streaming"
-                class="flex h-6 w-6 items-center justify-center rounded text-[#9ca3af] opacity-0 transition-opacity hover:bg-[#e5e7eb] hover:text-[#4b5563] group-hover:opacity-100"
-                title="编辑后重放"
-                type="button"
-                @click="openEditPromptDialog(message)"
-              >
-                <svg class="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
-                  <path d="M12 20h9" />
-                  <path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
-                </svg>
-              </button>
-              <button
-                v-if="message.anchor_msg_id && !streaming"
-                class="flex h-6 w-6 items-center justify-center rounded text-[#9ca3af] opacity-0 transition-opacity hover:bg-[#fee2e2] hover:text-[#b91c1c] group-hover:opacity-100"
-                title="删除此回合"
-                type="button"
-                @click="openDeleteTurnDialog(message)"
-              >
-                <svg class="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
-                  <path d="M3 6h18" />
-                  <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-                </svg>
-              </button>
-              <div class="rounded-3xl border border-[#d1d5db] bg-[#e5e7eb] px-5 py-3 text-[15px] leading-relaxed text-[#1f2937]">
-                <p class="whitespace-pre-wrap break-words">{{ message.content }}</p>
+            <div class="flex max-w-[85%] flex-col items-end gap-1.5">
+              <div v-if="getMessageImages(message).length > 0" class="flex flex-col gap-1.5 items-end">
+                <img
+                  v-for="(imgUrl, idx) in getMessageImages(message)"
+                  :key="idx"
+                  :src="imgUrl"
+                  class="max-w-[240px] max-h-[180px] rounded-2xl object-cover shadow-sm border border-[#d1d5db]"
+                  alt="Uploaded image"
+                />
+              </div>
+              <div class="flex items-end gap-1">
+                <button
+                  v-if="message.anchor_msg_id && !streaming"
+                  class="flex h-6 w-6 items-center justify-center rounded text-[#9ca3af] opacity-0 transition-opacity hover:bg-[#e5e7eb] hover:text-[#4b5563] group-hover:opacity-100"
+                  title="编辑后重放"
+                  type="button"
+                  @click="openEditPromptDialog(message)"
+                >
+                  <svg class="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
+                    <path d="M12 20h9" />
+                    <path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+                  </svg>
+                </button>
+                <button
+                  v-if="message.anchor_msg_id && !streaming"
+                  class="flex h-6 w-6 items-center justify-center rounded text-[#9ca3af] opacity-0 transition-opacity hover:bg-[#fee2e2] hover:text-[#b91c1c] group-hover:opacity-100"
+                  title="删除此回合"
+                  type="button"
+                  @click="openDeleteTurnDialog(message)"
+                >
+                  <svg class="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
+                    <path d="M3 6h18" />
+                    <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                    <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                  </svg>
+                </button>
+                <div class="rounded-3xl border border-[#d1d5db] bg-[#e5e7eb] px-5 py-3 text-[15px] leading-relaxed text-[#1f2937]">
+                  <p class="whitespace-pre-wrap break-words">{{ message.content }}</p>
+                </div>
               </div>
             </div>
           </div>
@@ -925,7 +1021,13 @@ watch(
               :key="att.attachment_id || att.temp_id"
               class="relative flex items-center gap-1.5 rounded-lg border border-[#e5e7eb] bg-[#f9fafb] px-2 py-1 text-xs text-[#374151]"
             >
-              <svg class="h-3.5 w-3.5 text-[#6b7280]" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <img
+                v-if="att.preview_url"
+                :src="att.preview_url"
+                class="h-6 w-6 rounded object-cover flex-shrink-0"
+                alt="Image preview"
+              />
+              <svg v-else class="h-3.5 w-3.5 text-[#6b7280]" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
               </svg>
               <span class="max-w-[120px] truncate" :title="att.original_filename">{{ att.original_filename }}</span>

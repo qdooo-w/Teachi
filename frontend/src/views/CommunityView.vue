@@ -442,267 +442,284 @@ onMounted(() => {
       </div>
     </div>
 
-    <div
-      v-if="selected || detailLoading"
-      class="fixed inset-0 z-[1000] flex items-center justify-center bg-black/40"
-      @click.self="closeDetail"
-    >
-      <div class="flex h-[640px] w-[760px] max-w-[95vw] flex-col rounded-xl bg-white shadow-xl">
-        <div class="flex h-14 flex-shrink-0 items-center justify-between border-b border-[#e5e7eb] px-5">
-          <div class="flex items-center gap-3">
-            <span class="font-semibold text-[#1f2937]">{{ selected ? skillTitle(selected) : '加载中...' }}</span>
-            <span
-              v-if="selected"
-              class="flex items-center gap-1 rounded-full bg-[#f3f4f6] px-2 py-0.5 text-[10px] tabular-nums text-[#6b7280]"
+    <Transition name="dialog-fade" appear>
+      <div
+        v-if="selected || detailLoading"
+        class="fixed inset-0 z-[1000] flex items-center justify-center bg-black/40"
+        @click.self="closeDetail"
+      >
+        <div class="modal-card flex h-[640px] w-[760px] max-w-[95vw] flex-col rounded-2xl bg-white shadow-xl">
+          <div class="flex h-14 flex-shrink-0 items-center justify-between px-5 bg-[#f9fafb] rounded-t-2xl">
+            <div class="flex items-center gap-3">
+              <span class="font-semibold text-[#1f2937]">{{ selected ? skillTitle(selected) : '加载中...' }}</span>
+              <span
+                v-if="selected"
+                class="flex items-center gap-1 rounded-full bg-white px-2.5 py-0.5 text-[10px] tabular-nums text-[#6b7280] shadow-sm"
+              >
+                ⬇ {{ selected.downloads }}
+              </span>
+            </div>
+            <button
+              class="flex h-8 w-8 items-center justify-center rounded-lg text-[#6b7280] hover:bg-[#e5e7eb] hover:text-[#1f2937]"
+              type="button"
+              @click="closeDetail"
             >
-              ⬇ {{ selected.downloads }}
-            </span>
-          </div>
-          <button
-            class="flex h-8 w-8 items-center justify-center rounded-lg text-[#6b7280] hover:bg-[#f3f4f6] hover:text-[#1f2937]"
-            type="button"
-            @click="closeDetail"
-          >
-            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
-
-        <div v-if="!selected" class="flex flex-1 items-center justify-center text-sm text-[#9ca3af]">
-          加载中...
-        </div>
-        <template v-else>
-          <div class="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-            <div class="mb-4 grid grid-cols-2 gap-4 text-xs text-[#6b7280]">
-              <div><span class="text-[#9ca3af]">标识：</span>{{ selected.name }}</div>
-              <div><span class="text-[#9ca3af]">大小：</span>{{ formatBytes(selected.size_bytes) }}</div>
-              <div><span class="text-[#9ca3af]">发布于：</span>{{ formatDate(selected.created_at) }}</div>
-              <div v-if="selected.license"><span class="text-[#9ca3af]">license：</span>{{ selected.license }}</div>
-              <div v-if="selected.compatibility">
-                <span class="text-[#9ca3af]">兼容性：</span>{{ selected.compatibility }}
-              </div>
-            </div>
-            <p class="mb-4 rounded-lg bg-[#f9fafb] px-3 py-2 text-sm text-[#374151]">
-              {{ selected.description }}
-            </p>
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
           </div>
 
-          <div class="flex-shrink-0 border-t border-[#e5e7eb] bg-white px-5 py-3">
-            <p
-              v-if="flashMsg"
-              class="mb-2 rounded-lg border border-[#bbf7d0] bg-[#f0fdf4] px-3 py-2 text-xs text-[#166534]"
-            >
-              {{ flashMsg }}
-            </p>
-            <div class="flex items-center justify-between">
-              <button
-                v-if="isAuthor"
-                class="rounded-lg px-3 py-1.5 text-sm text-[#9a3412] transition hover:bg-[#fff7ed] disabled:opacity-50"
-                :disabled="deleting"
-                type="button"
-                @click="doDelete"
-              >
-                {{ deleting ? '删除中...' : '删除发布' }}
-              </button>
-              <div v-else />
-              <div class="flex items-center gap-2">
-                <select
-                  v-model="selectedProjectId"
-                  class="h-8 rounded-lg border border-[#d1d5db] bg-white px-2 text-sm text-[#374151] outline-none focus:border-[#9ca3af] focus:ring-2 focus:ring-[#9ca3af]/20"
-                >
-                  <option value="">选择项目</option>
-                  <option v-for="project in projects" :key="project.pid" :value="project.pid">
-                    {{ project.projectname }}
-                  </option>
-                </select>
-                <button
-                  class="rounded-lg border border-[#d1d5db] px-3 py-1.5 text-sm text-[#4b5563] transition hover:bg-[#f3f4f6] disabled:cursor-not-allowed disabled:opacity-50"
-                  :disabled="installingProject || !selectedProjectId"
-                  type="button"
-                  @click="doInstallProject"
-                >
-                  {{ installingProject ? '安装中...' : '安装到项目' }}
-                </button>
-                <button
-                  class="rounded-lg bg-[#e5e7eb] px-4 py-1.5 text-sm text-[#374151] transition hover:bg-[#d1d5db] disabled:cursor-not-allowed disabled:bg-[#e5e7eb] disabled:text-[#9ca3af]"
-                  :disabled="installing"
-                  type="button"
-                  @click="doInstall"
-                >
-                  {{ installing ? '安装中...' : '安装到我的技能' }}
-                </button>
-              </div>
-            </div>
+          <div v-if="!selected" class="flex flex-1 items-center justify-center text-sm text-[#9ca3af]">
+            加载中...
           </div>
-        </template>
-      </div>
-    </div>
-
-    <!-- 批量上传 ZIP 弹窗 -->
-    <div
-      v-if="showUploadModal"
-      class="fixed inset-0 z-[1000] flex items-center justify-center bg-black/40 backdrop-blur-sm"
-      @click.self="closeUploadModal"
-    >
-      <div class="flex h-[560px] w-[640px] max-w-[95vw] flex-col rounded-2xl bg-white shadow-xl overflow-hidden border border-[#e5e7eb]">
-        <!-- 头部 -->
-        <div class="flex h-14 flex-shrink-0 items-center justify-between border-b border-[#e5e7eb] px-5 bg-gray-50">
-          <div class="flex items-center gap-2">
-            <span class="font-semibold text-gray-800">批量上传技能 ZIP</span>
-            <span v-if="queueStats.total > 0" class="rounded-full bg-gray-200 px-2.5 py-0.5 text-xs text-gray-600">
-              已选 {{ queueStats.total }}
-            </span>
-          </div>
-          <button
-            class="flex h-8 w-8 items-center justify-center rounded-lg text-[#6b7280] hover:bg-gray-200 hover:text-[#1f2937] transition"
-            type="button"
-            @click="closeUploadModal"
-          >
-            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
-
-        <!-- 主体 -->
-        <div class="min-h-0 flex-1 overflow-y-auto p-5 flex flex-col gap-4">
-          <!-- 拖放区域 / 上传区域 -->
-          <div
-            :class="[
-              'flex flex-col items-center justify-center border-2 border-dashed rounded-2xl p-6 text-center cursor-pointer transition-all duration-200',
-              isDragOver
-                ? 'border-[#1f2937] bg-gray-50/80 scale-[0.99]'
-                : 'border-gray-300 hover:border-gray-400 bg-gray-50/30'
-            ]"
-            @dragover="handleDragOver"
-            @dragleave="handleDragLeave"
-            @drop="handleDrop"
-            @click="openUploadPicker"
-          >
-            <div class="flex flex-col items-center gap-2">
-              <div class="p-3 bg-white rounded-full shadow-sm border border-gray-100 text-gray-400">
-                <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                </svg>
-              </div>
-              <div>
-                <span class="text-sm font-medium text-gray-700">点击选择</span>
-                <span class="text-sm text-gray-500"> 或拖入技能 ZIP 文件到这里</span>
-              </div>
-              <span class="text-xs text-gray-400">每个文件大小限制在 40MB 以内</span>
-            </div>
-          </div>
-
-          <!-- 进度条 -->
-          <div v-if="queueStats.total > 0 && (isBatchUploading || queueStats.success > 0 || queueStats.error > 0)" class="bg-gray-50 border border-gray-100 rounded-xl p-3.5 flex flex-col gap-2">
-            <div class="flex items-center justify-between text-xs text-gray-500 font-medium">
-              <span>上传进度：{{ queueStats.success + queueStats.error }} / {{ queueStats.total }}</span>
-              <span>{{ queueStats.progressPercent }}%</span>
-            </div>
-            <div class="h-2 w-full bg-gray-200 rounded-full overflow-hidden">
-              <div
-                class="h-full bg-[#1f2937] rounded-full transition-all duration-300 ease-out"
-                :style="{ width: `${queueStats.progressPercent}%` }"
-              />
-            </div>
-            <div class="flex gap-4 text-[10px] text-gray-400 font-medium">
-              <span class="text-emerald-600">成功：{{ queueStats.success }}</span>
-              <span class="text-rose-500">失败：{{ queueStats.error }}</span>
-              <span v-if="queueStats.uploading > 0" class="text-[#1f2937] font-semibold animate-pulse">正在上传...</span>
-            </div>
-          </div>
-
-          <!-- 文件队列 -->
-          <div v-if="uploadQueue.length > 0" class="flex-1 min-h-0 flex flex-col gap-2">
-            <div class="flex justify-between items-center text-xs text-gray-500 font-medium">
-              <span>文件列表</span>
-              <button
-                class="text-rose-600 hover:text-rose-700 transition disabled:opacity-50 text-[11px]"
-                :disabled="isBatchUploading"
-                type="button"
-                @click="clearQueue"
-              >
-                清空队列
-              </button>
-            </div>
-            <div class="flex-1 min-h-0 overflow-y-auto border border-gray-100 rounded-xl bg-gray-50/50 p-2 divide-y divide-gray-100">
-              <div
-                v-for="item in uploadQueue"
-                :key="item.id"
-                class="flex items-center justify-between py-2 px-1 text-xs gap-3"
-              >
-                <div class="flex items-center gap-2 min-w-0 flex-1">
-                  <!-- 文件图标 / 状态指示符 -->
-                  <div class="flex-shrink-0">
-                    <svg v-if="item.status === 'pending'" class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                    </svg>
-                    <svg v-else-if="item.status === 'uploading'" class="w-4 h-4 text-amber-500 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.21 7.89" />
-                    </svg>
-                    <svg v-else-if="item.status === 'success'" class="w-4 h-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-                    </svg>
-                    <svg v-else-if="item.status === 'error'" class="w-4 h-4 text-rose-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </div>
-                  <span class="truncate font-medium text-gray-700 min-w-0" :title="item.file.name">{{ item.file.name }}</span>
-                  <span class="text-[10px] text-gray-400 flex-shrink-0 tabular-nums">{{ formatBytes(item.file.size) }}</span>
+          <template v-else>
+            <div class="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+              <div class="mb-4 grid grid-cols-2 gap-4 text-xs text-[#6b7280]">
+                <div><span class="text-[#9ca3af]">标识：</span>{{ selected.name }}</div>
+                <div><span class="text-[#9ca3af]">大小：</span>{{ formatBytes(selected.size_bytes) }}</div>
+                <div><span class="text-[#9ca3af]">发布于：</span>{{ formatDate(selected.created_at) }}</div>
+                <div v-if="selected.license"><span class="text-[#9ca3af]">license：</span>{{ selected.license }}</div>
+                <div v-if="selected.compatibility">
+                  <span class="text-[#9ca3af]">兼容性：</span>{{ selected.compatibility }}
                 </div>
+              </div>
+              <p class="mb-4 rounded-lg bg-[#f9fafb] px-3 py-2 text-sm text-[#374151]">
+                {{ selected.description }}
+              </p>
+            </div>
 
-                <div class="flex items-center gap-2 flex-shrink-0">
-                  <span
-                    v-if="item.error"
-                    class="text-[10px] text-rose-600 bg-rose-50 border border-rose-100 rounded px-1.5 py-0.5 truncate max-w-[150px]"
-                    :title="item.error"
+            <div class="flex-shrink-0 bg-[#f9fafb] rounded-b-2xl px-5 py-3.5">
+              <p
+                v-if="flashMsg"
+                class="mb-2 rounded-lg bg-[#f0fdf4] px-3 py-2 text-xs text-[#166534]"
+              >
+                {{ flashMsg }}
+              </p>
+              <div class="flex items-center justify-between">
+                <button
+                  v-if="isAuthor"
+                  class="rounded-lg bg-[#b91c1c] hover:bg-[#991b1b] text-white px-3.5 py-1.5 text-sm font-medium transition disabled:opacity-50"
+                  :disabled="deleting"
+                  type="button"
+                  @click="doDelete"
+                >
+                  {{ deleting ? '删除中...' : '删除发布' }}
+                </button>
+                <div v-else />
+                <div class="flex items-center gap-2">
+                  <select
+                    v-model="selectedProjectId"
+                    class="h-9 rounded-lg bg-white px-3 text-sm text-[#374151] outline-none shadow-sm focus:ring-2 focus:ring-[#1f2937]/20"
                   >
-                    {{ item.error }}
-                  </span>
+                    <option value="">选择项目</option>
+                    <option v-for="project in projects" :key="project.pid" :value="project.pid">
+                      {{ project.projectname }}
+                    </option>
+                  </select>
                   <button
-                    v-if="item.status === 'pending' || item.status === 'error'"
-                    class="p-1 text-gray-400 hover:text-rose-600 rounded transition"
-                    :disabled="isBatchUploading"
+                    class="h-9 rounded-lg bg-[#f3f4f6] px-4 text-sm text-[#374151] font-medium transition hover:bg-[#e5e7eb] disabled:cursor-not-allowed disabled:opacity-50"
+                    :disabled="installingProject || !selectedProjectId"
                     type="button"
-                    title="移除"
-                    @click="removeQueueItem(item.id)"
+                    @click="doInstallProject"
                   >
-                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                    </svg>
+                    {{ installingProject ? '安装中...' : '安装到项目' }}
+                  </button>
+                  <button
+                    class="h-9 rounded-lg bg-[#1f2937] px-4 text-sm text-white font-medium transition hover:bg-[#111827] disabled:cursor-not-allowed disabled:opacity-50"
+                    :disabled="installing"
+                    type="button"
+                    @click="doInstall"
+                  >
+                    {{ installing ? '安装中...' : '安装到我的技能' }}
                   </button>
                 </div>
               </div>
             </div>
-          </div>
-
-          <div v-else class="flex-1 flex flex-col items-center justify-center text-gray-400 text-xs py-10">
-            暂无待上传文件
-          </div>
-        </div>
-
-        <!-- 尾部操作 -->
-        <div class="flex-shrink-0 border-t border-[#e5e7eb] bg-white px-5 py-3 flex justify-end gap-2">
-          <button
-            class="rounded-lg border border-gray-300 px-4 py-1.5 text-sm text-[#374151] transition hover:bg-gray-50 disabled:opacity-50"
-            :disabled="isBatchUploading"
-            type="button"
-            @click="closeUploadModal"
-          >
-            关闭
-          </button>
-          <button
-            class="rounded-lg bg-[#1f2937] px-5 py-1.5 text-sm text-white font-medium transition hover:bg-[#111827] disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
-            :disabled="isBatchUploading || queueStats.pending === 0"
-            type="button"
-            @click="startBatchUpload"
-          >
-            <span v-if="isBatchUploading" class="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-            {{ isBatchUploading ? '正在上传...' : '开始上传' }}
-          </button>
+          </template>
         </div>
       </div>
-    </div>
+    </Transition>
+
+    <!-- 批量上传 ZIP 弹窗 -->
+    <!-- 批量上传 ZIP 弹窗 -->
+    <Transition name="dialog-fade" appear>
+      <div
+        v-if="showUploadModal"
+        class="fixed inset-0 z-[1000] flex items-center justify-center bg-black/40 backdrop-blur-sm"
+        @click.self="closeUploadModal"
+      >
+        <div class="modal-card flex h-[560px] w-[640px] max-w-[95vw] flex-col rounded-2xl bg-white shadow-xl overflow-hidden">
+          <!-- 头部 -->
+          <div class="flex h-14 flex-shrink-0 items-center justify-between px-5 bg-slate-50/50">
+            <div class="flex items-center gap-2">
+              <span class="font-semibold text-gray-800">批量上传技能 ZIP</span>
+              <span v-if="queueStats.total > 0" class="rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-semibold text-slate-600">
+                已选 {{ queueStats.total }}
+              </span>
+            </div>
+            <button
+              class="flex h-8 w-8 items-center justify-center rounded-full text-gray-400 hover:bg-gray-100 hover:text-gray-700 transition-all duration-200 active:scale-90"
+              type="button"
+              @click="closeUploadModal"
+            >
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+
+          <!-- 主体 -->
+          <div class="min-h-0 flex-1 overflow-y-auto p-5 flex flex-col gap-4">
+            <!-- 拖放区域 / 上传区域 -->
+            <div
+              :class="[
+                'flex flex-col items-center justify-center rounded-2xl p-6 text-center cursor-pointer transition-all duration-300 ease-out shadow-[inset_0_2px_4px_rgba(0,0,0,0.02)]',
+                isDragOver
+                  ? 'bg-slate-100/90 scale-[0.98] shadow-[inset_0_2px_4px_rgba(0,0,0,0.06)]'
+                  : 'bg-[#f8fafc] hover:bg-[#f1f5f9]/70 hover:scale-[0.99] hover:shadow-[inset_0_2px_4px_rgba(0,0,0,0.04)]'
+              ]"
+              @dragover="handleDragOver"
+              @dragleave="handleDragLeave"
+              @drop="handleDrop"
+              @click="openUploadPicker"
+            >
+              <div class="flex flex-col items-center gap-2">
+                <div
+                  class="p-3 bg-white rounded-full shadow-sm text-gray-400 transition-transform duration-300"
+                  :class="isDragOver ? 'scale-110 text-slate-600' : ''"
+                >
+                  <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                  </svg>
+                </div>
+                <div>
+                  <span class="text-sm font-medium text-gray-700">点击选择</span>
+                  <span class="text-sm text-gray-500"> 或拖入技能 ZIP 文件到这里</span>
+                </div>
+                <span class="text-xs text-gray-400">每个文件大小限制在 40MB 以内</span>
+              </div>
+            </div>
+
+            <!-- 进度条 -->
+            <div v-if="queueStats.total > 0 && (isBatchUploading || queueStats.success > 0 || queueStats.error > 0)" class="bg-[#f8fafc] rounded-2xl p-4 flex flex-col gap-2.5 shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
+              <div class="flex items-center justify-between text-xs text-gray-500 font-medium">
+                <span>上传进度：{{ queueStats.success + queueStats.error }} / {{ queueStats.total }}</span>
+                <span>{{ queueStats.progressPercent }}%</span>
+              </div>
+              <div class="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
+                <div
+                  class="h-full bg-slate-800 rounded-full transition-all duration-300 ease-out"
+                  :style="{ width: `${queueStats.progressPercent}%` }"
+                />
+              </div>
+              <div class="flex gap-4 text-[10px] text-gray-400 font-medium">
+                <span class="text-emerald-600">成功：{{ queueStats.success }}</span>
+                <span class="text-rose-500">失败：{{ queueStats.error }}</span>
+                <span v-if="queueStats.uploading > 0" class="text-slate-700 font-semibold animate-pulse">正在上传...</span>
+              </div>
+            </div>
+
+            <!-- 文件队列 -->
+            <div v-if="uploadQueue.length > 0" class="flex-1 min-h-0 flex flex-col gap-2">
+              <div class="flex justify-between items-center text-xs text-gray-500 font-medium">
+                <span>文件列表</span>
+                <button
+                  class="text-rose-500 hover:text-rose-600 hover:bg-rose-50/50 active:bg-rose-100/50 px-2 py-1 rounded-lg transition-all disabled:opacity-50 text-[11px] font-medium"
+                  :disabled="isBatchUploading"
+                  type="button"
+                  @click="clearQueue"
+                >
+                  清空队列
+                </button>
+              </div>
+              <div class="flex-1 min-h-0 overflow-y-auto rounded-2xl bg-slate-50/40 p-2 space-y-1.5 shadow-[inset_0_2px_4px_rgba(0,0,0,0.01)]">
+                <div
+                  v-for="item in uploadQueue"
+                  :key="item.id"
+                  :class="[
+                    'flex items-center justify-between py-2.5 px-3 text-xs gap-3 rounded-xl transition-all duration-200 shadow-[0_1px_2px_rgba(0,0,0,0.02)]',
+                    item.status === 'success' ? 'bg-emerald-50/40 text-emerald-800' :
+                    item.status === 'error' ? 'bg-rose-50/40 text-rose-800' :
+                    item.status === 'uploading' ? 'bg-amber-50/60 text-amber-800' :
+                    'bg-white hover:bg-gray-50/80 text-gray-700 hover:shadow-sm'
+                  ]"
+                >
+                  <div class="flex items-center gap-2 min-w-0 flex-1">
+                    <!-- 文件图标 / 状态指示符 -->
+                    <div class="flex-shrink-0">
+                      <svg v-if="item.status === 'pending'" class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                      </svg>
+                      <svg v-else-if="item.status === 'uploading'" class="w-4 h-4 text-amber-500 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.21 7.89" />
+                      </svg>
+                      <svg v-else-if="item.status === 'success'" class="w-4 h-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                      </svg>
+                      <svg v-else-if="item.status === 'error'" class="w-4 h-4 text-rose-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </div>
+                    <span
+                      class="truncate font-medium min-w-0"
+                      :class="item.status === 'success' ? 'text-emerald-900' : item.status === 'error' ? 'text-rose-900' : item.status === 'uploading' ? 'text-amber-900' : 'text-gray-700'"
+                      :title="item.file.name"
+                    >
+                      {{ item.file.name }}
+                    </span>
+                    <span
+                      class="text-[10px] flex-shrink-0 tabular-nums"
+                      :class="item.status === 'success' ? 'text-emerald-600/70' : item.status === 'error' ? 'text-rose-600/70' : item.status === 'uploading' ? 'text-amber-600/70' : 'text-gray-400'"
+                    >
+                      {{ formatBytes(item.file.size) }}
+                    </span>
+                  </div>
+
+                  <div class="flex items-center gap-2 flex-shrink-0">
+                    <span
+                      v-if="item.error"
+                      class="text-[10px] text-rose-600 bg-rose-50/60 rounded-lg px-2 py-0.5 truncate max-w-[150px]"
+                      :title="item.error"
+                    >
+                      {{ item.error }}
+                    </span>
+                    <button
+                      v-if="item.status === 'pending' || item.status === 'error'"
+                      class="p-1.5 text-gray-400 hover:text-rose-600 hover:bg-rose-50/50 rounded-lg transition-colors active:scale-95"
+                      :disabled="isBatchUploading"
+                      type="button"
+                      title="移除"
+                      @click="removeQueueItem(item.id)"
+                    >
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div v-else class="flex-1 flex flex-col items-center justify-center text-gray-400 text-xs py-10">
+              暂无待上传文件
+            </div>
+          </div>
+
+          <!-- 尾部操作 -->
+          <div class="flex-shrink-0 bg-slate-50/50 px-5 py-3.5 flex justify-end gap-2">
+            <button
+              class="rounded-xl bg-[#1f2937] hover:bg-[#111827] active:scale-[0.98] px-5 py-2.5 text-sm text-white font-semibold transition-all duration-200 disabled:bg-gray-100 disabled:text-gray-400 disabled:pointer-events-none shadow-sm hover:shadow-md flex items-center gap-1.5"
+              :disabled="isBatchUploading || queueStats.pending === 0"
+              type="button"
+              @click="startBatchUpload"
+            >
+              <span v-if="isBatchUploading" class="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              {{ isBatchUploading ? '正在上传...' : '开始上传' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Transition>
   </div>
 </template>
