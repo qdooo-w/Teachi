@@ -33,6 +33,7 @@ import { useProjects } from '../composables/useProjects'
 import { useProjectSkills } from '../composables/useProjectSkills'
 import { usePreferences } from '../composables/usePreferences'
 import {
+  CHAT_ATTACHMENT_MAX_BYTES,
   CHAT_COMPOSER_MAX_HEIGHT,
   CHAT_COPY_RESET_MS,
   CHAT_DRAWER_ENTER_MAX_HEIGHT_MS,
@@ -214,15 +215,14 @@ const ALLOWED_MIMES = new Set([
   'text/plain', 'text/markdown', 'text/csv', 'text/html',
   'application/json', 'application/pdf',
 ])
-const MAX_FILE_SIZE = 20 * 1024 * 1024 // 20MB
-
 function triggerFileSelect(): void {
   fileInputRef.value?.click()
 }
 
 async function uploadFile(file: File): Promise<void> {
-  if (file.size > MAX_FILE_SIZE) {
-    errorMessage.value = `"${file.name}" 大小超过 20MB 限制`
+  const limitMB = CHAT_ATTACHMENT_MAX_BYTES / (1024 * 1024)
+  if (file.size > CHAT_ATTACHMENT_MAX_BYTES) {
+    errorMessage.value = `"${file.name}" 大小超过 ${limitMB}MB 限制`
     return
   }
   const mime = file.type || 'application/octet-stream'

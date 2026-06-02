@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 from backend.auth import get_current_user
 from backend.config import (
     APP_NAME,
+    ATTACHMENT_MAX_BYTES,
     SKILL_FILE_MAX_CHARS,
     SKILL_RESOURCE_DIRS,
     BASE_DIR,
@@ -640,7 +641,7 @@ async def upload_attachment(
     current_user: dict[str, Any] = Depends(get_current_user),
     db: DatabaseFacade = Depends(get_db),
 ) -> AttachmentUploadResponse:
-    """上传附件。限制 20MB，支持图片 / 文本 / PDF / JSON / CSV 等格式。
+    """上传附件。限制由 ATTACHMENT_MAX_BYTES 控制，支持图片 / 文本 / PDF / JSON / CSV 等格式。
 
     物理文件以 SHA-256 哈希命名，同会话内相同文件只写一份（引用去重）；
     original_filename 按类型自动生成友好名称（如"图片1.png"）。
@@ -661,10 +662,11 @@ async def upload_attachment(
 
     pid = session["pid"]
     content = await file.read()
-    if len(content) > 20 * 1024 * 1024:
+    if len(content) > ATTACHMENT_MAX_BYTES:
+        limit_mb = ATTACHMENT_MAX_BYTES // (1024 * 1024)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"code": "FILE_TOO_LARGE", "message": "File size exceeds 20MB limit"},
+            detail={"code": "FILE_TOO_LARGE", "message": f"File size exceeds {limit_mb}MB limit"},
         )
 
     IMAGE_MIMES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
