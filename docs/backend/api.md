@@ -5,7 +5,8 @@
 ## 近期变更
 
 - 2026-06-01：新增多模态附件系统及相关接口与 AI 工具。实现附件上传（`POST /sessions/{sid}/attachments`）、附件列表查询（`GET /sessions/{sid}/attachments`）和附件删除（`DELETE /sessions/{sid}/attachments/{attachment_id}`）。在物理存储上以 SHA-256 哈希命名文件以去重；会话内自动按文件类型生成友好文件名（如"图片1.png"）。引入 `list_attachment` 和 `view_attachment` AI 代理工具以统一处理附件、图片及 Skill 资源；完全移除了旧有的 `is_vision_assistant` 字段及数据库字段，模型配置的视觉支持通过 `supports_vision` 字段标识，并在 API 路由中完整支持该字段的读取与写入。
-- 2026-06-02: 新增账号设置 API（修改用户名、修改密码），偏好设置 API（enter_mode），user_instruction 全链路贯通；修改密码后自动清除 refresh token。
+- 2026-06-02（第二次）：新增附件下载端点 `GET /sessions/{sid}/attachments/{attachment_id}`（`transfer.py`），返回物理文件用于前端图片预览等场景。ZIP 上传大小限制从 5MB 提升至 40MB，与附件上传限制对齐。
+- 2026-06-02：新增账号设置 API（修改用户名、修改密码），偏好设置 API（enter_mode），user_instruction 全链路贯通；修改密码后自动清除 refresh token。
 - 2026-05-23（第二次）：状态机新增 `BUILD_MODEL` 节点（位于 `BUILD_MESSAGES` 与 `CALL_MODEL` 之间），负责构建 PydanticAI Agent 实例并存入 `ctx.agent`；构建失败立即跳转 `STREAM_ERROR`，错误码为 `MODEL_BUILD_FAILED`。系统提示词加载改为 `load_instruction()` 函数形式，当前仍从环境变量读取，后期可改为从文件加载。
 - 2026-05-23：新增用户模型配置相关 API 接口（`/settings`），允许用户自定义 API Key、Base URL、Model Name、System Instruction、Temperature 和 Max Tokens，并实现连通性测试与配置激活机制。
 - 2026-05-19：后端 API 无变更（前端参数整理不影响后端接口）。
@@ -727,7 +728,7 @@ FastAPI 和后端当前可能返回两类错误体：
 
 ### POST `/sessions/{sid}/attachments`
 
-意义：向当前会话上传文件附件。文件限制为 20MB。
+意义：向当前会话上传文件附件。文件限制为 40MB（可通过 `ATTACHMENT_MAX_BYTES` 环境变量调整）。
 
 支持的 MIME 类型包括：
 - 图片：`image/jpeg`, `image/png`, `image/webp`, `image/gif`
@@ -754,7 +755,7 @@ FastAPI 和后端当前可能返回两类错误体：
 
 | 状态码 | detail | 说明 |
 |---|---|---|
-| 400 | `{ code: "FILE_TOO_LARGE", message: "File size exceeds 20MB limit" }` | 文件超过 20MB 限制 |
+| 400 | `{ code: "FILE_TOO_LARGE", message: "File size exceeds 40MB limit" }` | 文件超过 40MB 限制 |
 | 400 | `{ code: "INVALID_MIME_TYPE", message: ... }` | MIME 类型不在白名单中 |
 | 400 | `{ code: "INVALID_FILE_CONTENT", message: "Magic bytes validation failed" }` | 图片类型魔术字节校验失败 |
 | 404 | `{ code: "RESOURCE_NOT_FOUND", message: "Session not found" }` | 会话不存在或不属于该用户 |
@@ -784,6 +785,31 @@ FastAPI 和后端当前可能返回两类错误体：
 | 状态码 | detail | 说明 |
 |---|---|---|
 | 404 | `{ code: "RESOURCE_NOT_FOUND", message: "Session not found" }` | 会话不存在或不属于该用户 |
+
+### GET `/sessions/{sid}/attachments/{attachment_id}`
+
+意义：下载指定会话附件的物理文件。返回原始文件内容（`FileResponse`），用于前端图片预览、PDF 查看等场景。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `sid` | string | 是 | 会话 ID |
+| `attachment_id` | string | 是 | 附件 ID |
+
+请求体：无。
+
+成功返回：`200 OK`，响应体为文件二进制流，`Content-Type` 为附件的 MIME 类型，`Content-Disposition` 包含原始文件名。
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 404 | `{ code: "RESOURCE_NOT_FOUND", message: "Session not found" }` | 会话不存在或不属于该用户 |
+| 404 | `{ code: "RESOURCE_NOT_FOUND", message: "Attachment not found" }` | 附件不存在或与会话/用户不匹配 |
+| 404 | `{ code: "RESOURCE_NOT_FOUND", message: "Physical file not found" }` | 数据库记录存在但物理文件丢失 |
 
 ### DELETE `/sessions/{sid}/attachments/{attachment_id}`
 

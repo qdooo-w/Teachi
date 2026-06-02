@@ -8,7 +8,7 @@
 frontend/
 ├─ index.html              Vite 入口 HTML，仅挂载 <div id="app">
 ├─ package.json            依赖与脚本（vite / vue / vue-router / tailwind / katex / mermaid / markdown-it 等）
-├─ vite.config.ts          开发代理：把 /auth /loop /users /projects /sessions /messages /tools /community /health 转发到后端
+├─ vite.config.ts          开发代理：把 /auth /loop /users /projects /sessions /messages /tools /community /health /settings 转发到后端
 ├─ tsconfig.json
 ├─ postcss.config.js       Tailwind v4 PostCSS 插件配置
 └─ src/
@@ -17,30 +17,42 @@ frontend/
    ├─ vite-env.d.ts        Vite 环境类型声明
    ├─ App.vue              应用外壳：登录条件渲染 + 侧边栏 + header + <RouterView> + SettingsDialog
    ├─ api.ts               后端 HTTP 客户端：鉴权、资源 CRUD、SSE、文件 API、模型配置/账户/偏好 API
-   ├─ config/              前端固定参数（API/技能/聊天/社区/UI 时间等）集中配置
+   ├─ config/              前端固定参数集中配置
+   │  ├─ index.ts           统一导出入口
+   │  ├─ api.ts             TOKEN_STORAGE_KEY、API_BASE_URL、默认命名
+   │  ├─ app.ts             应用级常量
+   │  ├─ auth.ts            认证相关常量
+   │  ├─ chat.ts            聊天附件限制、滚动阈值、composer 高度、动画时长
+   │  ├─ community.ts       社区上传大小限制
+   │  ├─ overview.ts        总览页常量
+   │  ├─ skills.ts          技能名正则、长度限制
+   │  └─ subject.ts         科目页常量
    ├─ skills.ts            Skill 领域逻辑：frontmatter 校验、结构化读写、SKILL.md 模板
    ├─ router/
    │  └─ index.ts          路由表 + afterEach 设 document.title（静态 title）
    ├─ composables/
-   │  ├─ useAuth.ts        token / bootstrapping / preparing / 登录 / 登出 / onTokenReady 钩子
-   │  ├─ useProjects.ts    模块级 projects 单例 + load/upsert/remove/prepend/reset，loadProjects 去重并发
-   │  ├─ useProjectSkills.ts 每个 pid 的技能列表缓存 + refresh，跨 App.vue / ChatView 共享
-   │  └─ useLayout.ts      sidebarOpen / isMobile / handleResize / closeSidebarOnMobile
+   │  ├─ useAuth.ts         token / bootstrapping / preparing / 登录 / 登出 / onTokenReady 钩子
+   │  ├─ useCommunity.ts    社区搜索词、触发搜索、上传弹层状态（模块级单例）
+   │  ├─ useLayout.ts       sidebarOpen / isMobile / handleResize / closeSidebarOnMobile
+   │  ├─ usePreferences.ts  发送键偏好（enter_mode）模块级单例，跨 SettingsDialog / ChatView 共享
+   │  ├─ useProjects.ts     模块级 projects 单例 + load/upsert/remove/prepend/reset，loadProjects 去重并发
+   │  └─ useProjectSkills.ts 每个 pid 的技能列表缓存 + refresh，跨 App.vue / ChatView 共享
    ├─ views/
-   │  ├─ OverviewView.vue  `/`：科目卡片总览 + 新建科目
-   │  ├─ SubjectView.vue   `/projects/:pid`：该科目会话列表 + 首条消息创建会话
-   │  ├─ ChatView.vue      `/projects/:pid/sessions/:sid`：消息流 + composer + SSE 主循环 + skill picker
-   │  └─ CommunityView.vue `/community`：社区技能列表、ZIP 上传、详情、安装与作者删除
+   │  ├─ OverviewView.vue   `/`：科目卡片总览 + 新建科目
+   │  ├─ SubjectView.vue    `/projects/:pid`：该科目会话列表 + 首条消息创建会话
+   │  ├─ ChatView.vue       `/projects/:pid/sessions/:sid`：消息流 + composer + SSE 主循环 + skill picker
+   │  └─ CommunityView.vue  `/community`：社区技能列表、ZIP 上传、详情、安装与作者删除
    ├─ components/
-   │  ├─ MessageContent.vue       Markdown 消息渲染与代码块复制、Mermaid 延迟渲染
-   │  ├─ RenameInline.vue         行内重命名输入（回车提交 / Esc 取消）
-   │  ├─ RowMenu.vue              列表项右上三点菜单（重命名 / 删除）
-   │  ├─ ConfirmDialog.vue        二次确认对话框（危险操作，含删除回合）
-   │  ├─ EditPromptDialog.vue     编辑后重放：textarea + Ctrl/⌘+Enter 提交 / Esc 取消
-   │  ├─ SkillChips.vue           已选技能的 chip 行（发送时随消息带走）
-   │  ├─ SkillPicker.vue          @ 触发的技能下拉选择器，支持搜索与键盘导航
-   │  ├─ SkillManagerDialog.vue   用户级 / 项目级技能管理对话框（结构化表单 + 原始兜底）
-   │  └─ SettingsDialog.vue       设置中心对话框（模型配置、账号设置、偏好设置）
+   │  ├─ ConfirmDialog.vue         二次确认对话框（危险操作，含删除回合）
+   │  ├─ EditPromptDialog.vue      编辑后重放：textarea + Ctrl/⌘+Enter 提交 / Esc 取消
+   │  ├─ MediaPreviewDialog.vue    图片/文件预览模态框（缩放、重置视图）
+   │  ├─ MessageContent.vue        Markdown 消息渲染与代码块复制、Mermaid 延迟渲染
+   │  ├─ RenameInline.vue          行内重命名输入（回车提交 / Esc 取消）
+   │  ├─ RowMenu.vue               列表项右上三点菜单（重命名 / 删除）
+   │  ├─ SettingsDialog.vue        设置中心对话框（模型配置、账号设置、偏好设置）
+   │  ├─ SkillChips.vue            已选技能的 chip 行（发送时随消息带走）
+   │  ├─ SkillManagerDialog.vue    用户级 / 项目级技能管理对话框（结构化表单 + 原始兜底）
+   │  └─ SkillPicker.vue           @ 触发的技能下拉选择器，支持搜索与键盘导航
    └─ markdown/
       ├─ renderer.ts       markdown-it 单例 + KaTeX + 代码块 / 链接 / mermaid 自定义渲染 + DOMPurify
       ├─ highlight.ts      highlight.js 按需注册语言
@@ -53,19 +65,21 @@ frontend/
 main.ts
  └─ App.vue (外壳)
     ├─ components/SettingsDialog.vue ── 设置中心管理（模型配置/账号/偏好）
-    ├─ composables/useAuth         ── token / bootstrapping / preparing / onTokenReady
-     ├─ composables/useProjects     ── projects 列表单例（跨视图共享）
-     ├─ composables/useLayout       ── sidebarOpen / isMobile
-     ├─ router/index.ts             ── 路由表 + document.title 默认值
-     ├─ api.ts                      所有后端调用的统一出口
-    ├─ config/                     固定参数集中出口（api/skills/chat/community 等）
-     ├─ skills.ts                   ── 依赖 api.ts 的通用文件 API
-     └─ <RouterView>
-         ├─ views/OverviewView.vue  ── useProjects / useLayout + Row/Rename/Confirm
-         ├─ views/SubjectView.vue   ── useProjects / useLayout + listSessions/createSession/...
-         ├─ views/ChatView.vue      ── useAuth(preparing) + useProjects + listSessions
-                                        + sendChatMessage/stopChatGeneration + SkillPicker/Chips
-         └─ views/CommunityView.vue ── 社区 skill 列表 / ZIP 上传 / 详情 / 安装 / 作者删除
+    ├─ composables/useAuth           ── token / bootstrapping / preparing / onTokenReady
+    ├─ composables/useProjects       ── projects 列表单例（跨视图共享）
+    ├─ composables/useLayout         ── sidebarOpen / isMobile
+    ├─ composables/usePreferences    ── 发送键偏好 enter_mode 模块级单例
+    ├─ router/index.ts               ── 路由表 + document.title 默认值
+    ├─ api.ts                        所有后端调用的统一出口
+    ├─ config/                       固定参数集中出口（api/skills/chat/community 等）
+    ├─ skills.ts                     ── 依赖 api.ts 的通用文件 API
+    └─ <RouterView>
+        ├─ views/OverviewView.vue    ── useProjects / useLayout + Row/Rename/Confirm
+        ├─ views/SubjectView.vue     ── useProjects / useLayout + listSessions/createSession/...
+        ├─ views/ChatView.vue        ── useAuth(preparing) + useProjects + usePreferences
+                                       + listSessions + sendChatMessage/stopChatGeneration
+                                       + SkillPicker/Chips + MediaPreviewDialog
+        └─ views/CommunityView.vue   ── useCommunity + 社区 skill 列表 / ZIP 上传 / 详情 / 安装 / 作者删除
 ```
 
 - `api.ts` 是所有后端通信的唯一出口，封装 `fetch` + 401 自动刷新、JWT 本地存储、SSE 帧解析、通用文件 API
@@ -265,7 +279,7 @@ Mermaid 渲染失败降级为可见的 error 卡片而不是白屏。
 ### 12. 附件上传与多模态支持
 
 - **多选与拖拽/粘贴上传**：支持从本地选择多文件并发上传，或通过拖放文件、粘贴剪贴板中的图片（Ctrl+V）直接上传至当前会话中。
-- **文件白名单与容量限制**：限制单文件最大不超过 20MB。允许的类型包括图片（PNG, JPG, WEBP, GIF）、文本文件（Markdown, TXT, JSON, CSV, HTML）以及 PDF 文档。
+- **文件白名单与容量限制**：限制单文件最大不超过 40MB。允许的类型包括图片（PNG, JPG, WEBP, GIF）、文本文件（Markdown, TXT, JSON, CSV, HTML）以及 PDF 文档。
 - **物理文件哈希去重与友好名称映射**：后端在物理存储上根据 SHA-256 哈希命名和去重，防止同会话内相同文件重复落盘；同时自动为文件命名为“图片1.png”、“文档2.txt”等，以防底层物理存储路径或 UUID 暴露给大模型。
 - **非图片附件卡片展示**：在已发送的消息中，非图片文件（如 PDF、TXT、JSON、CSV、HTML 等）以独立的卡片形式美观展示，卡片包含文件类型图标、文件名和文件大小等基本信息。
 - **图片附件预览模态框**：无论是在聊天消息气泡中的已发送图片，还是在 Chat Composer 输入框上方待发送的文件列表中，点击图片即可打开高保真预览模态框，支持查看大图及便捷关闭。
