@@ -10,7 +10,6 @@ import MediaPreviewDialog from '../components/MediaPreviewDialog.vue'
 import {
   deleteTurn,
   getErrorMessage,
-  getPreferences,
   listDisplayMessages,
   listMessageVersions,
   listSessions,
@@ -32,6 +31,7 @@ import { type SkillMeta } from '../skills'
 import { useAuth } from '../composables/useAuth'
 import { useProjects } from '../composables/useProjects'
 import { useProjectSkills } from '../composables/useProjectSkills'
+import { usePreferences } from '../composables/usePreferences'
 import {
   CHAT_COMPOSER_MAX_HEIGHT,
   CHAT_COPY_RESET_MS,
@@ -680,14 +680,8 @@ async function stopStreaming(): Promise<void> {
   }
 }
 
-const sendKeyPref = ref<'enter' | 'ctrl_enter'>('enter')
-
-async function loadSendKeyPref(): Promise<void> {
-  try {
-    const prefs = await getPreferences()
-    sendKeyPref.value = prefs.enter_mode as 'enter' | 'ctrl_enter'
-  } catch { /* ignore */ }
-}
+// 发送快捷键偏好走共享单例，设置中心修改后此处实时生效（不再各自缓存一份）
+const { enterMode: sendKeyPref, loadEnterMode } = usePreferences()
 
 function handleComposerKeydown(event: KeyboardEvent): void {
   if (showSkillPicker.value && (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Enter' || event.key === 'Escape')) {
@@ -887,7 +881,7 @@ async function validateAndLoad(): Promise<void> {
 }
 
 onMounted(() => {
-  loadSendKeyPref()
+  void loadEnterMode()
   void validateAndLoad()
   nextTick(autosizeComposer)
 })
