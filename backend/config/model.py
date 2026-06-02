@@ -9,6 +9,9 @@ from pydantic_ai.providers.openai import OpenAIProvider
 
 from pathlib import Path
 from typing import Callable
+from urllib.parse import urlparse
+import ipaddress
+import logging
 
 from backend.context import ChatDeps
 
@@ -29,7 +32,8 @@ def load_prompt(*filenames: str) -> Callable[[], str]:
 
 
 # 保留常量以兼容现有引用
-INSTUCTION = load_instruction()
+INSTRUCTION = load_instruction()
+INSTUCTION = INSTRUCTION  # compat alias, will be removed in a future release
 
 MODEL_PROVIDER_API_KEY = os.getenv("MODEL_PROVIDER_API_KEY", "")
 MODEL_BASE_URL = os.getenv("MODEL_BASE_URL", "")
@@ -37,6 +41,32 @@ MODEL_NAME = os.getenv("MODEL_NAME", "")
 
 # 测试连接默认超时时间（秒）
 TEST_CONNECTION_TIMEOUT = 15
+
+
+_logger = logging.getLogger(__name__)
+
+
+def validate_base_url(url: str) -> str:
+    """Validate base_url to prevent SSRF: must be http(s), must not point to private/internal networks."""
+    if not url:
+        return url
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"base_url scheme must be http or https, got {parsed.scheme!r}")
+    hostname = parsed.hostname
+    if not hostname:
+        raise ValueError("base_url must contain a valid hostname")
+    if hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
+        raise ValueError("base_url must not point to localhost")
+    try:
+        ip = ipaddress.ip_address(hostname)
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+            raise ValueError("base_url must not point to a private/internal IP address")
+    except ValueError:
+        # Not an IP literal - it's a domain name, allow DNS resolution
+        pass
+    return url
+
 
 
 # ── 视觉模型配置 ──
@@ -118,6 +148,8 @@ def GetProvider(
     _api_key = api_key or MODEL_PROVIDER_API_KEY
     _base_url = base_url or MODEL_BASE_URL
     _model_name = model_name or MODEL_NAME
+
+    validate_base_url(_base_url)
 
     if not _api_key:
         raise RuntimeError(
