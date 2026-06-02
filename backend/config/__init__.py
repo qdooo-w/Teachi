@@ -8,6 +8,7 @@ from backend.config import skill as _skill
 
 
 APP_NAME = _app.APP_NAME
+ATTACHMENT_MAX_BYTES = _app.ATTACHMENT_MAX_BYTES
 CORS_ALLOW_ORIGINS = _app.CORS_ALLOW_ORIGINS
 LOG_LEVEL = _app.LOG_LEVEL
 LOG_REQUESTS = _app.LOG_REQUESTS
@@ -62,6 +63,7 @@ validate_skill_name = _skill.validate_skill_name
 __all__ = [
     "ACCESS_TOKEN_EXPIRE_MINUTES",
     "APP_NAME",
+    "ATTACHMENT_MAX_BYTES",
     "BASE_DIR",
     "COMPATIBILITY_MAX",
     "CORS_ALLOW_ORIGINS",

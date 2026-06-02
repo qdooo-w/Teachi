@@ -1,3 +1,6 @@
+/** 聊天附件上传最大字节数，默认 40MB。与后端 ATTACHMENT_MAX_BYTES 保持一致 */
+export const CHAT_ATTACHMENT_MAX_BYTES = 40 * 1024 * 1024
+
 export const CHAT_SCROLL_BOTTOM_THRESHOLD = 32
 export const CHAT_COPY_RESET_MS = 1500
 export const CHAT_COMPOSER_MAX_HEIGHT = 240
