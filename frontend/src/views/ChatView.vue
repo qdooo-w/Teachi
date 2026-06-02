@@ -6,6 +6,7 @@ import SkillPicker from '../components/SkillPicker.vue'
 import SkillChips from '../components/SkillChips.vue'
 import EditPromptDialog from '../components/EditPromptDialog.vue'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
+import MediaPreviewDialog from '../components/MediaPreviewDialog.vue'
 import {
   deleteTurn,
   getErrorMessage,
@@ -88,6 +89,23 @@ const deleteDialogAnchor = ref<string | null>(null)
 const deleteSubmitting = ref(false)
 const deleteDialogError = ref('')
 
+// 媒体预览弹窗
+const previewOpen = ref(false)
+const previewType = ref<'image' | 'mermaid'>('image')
+const previewSource = ref('')
+
+function openImagePreview(url: string): void {
+  previewType.value = 'image'
+  previewSource.value = url
+  previewOpen.value = true
+}
+
+function openMermaidPreview(source: string): void {
+  previewType.value = 'mermaid'
+  previewSource.value = source
+  previewOpen.value = true
+}
+
 const isChatReady = computed(
   () => Boolean(currentProject.value && currentSession.value && !preparing.value),
 )
@@ -151,16 +169,44 @@ function clearAttachmentUrls(): void {
   attachmentUrls.value = {}
 }
 
-function getMessageImages(message: DisplayMessage): string[] {
+function getMessageImages(message: DisplayMessage): Array<{ url: string; id: string }> {
   if (message.role !== 'user') return []
+  if (message.localAttachments && message.localAttachments.length > 0) {
+    const images = message.localAttachments.filter((att) => att.mime_type.startsWith('image/'))
+    return images.map((att, idx) => {
+      const url = (message.previewUrls && message.previewUrls[idx]) || attachmentUrls.value[att.attachment_id] || ''
+      return { url, id: att.attachment_id }
+    }).filter(img => img.url)
+  }
   if (message.previewUrls && message.previewUrls.length > 0) {
-    return message.previewUrls
+    return message.previewUrls.map((url, idx) => ({ url, id: `preview-${idx}` }))
   }
   if (!message.anchor_msg_id) return []
   return sessionAttachments.value
     .filter((att) => att.anchor_msg_id === message.anchor_msg_id && att.mime_type.startsWith('image/'))
-    .map((att) => attachmentUrls.value[att.attachment_id])
-    .filter((url): url is string => !!url)
+    .map((att) => ({
+      url: attachmentUrls.value[att.attachment_id],
+      id: att.attachment_id,
+    }))
+    .filter((img): img is { url: string; id: string } => !!img.url)
+}
+
+function getMessageFiles(message: DisplayMessage): AttachmentItem[] {
+  if (message.role !== 'user') return []
+  if (message.localAttachments && message.localAttachments.length > 0) {
+    return message.localAttachments.filter((att) => !att.mime_type.startsWith('image/'))
+  }
+  if (!message.anchor_msg_id) return []
+  return sessionAttachments.value.filter(
+    (att) => att.anchor_msg_id === message.anchor_msg_id && !att.mime_type.startsWith('image/')
+  )
+}
+
+function getFileType(filename: string, mimeType: string): string {
+  const ext = filename.split('.').pop()?.toUpperCase()
+  if (ext && ext.length <= 4 && ext !== filename) return ext
+  if (mimeType.includes('/')) return mimeType.split('/')[1].toUpperCase()
+  return 'FILE'
 }
 
 const ALLOWED_MIMES = new Set([
@@ -505,12 +551,25 @@ async function sendMessage(): Promise<void> {
     .filter((att) => att.mime_type.startsWith('image/') && att.preview_url)
     .map((att) => att.preview_url as string)
 
+  const localAttachments: AttachmentItem[] = pendingAttachments.value
+    .filter((att) => att.attachment_id)
+    .map((att) => ({
+      attachment_id: att.attachment_id!,
+      anchor_msg_id: null,
+      original_filename: att.original_filename,
+      mime_type: att.mime_type,
+      file_size: 0,
+      has_description: false,
+      created_at: now,
+    }))
+
   const userMessage: DisplayMessage = {
     id: `local-user-${Date.now()}`,
     role: 'user',
     content: rawContent,
     timestamp: now,
     previewUrls: imagePreviews,
+    localAttachments,
   }
   const assistantId = `stream-assistant-${Date.now()}`
   const assistantMessage: DisplayMessage = {
@@ -867,12 +926,34 @@ watch(
             <div class="flex max-w-[85%] flex-col items-end gap-1.5">
               <div v-if="getMessageImages(message).length > 0" class="flex flex-col gap-1.5 items-end">
                 <img
-                  v-for="(imgUrl, idx) in getMessageImages(message)"
-                  :key="idx"
-                  :src="imgUrl"
-                  class="max-w-[240px] max-h-[180px] rounded-2xl object-cover shadow-sm border border-[#d1d5db]"
+                  v-for="img in getMessageImages(message)"
+                  :key="img.id"
+                  :src="img.url"
+                  class="max-w-[240px] max-h-[180px] rounded-2xl object-cover shadow-sm border border-[#d1d5db] cursor-pointer hover:opacity-90 transition-opacity"
                   alt="Uploaded image"
+                  @click="openImagePreview(img.url)"
                 />
+              </div>
+              <div v-if="getMessageFiles(message).length > 0" class="flex flex-wrap gap-2 justify-end">
+                <div
+                  v-for="file in getMessageFiles(message)"
+                  :key="file.attachment_id"
+                  class="flex items-center gap-2.5 rounded-xl border border-[#d1d5db] bg-white p-3 text-sm text-[#374151] w-[240px] max-w-[240px] shadow-sm"
+                >
+                  <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-gray-50 text-gray-500 border border-gray-100">
+                    <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                  </div>
+                  <div class="min-w-0 flex-1">
+                    <div class="truncate font-medium text-[#1f2937]" :title="file.original_filename">
+                      {{ file.original_filename }}
+                    </div>
+                    <div class="text-xs text-[#6b7280]">
+                      {{ getFileType(file.original_filename, file.mime_type) }}
+                    </div>
+                  </div>
+                </div>
               </div>
               <div class="flex items-end gap-1">
                 <button
@@ -906,12 +987,13 @@ watch(
               </div>
             </div>
           </div>
-          <div v-else class="group flex max-w-[85%] flex-col items-start">
-            <div class="rounded-3xl bg-white px-5 py-4 text-[15px] leading-relaxed text-[#1f2937]">
+          <div v-else class="group flex max-w-[85%] min-w-0 flex-col items-start">
+            <div class="rounded-3xl bg-white px-5 py-4 text-[15px] leading-relaxed text-[#1f2937] w-full max-w-full overflow-hidden">
               <MessageContent
                 v-if="message.content"
                 :content="message.content"
                 :streaming="message.pending === true"
+                @preview-mermaid="openMermaidPreview"
               />
               <p v-else-if="!message.pending" class="whitespace-pre-wrap break-words text-[#6b7280]">（空响应）</p>
               <div v-if="message.pending" class="mt-3 flex gap-1">
@@ -1024,8 +1106,9 @@ watch(
               <img
                 v-if="att.preview_url"
                 :src="att.preview_url"
-                class="h-6 w-6 rounded object-cover flex-shrink-0"
+                class="h-6 w-6 rounded object-cover flex-shrink-0 cursor-pointer hover:opacity-80 transition-opacity"
                 alt="Image preview"
+                @click="openImagePreview(att.preview_url)"
               />
               <svg v-else class="h-3.5 w-3.5 text-[#6b7280]" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
@@ -1139,5 +1222,11 @@ watch(
         @cancel="handleDeleteTurnCancel"
       />
     </Transition>
+    <MediaPreviewDialog
+      :open="previewOpen"
+      :type="previewType"
+      :source="previewSource"
+      @close="previewOpen = false"
+    />
   </div>
 </template>

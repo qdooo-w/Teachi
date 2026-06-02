@@ -10,7 +10,20 @@ const props = defineProps<{
   streaming: boolean
 }>()
 
+const emit = defineEmits<{
+  (e: 'preview-mermaid', source: string): void
+}>()
+
 const host = ref<HTMLElement | null>(null)
+
+function handleHostClick(event: MouseEvent): void {
+  const target = event.target as HTMLElement | null
+  if (!target) return
+  const block = target.closest('.mermaid-block') as HTMLElement | null
+  if (block && block.dataset.source) {
+    emit('preview-mermaid', block.dataset.source)
+  }
+}
 const html = ref('')
 let copyResetTimer: number | null = null
 
@@ -112,5 +125,5 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="host" class="markdown-body" v-html="html" />
+  <div ref="host" class="markdown-body" v-html="html" @click="handleHostClick" />
 </template>
