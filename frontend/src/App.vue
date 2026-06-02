@@ -609,32 +609,40 @@ onBeforeUnmount(() => {
       </section>
     </section>
 
-    <SkillManagerDialog
-      v-if="showUserSkillManager && userSkillSpace"
-      :space="userSkillSpace"
-      title="我的技能（用户级）"
-      @close="showUserSkillManager = false"
-    />
-    <SkillManagerDialog
-      v-if="showProjectSkillManager && projectSkillSpace"
-      :space="projectSkillSpace"
-      title="项目技能"
-      @close="closeProjectSkillManager"
-    />
-    <SettingsDialog
-      v-if="showSettingsDialog"
-      @close="showSettingsDialog = false"
-    />
-    <ConfirmDialog
-      v-if="confirmDelete && deleteDialogContent"
-      :title="deleteDialogContent.title"
-      :message="deleteDialogContent.message"
-      confirm-text="删除"
-      danger
-      :submitting="deleteSubmitting"
-      :error="deleteError"
-      @confirm="performDelete"
-      @cancel="cancelDelete"
-    />
+    <Transition name="dialog-fade" appear>
+      <SkillManagerDialog
+        v-if="showUserSkillManager && userSkillSpace"
+        :space="userSkillSpace"
+        title="我的技能（用户级）"
+        @close="showUserSkillManager = false"
+      />
+    </Transition>
+    <Transition name="dialog-fade" appear>
+      <SkillManagerDialog
+        v-if="showProjectSkillManager && projectSkillSpace"
+        :space="projectSkillSpace"
+        title="项目技能"
+        @close="closeProjectSkillManager"
+      />
+    </Transition>
+    <Transition name="dialog-fade" appear>
+      <SettingsDialog
+        v-if="showSettingsDialog"
+        @close="showSettingsDialog = false"
+      />
+    </Transition>
+    <Transition name="dialog-fade" appear>
+      <ConfirmDialog
+        v-if="confirmDelete && deleteDialogContent"
+        :title="deleteDialogContent.title"
+        :message="deleteDialogContent.message"
+        confirm-text="删除"
+        danger
+        :submitting="deleteSubmitting"
+        :error="deleteError"
+        @confirm="performDelete"
+        @cancel="cancelDelete"
+      />
+    </Transition>
   </main>
 </template>

@@ -1024,16 +1024,18 @@ watch(
       :submitting="streaming"
       @submit="handleEditPromptSubmit"
     />
-    <ConfirmDialog
-      v-if="deleteDialogOpen"
-      title="删除此回合"
-      message="该回合当前活跃版本（user 与 assistant，含工具调用）将被永久删除。如果之前重放过，历史版本会保留。确定继续吗？"
-      confirm-text="删除"
-      danger
-      :submitting="deleteSubmitting"
-      :error="deleteDialogError"
-      @confirm="handleDeleteTurnConfirm"
-      @cancel="handleDeleteTurnCancel"
-    />
+    <Transition name="dialog-fade" appear>
+      <ConfirmDialog
+        v-if="deleteDialogOpen"
+        title="删除此回合"
+        message="该回合当前活跃版本（user 与 assistant，含工具调用）将被永久删除。如果之前重放过，历史版本会保留。确定继续吗？"
+        confirm-text="删除"
+        danger
+        :submitting="deleteSubmitting"
+        :error="deleteDialogError"
+        @confirm="handleDeleteTurnConfirm"
+        @cancel="handleDeleteTurnCancel"
+      />
+    </Transition>
   </div>
 </template>

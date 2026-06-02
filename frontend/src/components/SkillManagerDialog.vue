@@ -110,7 +110,6 @@ const selectedEditorKind = computed(() => {
   if (isNew.value || selectedPath.value === 'SKILL.md') return 'skill'
   return selectedPath.value ? skillFileEditorKind(selectedPath.value) : null
 })
-const selectedFileLabel = computed(() => selectedPath.value ?? (isNew.value ? 'SKILL.md' : ''))
 const canDeleteSelectedFile = computed(() =>
   !!selectedName.value
   && !!selectedPath.value
@@ -568,12 +567,17 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="fixed inset-0 z-[1000] flex items-center justify-center bg-black/40" @click.self="handleClose">
-    <div class="flex h-[680px] w-[1080px] max-w-[96vw] flex-col rounded-xl bg-white shadow-xl overflow-hidden">
-      <div class="flex h-14 flex-shrink-0 items-center justify-between px-5">
-        <span class="font-semibold text-[#1f2937]">{{ title }}</span>
+  <div class="fixed inset-0 z-[1000] flex items-center justify-center bg-black/40 backdrop-blur-sm" @click.self="handleClose">
+    <div class="modal-card flex h-[680px] w-[1080px] max-w-[96vw] flex-col rounded-2xl bg-white shadow-xl overflow-hidden">
+      <div class="flex h-14 flex-shrink-0 items-center justify-between px-5 border-b border-[#e5e7eb]">
+        <div class="flex items-center gap-2 min-w-0">
+          <span class="font-semibold text-[#1f2937] flex-shrink-0">{{ title }}</span>
+          <span v-if="selectedName || isNew" class="truncate text-xs text-[#6b7280]">
+            / {{ isNew ? '新建技能' : selectedName }}{{ selectedPath && selectedPath !== 'SKILL.md' ? ` / ${selectedPath}` : '' }}
+          </span>
+        </div>
         <button
-          class="flex h-8 w-8 items-center justify-center rounded-md text-[#6b7280] hover:bg-[#f3f4f6] hover:text-[#1f2937]"
+          class="flex h-8 w-8 items-center justify-center rounded-lg text-[#6b7280] hover:bg-[#f3f4f6] hover:text-[#1f2937]"
           type="button"
           @click="handleClose"
         >
@@ -705,14 +709,6 @@ onBeforeUnmount(() => {
           </div>
 
           <template v-else>
-            <div class="flex h-12 flex-shrink-0 items-center justify-between px-5">
-              <div class="min-w-0">
-                <div class="truncate text-sm font-medium text-[#1f2937]">{{ selectedFileLabel }}</div>
-                <div v-if="selectedEditorKind && selectedEditorKind !== 'skill'" class="text-xs text-[#9ca3af]">
-                  {{ selectedEditorKind }}
-                </div>
-              </div>
-            </div>
 
             <!-- Scroll Area Wrapper with top and bottom gradient overlays -->
             <div class="relative min-h-0 flex-1">
@@ -725,7 +721,7 @@ onBeforeUnmount(() => {
               <div class="h-full overflow-y-auto px-5 pb-5 pt-3">
                 <div v-if="fileLoading" class="py-10 text-center text-sm text-[#9ca3af]">加载文件...</div>
 
-                <div v-else class="rounded-2xl border border-gray-200 bg-[#f3f4f6] p-6 shadow-md">
+                <div v-else class="space-y-6">
                   <template v-if="selectedEditorKind === 'skill'">
                     <template v-if="!rawMode">
                       <div class="mb-4">
@@ -910,7 +906,7 @@ onBeforeUnmount(() => {
                     <div class="flex items-center justify-between">
                       <button
                         v-if="!isNew && selectedName && selectedPath === 'SKILL.md'"
-                        class="rounded-md px-3 py-1.5 text-sm text-[#9a3412] transition hover:bg-[#fff7ed] disabled:opacity-50"
+                        class="rounded-lg px-3 py-1.5 text-sm text-[#9a3412] transition hover:bg-[#fff7ed] disabled:opacity-50"
                         :disabled="deleting"
                         type="button"
                         @click="remove"
@@ -919,7 +915,7 @@ onBeforeUnmount(() => {
                       </button>
                       <button
                         v-else-if="canDeleteSelectedFile"
-                        class="rounded-md px-3 py-1.5 text-sm text-[#9a3412] transition hover:bg-[#fff7ed] disabled:opacity-50"
+                        class="rounded-lg px-3 py-1.5 text-sm text-[#9a3412] transition hover:bg-[#fff7ed] disabled:opacity-50"
                         :disabled="deletingFile"
                         type="button"
                         @click="removeSelectedFile"
@@ -930,7 +926,7 @@ onBeforeUnmount(() => {
                       <div class="flex items-center gap-2">
                         <button
                           v-if="canPublish"
-                          class="rounded-md border border-[#1f2937] px-3 py-1.5 text-sm text-[#1f2937] transition hover:bg-[#f3f4f6] disabled:cursor-not-allowed disabled:opacity-50"
+                          class="rounded-lg bg-[#f3f4f6] px-3 py-1.5 text-sm text-[#1f2937] transition hover:bg-[#e5e7eb] disabled:cursor-not-allowed disabled:opacity-50"
                           :disabled="publishing"
                           type="button"
                           title="把当前技能发布到社区"
@@ -939,7 +935,7 @@ onBeforeUnmount(() => {
                           {{ publishing ? '发布中...' : '发布到社区' }}
                         </button>
                         <button
-                          class="rounded-md bg-[#1f2937] px-4 py-1.5 text-sm text-white transition hover:bg-[#111827] disabled:cursor-not-allowed disabled:bg-[#9ca3af]"
+                          class="rounded-lg bg-[#1f2937] px-4 py-1.5 text-sm text-white transition hover:bg-[#111827] disabled:cursor-not-allowed disabled:bg-[#9ca3af]"
                           :disabled="!canSave"
                           type="button"
                           @click="save"

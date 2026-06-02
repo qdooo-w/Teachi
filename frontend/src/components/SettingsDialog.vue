@@ -205,8 +205,8 @@ onMounted(() => { loadConfigs(); loadAccountInfo(); loadPreferences() })
 
 ﻿
 <template>
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-    <div class="relative flex h-[560px] w-[640px] flex-col rounded-xl bg-white shadow-2xl">
+  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+    <div class="modal-card relative flex h-[560px] w-[640px] flex-col rounded-2xl bg-white">
       <!-- Tab 栏 -->
       <div class="flex border-b border-[#e5e7eb] px-5 pt-3">
         <button
@@ -392,13 +392,13 @@ onMounted(() => { loadConfigs(); loadAccountInfo(); loadPreferences() })
         </div>
         <div class="flex items-center gap-2">
           <template v-if="activeTab === 'model' && editingId !== null">
-            <button class="flex h-9 items-center gap-1.5 rounded-md border border-[#d1d5db] px-4 text-sm text-[#374151] transition-colors hover:bg-[#f3f4f6]" type="button" :disabled="testing" @click="testConnection">
+            <button class="flex h-9 items-center gap-1.5 rounded-lg bg-[#f3f4f6] px-4 text-sm text-[#374151] transition-colors hover:bg-[#e5e7eb]" type="button" :disabled="testing" @click="testConnection">
               <svg class="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
               {{ testing ? '测试中...' : '测试连接' }}
             </button>
-            <button class="h-9 rounded-md bg-[#1f2937] px-5 text-sm font-medium text-white transition-colors hover:bg-[#111827] disabled:cursor-not-allowed disabled:bg-[#9ca3af]" type="button" :disabled="!canSave || saving" :title="!testPassed ? '需要先测试连接成功后才能保存' : ''" @click="save">{{ saving ? '保存中...' : '保存' }}</button>
+            <button class="h-9 rounded-lg bg-[#1f2937] px-5 text-sm font-medium text-white transition-colors hover:bg-[#111827] disabled:cursor-not-allowed disabled:bg-[#9ca3af]" type="button" :disabled="!canSave || saving" :title="!testPassed ? '需要先测试连接成功后才能保存' : ''" @click="save">{{ saving ? '保存中...' : '保存' }}</button>
           </template>
-          <button class="h-9 rounded-md border border-[#d1d5db] px-4 text-sm text-[#374151] transition-colors hover:bg-[#f3f4f6]" type="button" @click="emit('close')">关闭</button>
+          <button class="h-9 rounded-lg bg-[#f3f4f6] px-4 text-sm text-[#374151] transition-colors hover:bg-[#e5e7eb]" type="button" @click="emit('close')">关闭</button>
         </div>
       </div>
 
@@ -408,8 +408,8 @@ onMounted(() => { loadConfigs(); loadAccountInfo(); loadPreferences() })
           <div class="mb-1 text-sm font-semibold text-[#1f2937]">删除配置</div>
           <div class="mb-4 text-sm text-[#6b7280]">确定删除「{{ confirmDeleteName }}」？此操作不可恢复。</div>
           <div class="flex justify-end gap-2">
-            <button class="h-8 rounded-md border border-[#d1d5db] px-3 text-sm text-[#374151] hover:bg-[#f3f4f6]" :disabled="deleting" @click="cancelDelete">取消</button>
-            <button class="h-8 rounded-md bg-[#ef4444] px-3 text-sm font-medium text-white hover:bg-[#dc2626] disabled:cursor-not-allowed disabled:bg-[#f87171]" :disabled="deleting" @click="performDelete">{{ deleting ? '删除中...' : '删除' }}</button>
+            <button class="h-8 rounded-lg bg-[#f3f4f6] px-3 text-sm text-[#374151] hover:bg-[#e5e7eb]" :disabled="deleting" @click="cancelDelete">取消</button>
+            <button class="h-8 rounded-lg bg-[#ef4444] px-3 text-sm font-medium text-white hover:bg-[#dc2626] disabled:cursor-not-allowed disabled:bg-[#f87171]" :disabled="deleting" @click="performDelete">{{ deleting ? '删除中...' : '删除' }}</button>
           </div>
         </div>
       </div>

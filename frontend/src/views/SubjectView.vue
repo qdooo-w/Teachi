@@ -350,15 +350,17 @@ watch(
     </div>
   </div>
 
-  <ConfirmDialog
-    v-if="confirmDelete"
-    :title="'删除会话'"
-    :message="`确定删除「${confirmDelete.name}」？会话内所有消息会被一并删除，操作不可恢复。`"
-    :error="deleteError"
-    :submitting="deleteSubmitting"
-    @confirm="performDelete"
-    @cancel="cancelDelete"
-  />
+  <Transition name="dialog-fade" appear>
+    <ConfirmDialog
+      v-if="confirmDelete"
+      :title="'删除会话'"
+      :message="`确定删除「${confirmDelete.name}」？会话内所有消息会被一并删除，操作不可恢复。`"
+      :error="deleteError"
+      :submitting="deleteSubmitting"
+      @confirm="performDelete"
+      @cancel="cancelDelete"
+    />
+  </Transition>
 </template>
 
 <style scoped>

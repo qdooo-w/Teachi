@@ -477,15 +477,17 @@ onMounted(async () => {
       </div>
     </div>
 
-    <ConfirmDialog
-      v-if="confirmDelete"
-      :title="'删除科目'"
-      :message="`确定删除「${confirmDelete.name}」？该科目下的所有会话和消息会被一并删除，操作不可恢复。`"
-      :error="deleteError"
-      :submitting="deleteSubmitting"
-      @confirm="performDelete"
-      @cancel="cancelDelete"
-    />
+    <Transition name="dialog-fade" appear>
+      <ConfirmDialog
+        v-if="confirmDelete"
+        :title="'删除科目'"
+        :message="`确定删除「${confirmDelete.name}」？该科目下的所有会话和消息会被一并删除，操作不可恢复。`"
+        :error="deleteError"
+        :submitting="deleteSubmitting"
+        @confirm="performDelete"
+        @cancel="cancelDelete"
+      />
+    </Transition>
   </div>
 </template>
 
