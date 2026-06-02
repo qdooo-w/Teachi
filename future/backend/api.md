@@ -4,7 +4,8 @@
 
 ## 近期变更
 
-- 2026-06-01：新增多模态附件系统及相关接口与 AI 工具。实现附件上传（`POST /sessions/{sid}/attachments`）、附件列表查询（`GET /sessions/{sid}/attachments`）和附件删除（`DELETE /sessions/{sid}/attachments/{attachment_id}`）。在物理存储上以 SHA-256 哈希命名文件以去重；会话内自动按文件类型生成友好文件名（如“图片1.png”）。引入 `list_attachment` 和 `view_attachment` AI 代理工具以统一处理附件、图片及 Skill 资源；完全移除了旧有的 `is_vision_assistant` 字段及数据库字段，模型配置的视觉支持通过 `supports_vision` 字段标识，并在 API 路由中完整支持该字段的读取与写入。
+- 2026-06-01：新增多模态附件系统及相关接口与 AI 工具。实现附件上传（`POST /sessions/{sid}/attachments`）、附件列表查询（`GET /sessions/{sid}/attachments`）和附件删除（`DELETE /sessions/{sid}/attachments/{attachment_id}`）。在物理存储上以 SHA-256 哈希命名文件以去重；会话内自动按文件类型生成友好文件名（如"图片1.png"）。引入 `list_attachment` 和 `view_attachment` AI 代理工具以统一处理附件、图片及 Skill 资源；完全移除了旧有的 `is_vision_assistant` 字段及数据库字段，模型配置的视觉支持通过 `supports_vision` 字段标识，并在 API 路由中完整支持该字段的读取与写入。
+- 2026-06-02: 新增账号设置 API（修改用户名、修改密码），偏好设置 API（enter_mode），user_instruction 全链路贯通；修改密码后自动清除 refresh token。
 - 2026-05-23（第二次）：状态机新增 `BUILD_MODEL` 节点（位于 `BUILD_MESSAGES` 与 `CALL_MODEL` 之间），负责构建 PydanticAI Agent 实例并存入 `ctx.agent`；构建失败立即跳转 `STREAM_ERROR`，错误码为 `MODEL_BUILD_FAILED`。系统提示词加载改为 `load_instruction()` 函数形式，当前仍从环境变量读取，后期可改为从文件加载。
 - 2026-05-23：新增用户模型配置相关 API 接口（`/settings`），允许用户自定义 API Key、Base URL、Model Name、System Instruction、Temperature 和 Max Tokens，并实现连通性测试与配置激活机制。
 - 2026-05-19：后端 API 无变更（前端参数整理不影响后端接口）。
@@ -168,6 +169,7 @@ FastAPI 和后端当前可能返回两类错误体：
 | `api_key` | string | API Key (已脱敏，仅显示末 4 位或短 key 的末 2 位；空 key 则为空字符串) |
 | `base_url` | string | API Base URL |
 | `model_name` | string | 模型名称 |
+| `user_instruction` | string | 用户自定义指令，默认空字符串 |
 | `temperature` | float \| null | 温度参数，默认值为 null |
 | `max_tokens` | int \| null | 最大 token 数，默认值为 null |
 | `is_active` | bool | 是否激活 |
@@ -1333,6 +1335,7 @@ SSE 数据帧格式：每帧为 `data: <JSON>`，以空行分隔。
 | `api_key` | string | 否 | max 500 字符，默认 "" | API Key |
 | `base_url` | string | 否 | max 500 字符，默认 "" | API Base URL |
 | `model_name` | string | 否 | max 200 字符，默认 "" | 模型名称 |
+| `user_instruction` | string | 否 | max 2000 字符，默认 "" | 用户自定义指令 |
 | `temperature` | float \| null | 否 | 0.0 - 2.0，默认 null | 温度参数 |
 | `max_tokens` | int \| null | 否 | 1 - 128000，默认 null | 最大 token 数 |
 | `is_active` | bool | 否 | 默认 false | 是否激活 |
@@ -1380,6 +1383,7 @@ SSE 数据帧格式：每帧为 `data: <JSON>`，以空行分隔。
 | `api_key` | string \| null | 否 | max 500 字符，默认 null | API Key |
 | `base_url` | string \| null | 否 | max 500 字符，默认 null | API Base URL |
 | `model_name` | string \| null | 否 | max 200 字符，默认 null | 模型名称 |
+| `user_instruction` | string \| null | 否 | max 2000 字符，默认 null | 用户自定义指令 |
 | `temperature` | float \| null | 否 | 0.0 - 2.0，默认 null | 温度参数 |
 | `max_tokens` | int \| null | 否 | 1 - 128000，默认 null | 最大 token 数 |
 | `supports_vision` | bool \| null | 否 | 默认 null | 是否支持视觉 |
@@ -1464,6 +1468,7 @@ SSE 数据帧格式：每帧为 `data: <JSON>`，以空行分隔。
 | `api_key` | string | 否 | max 500 字符，默认 "" | API Key |
 | `base_url` | string | 否 | max 500 字符，默认 "" | API Base URL |
 | `model_name` | string | 否 | max 200 字符，默认 "" | 模型名称 |
+| `supports_vision` | bool | 否 | 默认 false | 是否支持视觉 |
 
 成功返回：`200 OK`
 
@@ -1492,3 +1497,97 @@ SSE 数据帧格式：每帧为 `data: <JSON>`，以空行分隔。
 | 状态码 | detail | 说明 |
 |---|---|---|
 | 404 | `{ code: "RESOURCE_NOT_FOUND", message: "Model config not found" }` | 模型配置不存在或不属于当前用户 |
+
+
+---
+
+## 账号设置（/settings/account）
+
+### GET /settings/account
+
+意义：获取当前用户账号信息。
+
+认证：需要 Authorization: Bearer <access_token>。
+
+请求体：无。
+
+成功返回：200 OK
+
+返回体：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| uuid | string | 用户 ID |
+| username | string | 用户名 |
+| email | string | 邮箱 |
+| created_at | float | 创建时间 |
+
+### PATCH /settings/account/username
+
+意义：修改当前用户的用户名。
+
+认证：需要 Authorization: Bearer <access_token>。
+
+请求体：
+
+| 字段 | 类型 | 必填 | 约束 | 说明 |
+|---|---|---|---|---|
+| username | string | 是 | 1-50 字符 | 新用户名 |
+
+成功返回：200 OK，返回体同 AccountInfo。
+
+### POST /settings/account/change-password
+
+意义：修改当前用户密码。需验证旧密码，成功后清除 refresh token Cookie，强制重新登录。
+
+认证：需要 Authorization: Bearer <access_token>。
+
+请求体：
+
+| 字段 | 类型 | 必填 | 约束 | 说明 |
+|---|---|---|---|---|
+| current_password | string | 是 | 6-128 字符 | 当前密码 |
+| new_password | string | 是 | 6-128 字符 | 新密码 |
+
+成功返回：204 No Content，无返回体。
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 400 | { code: "INVALID_PASSWORD", message: "当前密码不正确" } | 旧密码验证失败 |
+
+---
+
+## 偏好设置（/settings/preferences）
+
+### GET /settings/preferences
+
+意义：获取当前用户偏好设置。未设置过则返回默认值。
+
+认证：需要 Authorization: Bearer <access_token>。
+
+请求体：无。
+
+成功返回：200 OK
+
+返回体：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| enter_mode | string | 发送键模式：enter 或 ctrl_enter，默认 enter |
+| updated_at | float \| null | 最后更新时间，未设置过为 null |
+
+### PATCH /settings/preferences
+
+意义：更新当前用户偏好设置。仅更新请求中提供的字段。
+
+认证：需要 Authorization: Bearer <access_token>。
+
+请求体：
+
+| 字段 | 类型 | 必填 | 约束 | 说明 |
+|---|---|---|---|---|
+| enter_mode | string \| null | 否 | 仅允许 enter 或 ctrl_enter | 发送键模式 |
+
+成功返回：200 OK，返回体同 Preferences。
