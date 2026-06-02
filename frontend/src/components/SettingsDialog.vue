@@ -21,6 +21,7 @@ import {
   updatePreferences,
   getErrorMessage,
 } from '../api'
+import { usePreferences } from '../composables/usePreferences'
 
 const emit = defineEmits<{
   close: []
@@ -48,10 +49,16 @@ const testPassed = ref(false)
 const isInitializing = ref(false)
 const formSnapshot = ref<any>(null)
 
-const isModelFormDirty = computed(() => {
+/** 逐字段对照快照：JSON.stringify 在 Vue reactive proxy 上不可靠，改用显式 diff */
+function isFormDirty(): boolean {
   if (!formSnapshot.value) return false
-  return JSON.stringify(form.value) !== JSON.stringify(formSnapshot.value)
-})
+  const s = formSnapshot.value as Record<string, unknown>
+  const f = form.value as unknown as Record<string, unknown>
+  const keys = ['config_name', 'api_key', 'base_url', 'model_name', 'user_instruction', 'temperature', 'max_tokens', 'supports_vision']
+  return keys.some((k) => f[k] !== s[k])
+}
+
+const isModelFormDirty = computed(() => isFormDirty())
 
 const form = ref({
   config_name: '',
@@ -68,7 +75,20 @@ const showApiKey = ref(false)
 const apiKeyIsMasked = ref(false)
 const confirmDeleteId = ref<string | null>(null)
 const confirmDeleteName = ref('')
-const canSave = computed(() => form.value.config_name.trim().length > 0 && testPassed.value)
+const canSave = computed(() => form.value.config_name.trim().length > 0)
+
+// 视觉模型帮助 tooltip：用 Teleport 渲染到 body，避开所有 overflow 裁剪
+const visionTooltipTrigger = ref<HTMLElement | null>(null)
+const showVisionTooltip = ref(false)
+const visionTooltipPos = ref({ top: 0, left: 0 })
+function showVisionTooltipFn(): void {
+  const el = visionTooltipTrigger.value
+  if (!el) return
+  const rect = el.getBoundingClientRect()
+  visionTooltipPos.value = { top: rect.bottom + 6, left: rect.left }
+  showVisionTooltip.value = true
+}
+function hideVisionTooltipFn(): void { showVisionTooltip.value = false }
 
 watch(
   () => [form.value.api_key, form.value.base_url, form.value.model_name, form.value.supports_vision],
@@ -127,7 +147,7 @@ async function save(): Promise<void> {
 }
 
 
-function cancelEdit(): void { editingId.value = null; testResult.value = null; errorMsg.value = '' }
+
 
 async function handleActivate(config: ModelConfigItem): Promise<void> {
   try { if (config.is_active) { await deactivateAllModelConfigs() } else { await activateModelConfig(config.config_id) }; await loadConfigs() }
@@ -197,6 +217,8 @@ async function savePassword(): Promise<void> {
   finally { passwordSaving.value = false }
 }
 
+const { setEnterMode } = usePreferences()
+
 const prefs = ref<Preferences>({ enter_mode: 'enter', updated_at: null })
 const prefsLoading = ref(false)
 const prefsSaving = ref(false)
@@ -212,6 +234,8 @@ async function loadPreferences(): Promise<void> {
   try {
     prefs.value = await getPreferences()
     initialEnterMode.value = prefs.value.enter_mode
+    // 同步到共享 composable，确保已挂载的 ChatView 实时感知当前偏好
+    setEnterMode((prefs.value.enter_mode as 'enter' | 'ctrl_enter') || 'enter')
   }
   catch (e) { /* ignore */ }
   finally { prefsLoading.value = false }
@@ -222,6 +246,8 @@ async function savePreferences(): Promise<void> {
   try {
     prefs.value = await updatePreferences({ enter_mode: prefs.value.enter_mode })
     initialEnterMode.value = prefs.value.enter_mode
+    // 推送到共享 composable，ChatView Composer 实时切换发送快捷键
+    setEnterMode((prefs.value.enter_mode as 'enter' | 'ctrl_enter') || 'enter')
     prefsMsg.value = '偏好已保存'
   }
   catch (e) { prefsMsg.value = getErrorMessage(e) }
@@ -233,9 +259,9 @@ onMounted(() => { loadConfigs(); loadAccountInfo(); loadPreferences() })
 
 <template>
   <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-    <div class="modal-card relative flex h-[560px] w-[640px] flex-col rounded-2xl bg-white">
-      <!-- Tab 栏 -->
-      <div class="flex px-5 pt-3 relative">
+    <div class="modal-card relative flex h-[560px] w-[640px] flex-col rounded-2xl bg-white overflow-hidden">
+      <!-- Tab 栏（顶部标题栏：浅灰底 + 底部细分隔线，与卡片圆角衔接） -->
+      <div class="flex px-5 pt-3 relative rounded-t-2xl bg-[#f9fafb] border-b border-[#eef0f2]">
         <button
           v-for="tab in tabs"
           :key="tab.key"
@@ -259,7 +285,8 @@ onMounted(() => { loadConfigs(); loadAccountInfo(); loadPreferences() })
 
       <!-- 模型配置 Tab -->
       <div v-if="activeTab === 'model'" class="flex flex-1 overflow-hidden">
-        <div class="w-56 flex-shrink-0 bg-[#f9fafb] overflow-y-auto p-3">
+        <!-- 左侧列表：独立的 overflow-hidden + 左下圆角，防止背景色渗透到卡片外部 -->
+        <div class="w-56 flex-shrink-0 overflow-y-auto rounded-bl-2xl bg-[#f9fafb] p-3">
           <div class="mb-2 flex items-center justify-between">
             <span class="text-xs font-medium text-[#6b7280]">配置列表</span>
             <button class="text-xs text-[#1f2937] hover:text-[#111827]" @click="startCreate">+ 新增</button>
@@ -267,7 +294,7 @@ onMounted(() => { loadConfigs(); loadAccountInfo(); loadPreferences() })
           <div v-if="loading" class="py-4 text-center text-xs text-[#9ca3af]">加载中...</div>
           <div v-else-if="configs.length === 0" class="py-4 text-center text-xs text-[#9ca3af]">暂无配置</div>
           <div v-for="config in configs" :key="config.config_id" class="group relative">
-            <div class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors cursor-pointer" :class="editingId === config.config_id ? 'bg-[#f3f4f6] text-[#1f2937]' : 'text-[#374151] hover:bg-[#f9fafb]'" @click="startEdit(config)">
+            <div class="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-sm transition-colors cursor-pointer" :class="editingId === config.config_id ? 'bg-[#f3f4f6] text-[#1f2937]' : 'text-[#374151] hover:bg-[#f9fafb]'" @click="startEdit(config)">
               <span class="inline-block h-2 w-2 flex-shrink-0 rounded-full cursor-pointer" :class="config.is_active ? 'bg-emerald-500' : 'bg-[#d1d5db]'" :title="config.is_active ? '取消激活' : '设为激活'" @click.stop="handleActivate(config)" />
               <span class="truncate">{{ config.config_name }}</span>
             </div>
@@ -276,84 +303,107 @@ onMounted(() => { loadConfigs(); loadAccountInfo(); loadPreferences() })
             </button>
           </div>
         </div>
-        <div class="flex-1 overflow-y-auto p-5">
-          <div v-if="errorMsg" class="mb-3 rounded-md bg-red-50 px-3 py-2 text-xs text-red-700">{{ errorMsg }}</div>
-          <template v-if="editingId === null">
-            <div class="flex flex-col items-center justify-center py-12 text-center">
-              <svg class="mb-3 h-10 w-10 text-[#d1d5db]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-              <p class="mb-1 text-sm font-medium text-[#374151]">模型配置</p>
-              <p class="text-xs text-[#9ca3af]">选择左侧配置编辑，或新增一个</p>
-            </div>
-          </template>
-          <template v-else>
-            <div class="mb-3 flex items-center justify-between">
-              <button type="button" class="flex items-center gap-1 text-xs text-[#6b7280] hover:text-[#1f2937]" @click="cancelEdit">
-                <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" /></svg>
-                返回列表
-              </button>
-            </div>
-            <div class="space-y-4">
-              <label class="block">
-                <span class="mb-1 block text-sm font-medium text-[#374151]">配置名称 <span class="text-red-500">*</span></span>
-                <input v-model="form.config_name" class="h-10 w-full rounded-lg bg-[#f3f4f6] px-3 text-sm outline-none transition focus:bg-[#e5e7eb] focus:ring-2 focus:ring-[#1f2937]/20" placeholder="例如：GPT-4o" />
-              </label>
-              <label class="block">
-                <div class="mb-1 flex items-center justify-between">
-                  <span class="text-sm font-medium text-[#374151]">API Key</span>
-                  <button type="button" class="text-xs text-[#6b7280] hover:text-[#1f2937]" @click="showApiKey = !showApiKey">{{ showApiKey ? '隐藏' : '显示' }}</button>
+        <!-- 右侧：相对定位容器（浮动保存按钮的锚点），内层独立滚动避免裁剪 tooltip -->
+        <div class="relative flex-1">
+          <div class="h-full overflow-y-auto p-5">
+            <div v-if="errorMsg" class="mb-3 rounded-xl bg-red-50 px-3 py-2 text-xs text-red-700">{{ errorMsg }}</div>
+            <template v-if="editingId === null">
+              <div class="flex flex-col items-center justify-center py-12 text-center">
+                <svg class="mb-3 h-10 w-10 text-[#d1d5db]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                <p class="mb-1 text-sm font-medium text-[#374151]">模型配置</p>
+                <p class="text-xs text-[#9ca3af]">选择左侧配置编辑，或新增一个</p>
+              </div>
+            </template>
+            <template v-else>
+              <div class="space-y-3">
+                <label class="block">
+                  <span class="mb-1 block text-sm font-medium text-[#374151]">配置名称 <span class="text-red-500">*</span></span>
+                  <input v-model="form.config_name" class="h-10 w-full rounded-xl bg-[#f3f4f6] px-3 text-sm outline-none transition focus:bg-[#e5e7eb] focus:ring-2 focus:ring-[#1f2937]/20" placeholder="例如：GPT-4o" />
+                </label>
+                <label class="block">
+                  <div class="mb-1 flex items-center justify-between">
+                    <span class="text-sm font-medium text-[#374151]">API Key</span>
+                    <button type="button" class="text-xs text-[#6b7280] hover:text-[#1f2937]" @click="showApiKey = !showApiKey">{{ showApiKey ? '隐藏' : '显示' }}</button>
+                  </div>
+                  <input v-model="form.api_key" :type="showApiKey ? 'text' : 'password'" class="h-10 w-full rounded-xl bg-[#f3f4f6] px-3 text-sm outline-none transition focus:bg-[#e5e7eb] focus:ring-2 focus:ring-[#1f2937]/20" placeholder="sk-..." />
+                </label>
+                <label class="block">
+                  <span class="mb-1 block text-sm font-medium text-[#374151]">Base URL</span>
+                  <input v-model="form.base_url" class="h-10 w-full rounded-xl bg-[#f3f4f6] px-3 text-sm outline-none transition focus:bg-[#e5e7eb] focus:ring-2 focus:ring-[#1f2937]/20" placeholder="https://api.openai.com/v1" />
+                </label>
+                <label class="block">
+                  <div class="mb-1 flex items-center gap-2">
+                    <span class="text-sm font-medium text-[#374151]">模型名称</span>
+                    <!-- 视觉模型帮助提示（trigger + body Teleport，不受 overflow 裁剪） -->
+                    <span ref="visionTooltipTrigger" class="flex h-4 w-4 cursor-help items-center justify-center rounded-full bg-[#e5e7eb] text-[10px] font-bold text-[#6b7280]" @mouseenter="showVisionTooltipFn" @mouseleave="hideVisionTooltipFn">?</span>
+                    <!-- 视觉模型开关（摇杆） -->
+                    <label class="ml-auto flex cursor-pointer items-center gap-2 select-none" title="开启后，此配置可作为视觉模型用于图片理解">
+                      <span class="text-[11px] text-[#9ca3af]">视觉</span>
+                      <div class="relative h-5 w-9 rounded-full transition-colors duration-200" :class="form.supports_vision ? 'bg-emerald-500' : 'bg-[#d1d5db]'">
+                        <div class="absolute top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200" :class="form.supports_vision ? 'translate-x-[18px] left-0.5' : 'left-0.5'" />
+                      </div>
+                      <input v-model="form.supports_vision" type="checkbox" class="sr-only" />
+                    </label>
+                  </div>
+                  <input v-model="form.model_name" class="h-10 w-full rounded-xl bg-[#f3f4f6] px-3 text-sm outline-none transition focus:bg-[#e5e7eb] focus:ring-2 focus:ring-[#1f2937]/20" placeholder="gpt-4o" />
+                </label>
+                <label class="block">
+                  <span class="mb-1 block text-sm font-medium text-[#374151]">自定义指令</span>
+                  <textarea v-model="form.user_instruction" class="w-full rounded-xl bg-[#f3f4f6] px-3 py-2 text-sm outline-none transition focus:bg-[#e5e7eb] focus:ring-2 focus:ring-[#1f2937]/20" rows="3" placeholder="给 AI 的额外指令，例如：请用中文回答、回答要简洁..." />
+                </label>
+                <!-- 测试连接：放在高级参数之前，让用户先验证连通性再展开细节 -->
+                <div class="flex items-center gap-2">
+                  <button class="flex items-center gap-1.5 rounded-full bg-[#f3f4f6] px-4 py-2 text-sm text-[#374151] transition-colors hover:bg-[#e5e7eb]" type="button" :disabled="testing" @click="testConnection">
+                    <span v-if="testing" class="h-3.5 w-3.5 border-2 border-[#9ca3af]/30 border-t-[#6b7280] rounded-full animate-spin" />
+                    <svg v-else class="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                    {{ testing ? '测试中...' : '测试连接' }}
+                  </button>
                 </div>
-                <input v-model="form.api_key" :type="showApiKey ? 'text' : 'password'" class="h-10 w-full rounded-lg bg-[#f3f4f6] px-3 text-sm outline-none transition focus:bg-[#e5e7eb] focus:ring-2 focus:ring-[#1f2937]/20" placeholder="sk-..." />
-              </label>
-              <label class="block">
-                <span class="mb-1 block text-sm font-medium text-[#374151]">Base URL</span>
-                <input v-model="form.base_url" class="h-10 w-full rounded-lg bg-[#f3f4f6] px-3 text-sm outline-none transition focus:bg-[#e5e7eb] focus:ring-2 focus:ring-[#1f2937]/20" placeholder="https://api.openai.com/v1" />
-              </label>
-              <label class="block">
-                <span class="mb-1 block text-sm font-medium text-[#374151]">模型名称</span>
-                <input v-model="form.model_name" class="h-10 w-full rounded-lg bg-[#f3f4f6] px-3 text-sm outline-none transition focus:bg-[#e5e7eb] focus:ring-2 focus:ring-[#1f2937]/20" placeholder="gpt-4o" />
-              </label>
-              <label class="block">
-                <span class="mb-1 block text-sm font-medium text-[#374151]">自定义指令</span>
-                <textarea v-model="form.user_instruction" class="w-full rounded-lg bg-[#f3f4f6] px-3 py-2 text-sm outline-none transition focus:bg-[#e5e7eb] focus:ring-2 focus:ring-[#1f2937]/20" rows="3" placeholder="给 AI 的额外指令，例如：请用中文回答、回答要简洁..." />
-              </label>
-              <div>
-                <button type="button" class="flex items-center gap-1 text-xs font-medium text-[#6b7280] hover:text-[#1f2937]" @click="showAdvanced = !showAdvanced">
-                  <svg class="h-3 w-3 transition-transform" :class="showAdvanced ? 'rotate-90' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" /></svg>
-                  高级参数
-                </button>
-                <div v-if="showAdvanced" class="mt-3 space-y-4">
-                  <label class="block">
-                    <div class="mb-1 flex items-center justify-between">
-                      <span class="text-sm font-medium text-[#374151]">Temperature</span>
-                      <button type="button" class="text-xs text-[#6b7280] hover:text-[#1f2937]" @click="form.temperature = null">重置</button>
-                    </div>
-                    <input v-model.number="form.temperature" class="h-10 w-full rounded-lg bg-[#f3f4f6] px-3 text-sm outline-none transition focus:bg-[#e5e7eb] focus:ring-2 focus:ring-[#1f2937]/20" type="number" min="0" max="2" step="0.1" placeholder="默认" />
-                    <div class="mt-1 flex justify-between text-[10px] text-[#9ca3af]"><span>精确 (0)</span><span>创意 (2)</span></div>
-                  </label>
-                  <label class="block">
-                    <div class="mb-1 flex items-center justify-between">
-                      <span class="text-sm font-medium text-[#374151]">Max Tokens</span>
-                      <button type="button" class="text-xs text-[#6b7280] hover:text-[#1f2937]" @click="form.max_tokens = null">重置</button>
-                    </div>
-                    <input v-model.number="form.max_tokens" class="h-10 w-full rounded-lg bg-[#f3f4f6] px-3 text-sm outline-none transition focus:bg-[#e5e7eb] focus:ring-2 focus:ring-[#1f2937]/20" type="number" min="1" max="128000" placeholder="留空使用默认值" />
-                  </label>
- 
-                  <!-- Supports Vision -->
-                  <label class="flex items-center gap-2 cursor-pointer py-1">
-                    <input
-                      v-model="form.supports_vision"
-                      type="checkbox"
-                      class="h-4 w-4 rounded border-0 bg-[#f3f4f6] text-[#1f2937] focus:ring-[#1f2937]/20"
-                    />
-                    <span class="text-sm font-medium text-[#374151]">此模型支持视觉（图片输入）</span>
-                  </label>
+                <div v-if="testResult" class="rounded-xl px-3 py-2 text-xs" :class="testResult.success ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'">
+                  {{ testResult.success ? '连接成功' : '连接失败' }}：{{ testResult.message }}
+                </div>
+                <div>
+                  <button type="button" class="flex items-center gap-1 text-xs font-medium text-[#6b7280] hover:text-[#1f2937]" @click="showAdvanced = !showAdvanced">
+                    <svg class="h-3 w-3 transition-transform" :class="showAdvanced ? 'rotate-90' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" /></svg>
+                    高级参数
+                  </button>
+                  <div v-if="showAdvanced" class="mt-3 space-y-3">
+                    <label class="block">
+                      <div class="mb-1 flex items-center justify-between">
+                        <span class="text-sm font-medium text-[#374151]">Temperature</span>
+                        <button type="button" class="text-xs text-[#6b7280] hover:text-[#1f2937]" @click="form.temperature = null">重置</button>
+                      </div>
+                      <input v-model.number="form.temperature" class="h-10 w-full rounded-xl bg-[#f3f4f6] px-3 text-sm outline-none transition focus:bg-[#e5e7eb] focus:ring-2 focus:ring-[#1f2937]/20" type="number" min="0" max="2" step="0.1" placeholder="默认" />
+                      <div class="mt-1 flex justify-between text-[10px] text-[#9ca3af]"><span>精确 (0)</span><span>创意 (2)</span></div>
+                    </label>
+                    <label class="block">
+                      <div class="mb-1 flex items-center justify-between">
+                        <span class="text-sm font-medium text-[#374151]">Max Tokens</span>
+                        <button type="button" class="text-xs text-[#6b7280] hover:text-[#1f2937]" @click="form.max_tokens = null">重置</button>
+                      </div>
+                      <input v-model.number="form.max_tokens" class="h-10 w-full rounded-xl bg-[#f3f4f6] px-3 text-sm outline-none transition focus:bg-[#e5e7eb] focus:ring-2 focus:ring-[#1f2937]/20" type="number" min="1" max="128000" placeholder="留空使用默认值" />
+                    </label>
+                  </div>
                 </div>
               </div>
-              <div v-if="testResult" class="rounded-md px-3 py-2 text-xs" :class="testResult.success ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'">
-                {{ testResult.success ? '连接成功' : '连接失败' }}：{{ testResult.message }}
-              </div>
-            </div>
-          </template>
+            </template>
+          </div>
+          <!-- 浮动保存按钮：锚定在外层 relative 容器，不受内层 overflow 裁剪 -->
+          <Transition name="fade">
+            <button
+              v-if="isModelFormDirty"
+              class="absolute bottom-6 right-8 z-30 flex items-center gap-2 rounded-full px-5 py-2.5 text-sm font-semibold shadow-xl active:scale-95 transition-all duration-200 disabled:cursor-not-allowed"
+              :class="canSave ? 'bg-slate-900 text-white hover:bg-slate-800' : 'bg-slate-200 text-slate-400 shadow-none'"
+              type="button"
+              :disabled="!canSave || saving"
+              :title="!testPassed ? '需要先测试连接成功后才能保存' : ''"
+              @click="save"
+            >
+              <span v-if="saving" class="h-4 w-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              <svg v-else class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" /></svg>
+              <span>{{ saving ? '保存中...' : '保存修改' }}</span>
+            </button>
+          </Transition>
         </div>
       </div>
 
@@ -361,32 +411,32 @@ onMounted(() => { loadConfigs(); loadAccountInfo(); loadPreferences() })
       <div v-if="activeTab === 'account'" class="flex-1 overflow-y-auto p-5">
         <div v-if="accountLoading" class="py-8 text-center text-sm text-[#9ca3af]">加载中...</div>
         <template v-else-if="accountInfo">
-          <div class="space-y-6">
+          <div class="space-y-4">
             <div class="rounded-xl bg-[#f9fafb] p-4">
-              <h3 class="mb-3 text-sm font-medium text-[#374151]">基本信息</h3>
-              <div class="space-y-3">
+              <h3 class="mb-2 text-sm font-medium text-[#374151]">基本信息</h3>
+              <div class="space-y-2">
                 <div class="flex items-center gap-3"><span class="w-16 text-xs text-[#6b7280]">邮箱</span><span class="text-sm text-[#374151]">{{ accountInfo.email }}</span></div>
                 <div class="flex items-center gap-3"><span class="w-16 text-xs text-[#6b7280]">用户 ID</span><span class="text-xs text-[#9ca3af] font-mono">{{ accountInfo.uuid.slice(0, 8) }}...</span></div>
               </div>
             </div>
             <div class="rounded-xl bg-[#f9fafb] p-4">
-              <h3 class="mb-3 text-sm font-medium text-[#374151]">修改用户名</h3>
+              <h3 class="mb-2 text-sm font-medium text-[#374151]">修改用户名</h3>
               <div class="flex items-end gap-3">
-                <label class="flex-1"><input v-model="usernameForm.username" class="h-10 w-full rounded-lg bg-[#f3f4f6] px-3 text-sm outline-none transition focus:bg-[#e5e7eb] focus:ring-2 focus:ring-[#1f2937]/20" placeholder="新用户名" maxlength="50" /></label>
+                <label class="flex-1"><input v-model="usernameForm.username" class="h-10 w-full rounded-xl bg-[#f3f4f6] px-3 text-sm outline-none transition focus:bg-[#e5e7eb] focus:ring-2 focus:ring-[#1f2937]/20" placeholder="新用户名" maxlength="50" /></label>
                 <Transition name="fade">
-                  <button v-if="isUsernameDirty" class="h-9 rounded-lg bg-[#1f2937] px-4 text-sm font-medium text-white transition-colors hover:bg-[#111827] disabled:cursor-not-allowed disabled:bg-[#9ca3af]" :disabled="!usernameForm.username.trim() || usernameSaving" @click="saveUsername">{{ usernameSaving ? '保存中...' : '保存' }}</button>
+                  <button v-if="isUsernameDirty" class="flex items-center gap-2 rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white shadow-xl hover:bg-slate-800 active:scale-95 transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-50" :disabled="!usernameForm.username.trim() || usernameSaving" @click="saveUsername"><span v-if="usernameSaving" class="h-4 w-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /><svg v-else class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" /></svg><span>{{ usernameSaving ? '保存中...' : '保存修改' }}</span></button>
                 </Transition>
               </div>
               <p v-if="usernameMsg" class="mt-2 text-xs" :class="usernameMsg.includes('已更新') ? 'text-emerald-600' : 'text-red-600'">{{ usernameMsg }}</p>
             </div>
             <div class="rounded-xl bg-[#f9fafb] p-4">
-              <h3 class="mb-3 text-sm font-medium text-[#374151]">修改密码</h3>
-              <div class="space-y-3">
-                <input v-model="passwordForm.current_password" type="password" class="h-10 w-full rounded-lg bg-[#f3f4f6] px-3 text-sm outline-none transition focus:bg-[#e5e7eb] focus:ring-2 focus:ring-[#1f2937]/20" placeholder="当前密码" />
-                <input v-model="passwordForm.new_password" type="password" class="h-10 w-full rounded-lg bg-[#f3f4f6] px-3 text-sm outline-none transition focus:bg-[#e5e7eb] focus:ring-2 focus:ring-[#1f2937]/20" placeholder="新密码" />
-                 <input v-model="passwordForm.confirm_password" type="password" class="h-10 w-full rounded-lg bg-[#f3f4f6] px-3 text-sm outline-none transition focus:bg-[#e5e7eb] focus:ring-2 focus:ring-[#1f2937]/20" placeholder="确认新密码" />
+              <h3 class="mb-2 text-sm font-medium text-[#374151]">修改密码</h3>
+              <div class="space-y-2">
+                <input v-model="passwordForm.current_password" type="password" class="h-10 w-full rounded-xl bg-[#f3f4f6] px-3 text-sm outline-none transition focus:bg-[#e5e7eb] focus:ring-2 focus:ring-[#1f2937]/20" placeholder="当前密码" />
+                <input v-model="passwordForm.new_password" type="password" class="h-10 w-full rounded-xl bg-[#f3f4f6] px-3 text-sm outline-none transition focus:bg-[#e5e7eb] focus:ring-2 focus:ring-[#1f2937]/20" placeholder="新密码" />
+                 <input v-model="passwordForm.confirm_password" type="password" class="h-10 w-full rounded-xl bg-[#f3f4f6] px-3 text-sm outline-none transition focus:bg-[#e5e7eb] focus:ring-2 focus:ring-[#1f2937]/20" placeholder="确认新密码" />
                 <Transition name="fade">
-                  <button v-if="isPasswordDirty" class="h-9 rounded-lg bg-[#1f2937] px-4 text-sm font-medium text-white transition-colors hover:bg-[#111827] disabled:cursor-not-allowed disabled:bg-[#9ca3af]" :disabled="!passwordForm.current_password || !passwordForm.new_password || !passwordForm.confirm_password || passwordSaving" @click="savePassword">{{ passwordSaving ? '保存中...' : '修改密码' }}</button>
+                  <button v-if="isPasswordDirty" class="flex items-center gap-2 rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white shadow-xl hover:bg-slate-800 active:scale-95 transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-50" :disabled="!passwordForm.current_password || !passwordForm.new_password || !passwordForm.confirm_password || passwordSaving" @click="savePassword"><span v-if="passwordSaving" class="h-4 w-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /><svg v-else class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" /></svg><span>{{ passwordSaving ? '保存中...' : '修改密码' }}</span></button>
                 </Transition>
               </div>
               <p v-if="passwordMsg" class="mt-2 text-xs" :class="passwordMsg.includes('已更新') ? 'text-emerald-600' : 'text-red-600'">{{ passwordMsg }}</p>
@@ -396,53 +446,40 @@ onMounted(() => { loadConfigs(); loadAccountInfo(); loadPreferences() })
       </div>
 
       <!-- 偏好设置 Tab -->
-      <div v-if="activeTab === 'preferences'" class="flex-1 overflow-y-auto p-5">
+      <div v-if="activeTab === 'preferences'" class="relative flex-1 overflow-y-auto p-5">
         <div v-if="prefsLoading" class="py-8 text-center text-sm text-[#9ca3af]">加载中...</div>
         <template v-else>
-          <div class="space-y-6">
+          <div class="space-y-4">
             <div class="rounded-xl bg-[#f9fafb] p-4">
               <h3 class="mb-1 text-sm font-medium text-[#374151]">消息发送方式</h3>
-              <p class="mb-3 text-xs text-[#9ca3af]">选择发送聊天消息的快捷键</p>
-              <div class="space-y-2">
-                <label class="flex cursor-pointer items-center gap-3 rounded-xl px-4 py-3 transition-all" :class="prefs.enter_mode === 'enter' ? 'bg-[#1f2937]/5 font-medium' : 'bg-white hover:bg-gray-100/50 shadow-sm'">
+              <p class="mb-2 text-xs text-[#9ca3af]">选择发送聊天消息的快捷键</p>
+              <div class="space-y-1.5">
+                <label class="flex cursor-pointer items-center gap-3 rounded-xl px-4 py-2.5 transition-all" :class="prefs.enter_mode === 'enter' ? 'bg-[#1f2937]/5 font-medium' : 'bg-white hover:bg-gray-100/50 shadow-sm'">
                   <input v-model="prefs.enter_mode" type="radio" value="enter" class="accent-[#1f2937]" />
                   <div><span class="text-sm font-medium text-[#374151]">Enter 发送</span><p class="text-xs text-[#9ca3af]">按 Enter 直接发送消息，Shift+Enter 换行</p></div>
                 </label>
-                <label class="flex cursor-pointer items-center gap-3 rounded-xl px-4 py-3 transition-all" :class="prefs.enter_mode === 'ctrl_enter' ? 'bg-[#1f2937]/5 font-medium' : 'bg-white hover:bg-gray-100/50 shadow-sm'">
+                <label class="flex cursor-pointer items-center gap-3 rounded-xl px-4 py-2.5 transition-all" :class="prefs.enter_mode === 'ctrl_enter' ? 'bg-[#1f2937]/5 font-medium' : 'bg-white hover:bg-gray-100/50 shadow-sm'">
                   <input v-model="prefs.enter_mode" type="radio" value="ctrl_enter" class="accent-[#1f2937]" />
                   <div><span class="text-sm font-medium text-[#374151]">Ctrl+Enter 发送</span><p class="text-xs text-[#9ca3af]">按 Ctrl+Enter 发送消息，Enter 换行</p></div>
                 </label>
               </div>
-              <div class="mt-4 flex items-center gap-3">
-                <Transition name="fade">
-                  <button v-if="isPrefsDirty" class="h-9 rounded-lg bg-[#1f2937] px-4 text-sm font-medium text-white transition-colors hover:bg-[#111827] disabled:cursor-not-allowed disabled:bg-[#9ca3af]" :disabled="prefsSaving" @click="savePreferences">{{ prefsSaving ? '保存中...' : '保存' }}</button>
-                </Transition>
-                <p v-if="prefsMsg" class="text-xs" :class="prefsMsg.includes('已保存') ? 'text-emerald-600' : 'text-red-600'">{{ prefsMsg }}</p>
-              </div>
+              <p v-if="prefsMsg" class="mt-2 text-xs" :class="prefsMsg.includes('已保存') ? 'text-emerald-600' : 'text-red-600'">{{ prefsMsg }}</p>
             </div>
           </div>
-        </template>
-      </div>
-
-      <!-- 底部操作栏 -->
-      <div v-if="activeTab === 'model'" class="flex h-14 flex-shrink-0 items-center justify-between bg-[#f9fafb] px-5 rounded-b-2xl">
-        <div class="text-xs text-[#9ca3af]">
-          <template v-if="activeTab === 'model'">
-            <template v-if="editingId === null">{{ configs.length }} 个配置</template>
-            <template v-else>{{ isCreating ? '新建配置' : '编辑配置' }}</template>
-          </template>
-        </div>
-        <div class="flex items-center gap-2">
-          <template v-if="activeTab === 'model' && editingId !== null">
-            <button class="flex h-9 items-center gap-1.5 rounded-lg bg-[#f3f4f6] px-4 text-sm text-[#374151] transition-colors hover:bg-[#e5e7eb]" type="button" :disabled="testing" @click="testConnection">
-              <svg class="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-              {{ testing ? '测试中...' : '测试连接' }}
+          <!-- 浮动保存按钮：偏好设置 Tab 的全局保存，后期可扩展更多设置项 -->
+          <Transition name="fade">
+            <button
+              v-if="isPrefsDirty"
+              class="absolute bottom-6 right-8 z-30 flex items-center gap-2 rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white shadow-xl hover:bg-slate-800 active:scale-95 transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-50"
+              :disabled="prefsSaving"
+              @click="savePreferences"
+            >
+              <span v-if="prefsSaving" class="h-4 w-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              <svg v-else class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" /></svg>
+              <span>{{ prefsSaving ? '保存中...' : '保存修改' }}</span>
             </button>
-            <Transition name="fade">
-              <button v-if="isModelFormDirty" class="h-9 rounded-lg bg-[#1f2937] px-5 text-sm font-medium text-white transition-colors hover:bg-[#111827] disabled:cursor-not-allowed disabled:bg-[#9ca3af]" type="button" :disabled="!canSave || saving" :title="!testPassed ? '需要先测试连接成功后才能保存' : ''" @click="save">{{ saving ? '保存中...' : '保存' }}</button>
-            </Transition>
-          </template>
-        </div>
+          </Transition>
+        </template>
       </div>
 
       <!-- 删除确认弹窗 -->
@@ -461,11 +498,21 @@ onMounted(() => { loadConfigs(); loadAccountInfo(); loadPreferences() })
           <div class="mb-1 text-sm font-semibold text-[#1f2937]">删除配置</div>
           <div class="mb-4 text-sm text-[#6b7280]">确定删除「{{ confirmDeleteName }}」？此操作不可恢复。</div>
           <div class="flex justify-end">
-            <button class="h-8 rounded-lg bg-[#b91c1c] hover:bg-[#991b1b] px-4 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60" :disabled="deleting" @click="performDelete">{{ deleting ? '删除中...' : '删除' }}</button>
+            <button class="h-8 rounded-xl bg-[#b91c1c] hover:bg-[#991b1b] px-4 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60" :disabled="deleting" @click="performDelete">{{ deleting ? '删除中...' : '删除' }}</button>
           </div>
         </div>
       </div>
     </div>
+    <!-- 视觉模型 tooltip：Teleport 到 body 层，完全避开 overflow 裁剪 -->
+    <Teleport to="body">
+      <div
+        v-if="showVisionTooltip"
+        class="pointer-events-none fixed z-[999] w-56 rounded-xl bg-slate-800 px-3 py-2 text-xs leading-relaxed text-white shadow-lg"
+        :style="{ top: visionTooltipPos.top + 'px', left: visionTooltipPos.left + 'px' }"
+      >
+        视觉模型用于解析图片内容。若主模型不支持多模态图片输入，系统会自动调用此配置的视觉模型来理解和描述图片，再将文本描述传递给主模型处理。
+      </div>
+    </Teleport>
   </div>
 </template>
 
