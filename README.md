@@ -19,7 +19,7 @@
      * `JWT_SECRET`：用于 JWT 签名与验证的密钥（必填，生产环境必须设定且保密，推荐使用足够长的随机字符串）。
      * `DATABASE_PATH`：SQLite 数据库路径，默认为项目根目录下的 `data/project.db`。
      * `CORS_ALLOW_ORIGINS`：跨域允许的来源列表（以逗号分隔，默认 `https://localhost:5173,http://localhost:5173`）。
-     * `APP_NAME`：应用名称，默认 `Teachi Backend`。
+     * `APP_NAME`：应用名称，默认 `Learnova Backend`。
      * `LOG_LEVEL`：日志级别（如 `INFO`, `DEBUG`, `WARNING`, `ERROR`），默认 `INFO`。
      * `LOG_REQUESTS`：是否打印 HTTP 请求日志（`true`/`false`），默认 `true`。
    * **大语言模型（LLM）配置**：

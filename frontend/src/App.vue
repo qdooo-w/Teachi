@@ -227,14 +227,14 @@ onMounted(() => {
       preparing.value = false
     }
   })
-  window.addEventListener('teachi-token-change', handleTokenChange)
+  window.addEventListener('learnova-token-change', handleTokenChange)
   window.addEventListener('resize', handleResize)
   handleResize()
   void initializeAuth()
 })
 
 onBeforeUnmount(() => {
-  window.removeEventListener('teachi-token-change', handleTokenChange)
+  window.removeEventListener('learnova-token-change', handleTokenChange)
   window.removeEventListener('resize', handleResize)
 })
 </script>
@@ -254,7 +254,7 @@ onBeforeUnmount(() => {
     <section v-else-if="!isAuthenticated" class="flex h-full items-center justify-center px-4">
       <div class="w-full max-w-[420px] rounded-lg border border-[#d1d5db] bg-white p-6 shadow-sm">
         <div class="mb-6">
-          <div class="text-2xl font-bold tracking-normal">Teachi</div>
+          <div class="text-2xl font-bold tracking-normal">Learnova</div>
           <div class="mt-1 text-sm text-[#6b7280]">登录后开始对话</div>
         </div>
 
@@ -352,7 +352,7 @@ onBeforeUnmount(() => {
               type="button"
               @click="closeSidebarOnMobile(); router.push({ name: 'overview' })"
             >
-              <span class="text-2xl font-bold tracking-tight">Teachi</span>
+              <span class="text-2xl font-bold tracking-tight">Learnova</span>
             </button>
             <button
               class="flex h-7 items-center gap-1 rounded-full border border-[#e5e7eb] px-2.5 text-xs text-[#4b5563] transition-colors hover:border-[#d1d5db] hover:bg-[#f3f4f6] hover:text-[#4b5563]"

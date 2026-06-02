@@ -3,7 +3,7 @@ import os
 from backend.config.env import env_bool, env_csv
 
 
-APP_NAME = os.getenv("APP_NAME", "Teachi Backend")
+APP_NAME = os.getenv("APP_NAME", "Learnova Backend")
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 LOG_REQUESTS = env_bool(os.getenv("LOG_REQUESTS"), True)

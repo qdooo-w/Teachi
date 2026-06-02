@@ -762,7 +762,7 @@ watch(
   () => currentSession.value?.sessionname,
   (name) => {
     if (name && currentProject.value) {
-      document.title = `${currentProject.value.projectname} / ${name} · Teachi`
+      document.title = `${currentProject.value.projectname} / ${name} · Learnova`
     }
   },
   { immediate: true },
@@ -948,7 +948,7 @@ watch(
             v-model="draft"
             class="composer-textarea w-full resize-none bg-transparent text-[15px] leading-relaxed outline-none placeholder:text-[#9ca3af]"
             :disabled="streaming || preparing"
-            :placeholder="sendKeyPref === 'ctrl_enter' ? '给 Teachi 发送消息... (Enter 换行，Ctrl/⌘ + Enter 发送，@ 呼出技能选择)' : '给 Teachi 发送消息... (Enter 发送，Shift + Enter 换行，@ 呼出技能选择)'"
+            :placeholder="sendKeyPref === 'ctrl_enter' ? '给 Learnova 发送消息... (Enter 换行，Ctrl/⌘ + Enter 发送，@ 呼出技能选择)' : '给 Learnova 发送消息... (Enter 发送，Shift + Enter 换行，@ 呼出技能选择)'"
             rows="2"
             @keydown="handleComposerKeydown"
             @input="handleComposerInput"

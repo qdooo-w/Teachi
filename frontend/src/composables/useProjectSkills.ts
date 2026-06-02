@@ -3,7 +3,7 @@
 // 把「当前项目的技能列表」做成跨视图的共享响应式数据：
 // - App.vue 的项目技能管理对话框关闭后调用 refresh(pid)
 // - ChatView 通过 watch(pid) 自动拉取；页面关心的是 skills ref 的值变化
-// 取代原本 window 事件总线 "teachi-project-skills-changed" 的实现，
+// 取代原本 window 事件总线 "learnova-project-skills-changed" 的实现，
 // 让两边通过"共享状态"而不是"全局广播"通信。
 import { ref, watch, computed, type Ref } from 'vue'
 import { listSkills, type SkillMeta } from '../skills'

@@ -79,6 +79,7 @@ class TestConnectionRequest(BaseModel):
     api_key: str = Field(default="", max_length=500, description="API Key")
     base_url: str = Field(default="", max_length=500, description="API Base URL")
     model_name: str = Field(default="", max_length=200, description="模型名称")
+    supports_vision: bool = Field(default=False, description="是否支持视觉")
 
 class TestConnectionResponse(BaseModel):
     """测试连接响应"""
@@ -256,6 +257,7 @@ async def test_connection_with_params(
         api_key=payload.api_key or None,
         base_url=payload.base_url or None,
         model_name=payload.model_name or None,
+        supports_vision=payload.supports_vision,
     )
     return TestConnectionResponse(**result)
 
@@ -280,6 +282,7 @@ async def test_connection_with_config(
         api_key=config["api_key"] or None,
         base_url=config["base_url"] or None,
         model_name=config["model_name"] or None,
+        supports_vision=bool(config.get("supports_vision", False)),
     )
     return TestConnectionResponse(**result)
 

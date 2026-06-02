@@ -1,4 +1,4 @@
-# Teachi Frontend
+# Learnova Frontend
 
 基于 Vue 3 + Vite + Tailwind 的 AI 聊天前端，对接 FastAPI 后端，支持账号鉴权、科目与会话管理、SSE 流式对话、Markdown/LaTeX/Mermaid 渲染、用户级 / 项目级技能（Skill）的管理和按需挂载，以及社区技能的 ZIP 上传发布、安装与删除。
 

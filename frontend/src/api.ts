@@ -103,7 +103,7 @@ function apiUrl(path: string): string {
 }
 
 function notifyTokenChange(token: string | null): void {
-  window.dispatchEvent(new CustomEvent('teachi-token-change', { detail: token }))
+  window.dispatchEvent(new CustomEvent('learnova-token-change', { detail: token }))
 }
 
 export function getStoredToken(): string | null {
@@ -676,6 +676,7 @@ export interface TestConnectionRequest {
   api_key?: string
   base_url?: string
   model_name?: string
+  supports_vision?: boolean
 }
 
 export interface TestConnectionResponse {
