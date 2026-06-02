@@ -17,6 +17,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from backend.auth import get_current_user, verify_nonce
@@ -330,3 +331,52 @@ async def upload_community_skill_zip(
         raise
 
     return _community_skill_detail(record)
+
+
+@router.get(
+    "/sessions/{sid}/attachments/{attachment_id}",
+    response_class=FileResponse,
+)
+def get_session_attachment(
+    sid: str,
+    attachment_id: str,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
+) -> FileResponse:
+    """获取指定的会话附件物理文件并返回。"""
+    user_uuid = current_user.get("uuid")
+    if not isinstance(user_uuid, str):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "AUTH_TOKEN_INVALID", "message": "Invalid token"},
+        )
+
+    # 校验会话是否存在且属于该用户
+    session = db.sessions.get_for_user(sid=sid, user_uuid=user_uuid)
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "RESOURCE_NOT_FOUND", "message": "Session not found"},
+        )
+
+    # 校验附件是否存在且属于该用户、该会话
+    attachment = db.attachments.get_for_user(attachment_id, user_uuid)
+    if attachment is None or attachment["sid"] != sid:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "RESOURCE_NOT_FOUND", "message": "Attachment not found"},
+        )
+
+    file_path = BASE_DIR / attachment["file_path"]
+    if not file_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "RESOURCE_NOT_FOUND", "message": "Physical file not found"},
+        )
+
+    return FileResponse(
+        path=str(file_path),
+        media_type=attachment["mime_type"],
+        filename=attachment["original_filename"],
+    )
+
