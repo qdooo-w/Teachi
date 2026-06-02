@@ -1,5 +1,21 @@
 import sqlite3
 import logging
+import sys
+import os
+from pathlib import Path
+
+# 自动定位项目根目录 (基于脚本所在位置 scripts/fix_database.py)
+BASE_DIR = Path(__file__).resolve().parents[1]
+
+# 核心：将项目根目录加入 sys.path，解决 backend 模块导入问题
+if str(BASE_DIR) not in sys.path:
+    # 使用 insert(0, ...) 确保项目路径优先级最高，防止与系统库冲突
+    sys.path.insert(0, str(BASE_DIR))
+
+# 切换当前工作目录到项目根目录
+# 这样无论你在哪个目录下执行，脚本内部的相对路径（如 data/project.db）都能正确解析
+os.chdir(str(BASE_DIR))
+
 from backend.config import DATABASE_PATH
 from backend.db import DatabaseFacade
 

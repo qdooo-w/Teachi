@@ -4,7 +4,7 @@
 
 ## 1. 数据库结构修复 (`fix_database.py`)
 
-**脚本位置**：`fix_database.py` (根目录)
+**脚本位置**：`scripts/fix_database.py`
 
 ### 功能描述
 该脚本用于自动同步 SQLite 数据库结构与代码期望的最新 Schema。当原有数据库缺少表、索引或特定列时，脚本会进行增量补全。
@@ -16,7 +16,7 @@
 
 ### 运行方式
 ```bash
-uv run python fix_database.py
+uv run python scripts/fix_database.py
 ```
 
 ---
