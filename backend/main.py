@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.auth import router as auth_router
 from backend.config import APP_NAME, CORS_ALLOW_ORIGINS, LOG_LEVEL, LOG_REQUESTS
+from backend.config.auth import validate_auth_config
 from backend.community import router as community_router
 from backend.data import router as data_router
 from backend.db_dep import db, get_db
@@ -21,6 +22,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(_: FastAPI):
 	"""应用生命周期管理器（就是资源（例如说数据库）的初始化和清理），在应用启动时设置数据库连接，并在应用关闭时进行清理（如果需要）。"""
 	logger.info("Starting backend application")
+	validate_auth_config()
 	db.setup_database()
 	from backend.config import SKILL_STORAGE_DIR
 	from pathlib import Path
