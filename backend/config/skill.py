@@ -16,7 +16,7 @@ SKILL_TEXT_EXTENSIONS: frozenset[str] = frozenset({
 SKILL_RESOURCE_DIRS: frozenset[str] = frozenset({"references", "assets", "examples", "templates"})#技能资源目录名称集合，允许的资源目录名称包括 "references" 和 "assets"
 
 SKILL_FILE_MAX_CHARS = env_int(os.getenv("SKILL_FILE_MAX_CHARS"), 512 * 1024)#技能文件最大字符数，默认为 512 * 1024
-SKILL_ZIP_MAX_BYTES = env_int(os.getenv("SKILL_ZIP_MAX_BYTES"), 5 * 1024 * 1024)#技能压缩包最大字节数，默认为 5 * 1024 * 1024
+SKILL_ZIP_MAX_BYTES = env_int(os.getenv("SKILL_ZIP_MAX_BYTES"), 40 * 1024 * 1024)  # 技能压缩包最大字节数，默认 40MB
 
 SKILL_ZIP_ALLOWED_CONTENT_TYPES: frozenset[str] = frozenset({
     "application/zip",
