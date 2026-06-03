@@ -30,7 +30,7 @@ from backend.config import (
 )
 from backend.db import DatabaseFacade
 from backend.db_dep import get_db
-from backend.file import ProjectFile, UserFile, SessionFile, FileError, _TEXT_FILE_EXTENSIONS, validate_skill_storage_path
+from backend.file import ProjectFile, UserFile, FileError, _TEXT_FILE_EXTENSIONS, validate_skill_storage_path
 from backend.tool import get_registered_tool_names
 from backend.transfer import router as transfer_router
 
@@ -582,22 +582,11 @@ def delete_active_turn(
         # 仅当没有其他记录引用同一物理路径时，才尝试删除物理文件
         if file_path_str and db.attachments.count_by_path(file_path_str, user_uuid) == 0:
             try:
-                session = db.sessions.get_for_user(sid=a["sid"], user_uuid=user_uuid)
-                if session:
-                    session_file = SessionFile(sid=a["sid"], pid=session["pid"], user_uuid=user_uuid, db_facade=db)
-                    rel_to_session = Path(file_path_str).relative_to(Path("data") / user_uuid / session["pid"] / a["sid"])
-                    session_file.delete_file(str(rel_to_session))
-                else:
-                    full_path = BASE_DIR / file_path_str
-                    if full_path.exists():
-                        full_path.unlink()
+                full_path = BASE_DIR / file_path_str
+                if full_path.exists():
+                    full_path.unlink()
             except Exception as e:
-                try:
-                    full_path = BASE_DIR / file_path_str
-                    if full_path.exists():
-                        full_path.unlink()
-                except Exception as e2:
-                    logger.warning("Failed to delete physical file %s: %s (SessionFile error: %s)", file_path_str, e2, e)
+                logger.warning("Failed to delete physical file %s: %s", file_path_str, e)
 
 
 # ── 附件 API 模型 ───────────────────────────────────────────────────────────────
@@ -696,7 +685,7 @@ async def upload_attachment(
             )
 
     try:
-        session_file = SessionFile(sid=sid, pid=pid, user_uuid=user_uuid, db_facade=db)
+        user_file = UserFile(user_uuid=user_uuid, db_facade=db)
     except PermissionError as e:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -715,22 +704,19 @@ async def upload_attachment(
         }
         ext = fallback_ext.get(mime_type, "")
 
-    rel_path_in_session = f"attachments/{file_hash}{ext}"
-
-    # 同会话内同哈希已存在时直接复用，不重复写文件
-    if db.attachments.get_by_hash(file_hash, sid, user_uuid) is None:
-        full_candidate = session_file._safe_path(rel_path_in_session)
-        if not full_candidate.exists():
-            try:
-                session_file.write_bytes(rel_path_in_session, content)
-            except Exception as e:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail={"code": "FILE_WRITE_ERROR", "message": f"Failed to save file: {e}"},
-                )
-
-    full_path = session_file._safe_path(rel_path_in_session)
+    rel_path_in_user = f"attachments/{file_hash}{ext}"
+    full_path = user_file._safe_path(rel_path_in_user)
     db_rel_path = str(full_path.relative_to(BASE_DIR))
+
+    # 全局同哈希已存在时直接复用，不重复写文件
+    if not full_path.exists():
+        try:
+            user_file.write_bytes(rel_path_in_user, content)
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={"code": "FILE_WRITE_ERROR", "message": f"Failed to save file: {e}"},
+            )
 
     # 生成会话内友好文件名
     if mime_type in IMAGE_MIMES:
@@ -1208,6 +1194,7 @@ def read_project_file(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": "FILE_ERROR", "message": str(e)},
         )
+
 
 
 @router.put("/projects/{pid}/files", response_model=FileContentResponse)

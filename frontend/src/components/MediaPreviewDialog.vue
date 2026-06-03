@@ -17,13 +17,18 @@ const scale = ref(1.0)
 const copied = ref(false)
 const copyTimer = ref<number | null>(null)
 const mermaidContainer = ref<HTMLElement | null>(null)
+const rendering = ref(false)
 
 async function renderDiagram(): Promise<void> {
   if (!props.open || props.type !== 'mermaid' || !props.source) return
 
+  rendering.value = true
   await nextTick()
   const container = mermaidContainer.value
-  if (!container) return
+  if (!container) {
+    rendering.value = false
+    return
+  }
 
   // Clear previous content
   container.innerHTML = ''
@@ -33,10 +38,41 @@ async function renderDiagram(): Promise<void> {
   pre.setAttribute('data-lang', 'mermaid')
   pre.setAttribute('data-source', props.source)
   pre.textContent = props.source
+  // Hide it visually while rendering to prevent flashing source code
+  pre.style.opacity = '0'
+  pre.style.position = 'absolute'
   container.appendChild(pre)
 
-  // Call renderMermaidInElement
-  await renderMermaidInElement(container)
+  try {
+    // Call renderMermaidInElement
+    await renderMermaidInElement(container)
+
+    // Remove inline style max-width constraint to allow high-definition vector scaling
+    const blockEl = container.querySelector('.mermaid-block') as HTMLElement | null
+    if (blockEl) {
+      blockEl.style.width = '100%'
+      blockEl.style.height = '100%'
+      blockEl.style.display = 'flex'
+      blockEl.style.justifyContent = 'center'
+      blockEl.style.alignItems = 'center'
+      blockEl.style.background = 'transparent'
+      blockEl.style.border = 'none'
+      blockEl.style.padding = '0'
+      blockEl.style.margin = '0'
+    }
+
+    const svgEl = container.querySelector('svg')
+    if (svgEl) {
+      svgEl.style.maxWidth = '100%'
+      svgEl.style.maxHeight = '100%'
+      svgEl.style.width = '100%'
+      svgEl.style.height = '100%'
+    }
+  } catch (error) {
+    console.error('Failed to render mermaid diagram:', error)
+  } finally {
+    rendering.value = false
+  }
 }
 
 watch(
@@ -99,11 +135,9 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <Transition name="dialog-fade" appear>
-    <div
-      v-if="open"
-      class="fixed inset-0 z-[110] flex items-center justify-center bg-black/75 backdrop-blur-md"
-    >
+  <div
+    class="fixed inset-0 z-[110] flex items-center justify-center bg-black/40 backdrop-blur-sm px-4"
+  >
       <!-- Outer scrollable wrapper -->
       <div
         class="overflow-auto flex items-center justify-center w-full h-full p-8"
@@ -126,9 +160,26 @@ onBeforeUnmount(() => {
           <!-- Render Mermaid -->
           <div
             v-else-if="type === 'mermaid'"
-            ref="mermaidContainer"
-            class="flex items-center justify-center bg-white p-6 rounded-xl shadow-2xl overflow-auto max-w-full max-h-[80vh]"
-          />
+            class="relative bg-white p-6 rounded-xl shadow-2xl overflow-hidden w-[85vw] max-w-6xl h-[80vh] flex items-center justify-center"
+          >
+            <!-- 简洁加载动画 -->
+            <div
+              v-if="rendering"
+              class="absolute inset-0 flex items-center justify-center bg-white/90 z-10"
+            >
+              <svg class="animate-spin h-8 w-8 text-slate-600" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+              </svg>
+            </div>
+
+            <!-- 图表容器 -->
+            <div
+              ref="mermaidContainer"
+              class="w-full h-full flex items-center justify-center overflow-auto"
+              :class="{ 'opacity-0': rendering }"
+            />
+          </div>
         </div>
       </div>
 
@@ -208,5 +259,4 @@ onBeforeUnmount(() => {
         </button>
       </div>
     </div>
-  </Transition>
-</template>
+  </template>

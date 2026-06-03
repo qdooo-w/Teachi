@@ -968,6 +968,7 @@ export async function getAttachmentBlobUrl(sid: string, attachmentId: string): P
   return URL.createObjectURL(blob)
 }
 
+
 // ── 错误处理 ────────────────────────────────────────────────────────────────────
 
 export function getErrorMessage(error: unknown, fallback = '请求失败，请稍后重试。'): string {

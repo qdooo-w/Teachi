@@ -12,6 +12,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'preview-mermaid', source: string): void
+  (e: 'preview-image', url: string): void
 }>()
 
 const host = ref<HTMLElement | null>(null)
@@ -22,6 +23,12 @@ function handleHostClick(event: MouseEvent): void {
   const block = target.closest('.mermaid-block') as HTMLElement | null
   if (block && block.dataset.source) {
     emit('preview-mermaid', block.dataset.source)
+    return
+  }
+  const img = target.closest('img') as HTMLImageElement | null
+  if (img) {
+    const src = img.getAttribute('src') || ''
+    emit('preview-image', src)
   }
 }
 const html = ref('')

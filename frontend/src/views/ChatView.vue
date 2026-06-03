@@ -25,6 +25,7 @@ import {
   deleteAttachment,
   listAttachments,
   getAttachmentBlobUrl,
+  readFile,
   type AttachmentItem,
 } from '../api'
 import { type SkillMeta } from '../skills'
@@ -96,9 +97,34 @@ const previewOpen = ref(false)
 const previewType = ref<'image' | 'mermaid'>('image')
 const previewSource = ref('')
 
-function openImagePreview(url: string): void {
+function closePreview(): void {
+  previewOpen.value = false
+  previewSource.value = ''
+}
+
+async function openImagePreview(url: string): Promise<void> {
   previewType.value = 'image'
-  previewSource.value = url
+  if (
+    url &&
+    !url.startsWith('blob:') &&
+    !url.startsWith('data:') &&
+    !url.startsWith('http:') &&
+    !url.startsWith('https:') &&
+    url.toLowerCase().endsWith('.mermaid')
+  ) {
+    // 相对路径，视为项目文件
+    try {
+      // 读取 mermaid 文本内容
+      const fileData = await readFile({ kind: 'project', pid: pid.value }, url)
+      previewType.value = 'mermaid'
+      previewSource.value = fileData.content
+    } catch (err) {
+      console.error('Failed to load project file for preview:', err)
+      previewSource.value = url
+    }
+  } else {
+    previewSource.value = url
+  }
   previewOpen.value = true
 }
 
@@ -107,6 +133,7 @@ function openMermaidPreview(source: string): void {
   previewSource.value = source
   previewOpen.value = true
 }
+
 
 const isChatReady = computed(
   () => Boolean(currentProject.value && currentSession.value && !preparing.value),
@@ -338,6 +365,10 @@ function isChatAtBottom(): boolean {
 
 function handleChatScroll(): void {
   stickToBottom.value = isChatAtBottom()
+}
+
+function handleVisualViewportResize(): void {
+  scrollToBottom()
 }
 
 async function loadMessages(): Promise<void> {
@@ -923,6 +954,9 @@ onMounted(() => {
   void loadEnterMode()
   void validateAndLoad()
   nextTick(autosizeComposer)
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', handleVisualViewportResize)
+  }
 })
 
 onBeforeUnmount(() => {
@@ -934,6 +968,9 @@ onBeforeUnmount(() => {
     }
   }
   clearAttachmentUrls()
+  if (window.visualViewport) {
+    window.visualViewport.removeEventListener('resize', handleVisualViewportResize)
+  }
 })
 
 watch(draft, () => { nextTick(autosizeComposer) })
@@ -1032,6 +1069,7 @@ watch(
                 :content="message.content"
                 :streaming="message.pending === true"
                 @preview-mermaid="openMermaidPreview"
+                @preview-image="openImagePreview"
               />
               <p v-else-if="!message.pending" class="whitespace-pre-wrap break-words text-[#6b7280]">（空响应）</p>
               <div v-if="message.pending" class="mt-3 flex gap-1">
@@ -1271,11 +1309,14 @@ watch(
         @cancel="handleDeleteTurnCancel"
       />
     </Transition>
-    <MediaPreviewDialog
-      :open="previewOpen"
-      :type="previewType"
-      :source="previewSource"
-      @close="previewOpen = false"
-    />
+    <Transition name="dialog-fade" appear>
+      <MediaPreviewDialog
+        v-if="previewOpen"
+        :open="previewOpen"
+        :type="previewType"
+        :source="previewSource"
+        @close="closePreview"
+      />
+    </Transition>
   </div>
 </template>

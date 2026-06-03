@@ -236,16 +236,19 @@ def test_directory_cleanups(isolated_api_env):
     r = client.post(f"/projects/{pid}/sessions", json={"sessionname": "s1"}, headers=headers)
     sid = r.json()["sid"]
     
-    # Upload an attachment to create physical directory structures
-    png_content = b"\x89PNG\r\n\x1a\nblahblah"
-    file_payload = {"file": ("test.png", io.BytesIO(png_content), "image/png")}
-    r = client.post(f"/sessions/{sid}/attachments", files=file_payload, headers=headers)
-    assert r.status_code == 201
-    
     # Directories:
     # tmp_path / "data" / user_uuid / pid / sid
     session_dir = tmp_path / "data" / user_uuid / pid / sid
     project_dir = tmp_path / "data" / user_uuid / pid
+    
+    # Manually create physical directory structures to test cleanups
+    session_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Upload an attachment (saved in global attachments dir)
+    png_content = b"\x89PNG\r\n\x1a\nblahblah"
+    file_payload = {"file": ("test.png", io.BytesIO(png_content), "image/png")}
+    r = client.post(f"/sessions/{sid}/attachments", files=file_payload, headers=headers)
+    assert r.status_code == 201
     
     assert session_dir.exists()
     assert project_dir.exists()
@@ -258,14 +261,16 @@ def test_directory_cleanups(isolated_api_env):
     assert not session_dir.exists()
     assert project_dir.exists()
     
-    # Re-create session and upload another attachment
+    # Re-create session
     r = client.post(f"/projects/{pid}/sessions", json={"sessionname": "s2"}, headers=headers)
     sid2 = r.json()["sid"]
+    session_dir2 = tmp_path / "data" / user_uuid / pid / sid2
+    session_dir2.mkdir(parents=True, exist_ok=True)
+    
     file_payload2 = {"file": ("test2.png", io.BytesIO(png_content), "image/png")}
     r = client.post(f"/sessions/{sid2}/attachments", files=file_payload2, headers=headers)
     assert r.status_code == 201
     
-    session_dir2 = tmp_path / "data" / user_uuid / pid / sid2
     assert session_dir2.exists()
     assert project_dir.exists()
     

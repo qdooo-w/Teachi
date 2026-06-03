@@ -246,6 +246,13 @@ async function handleLogout(): Promise<void> {
 }
 
 // ── 生命周期 ─────────────────────────────────────────────────────────────────
+function updateKeyboardOffset() {
+  if (window.visualViewport) {
+    const offset = window.innerHeight - window.visualViewport.height
+    document.documentElement.style.setProperty('--keyboard-offset', `${offset}px`)
+  }
+}
+
 onMounted(() => {
   setOnTokenReady(async () => {
     preparing.value = true
@@ -258,6 +265,11 @@ onMounted(() => {
   })
   window.addEventListener('learnova-token-change', handleTokenChange)
   window.addEventListener('resize', handleResize)
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', updateKeyboardOffset)
+    window.visualViewport.addEventListener('scroll', updateKeyboardOffset)
+    updateKeyboardOffset()
+  }
   handleResize()
   void initializeAuth()
 })
@@ -265,6 +277,10 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('learnova-token-change', handleTokenChange)
   window.removeEventListener('resize', handleResize)
+  if (window.visualViewport) {
+    window.visualViewport.removeEventListener('resize', updateKeyboardOffset)
+    window.visualViewport.removeEventListener('scroll', updateKeyboardOffset)
+  }
 })
 </script>
 
@@ -545,9 +561,9 @@ onBeforeUnmount(() => {
                 <span class="text-[#1f2937]">{{ truncateText(subjectProject.projectname, 20) }}</span>
               </template>
               <template v-else-if="$route.name === 'chat' && chatProject && chatSession">
-                <span class="cursor-pointer text-[#9ca3af] hover:text-[#1f2937]" @click="closeSidebarOnMobile(); router.push({ name: 'subject', params: { pid: $route.params.pid } })">{{ truncateText(chatProject.projectname, 8) }}</span>
-                <span class="text-[#9ca3af]">/</span>
-                <span class="text-[#1f2937]">{{ truncateText(chatSession.sessionname, 15) }}</span>
+                <span class="hidden md:inline cursor-pointer text-[#9ca3af] hover:text-[#1f2937]" @click="closeSidebarOnMobile(); router.push({ name: 'subject', params: { pid: $route.params.pid } })">{{ truncateText(chatProject.projectname, 8) }}</span>
+                <span class="hidden md:inline text-[#9ca3af]">/</span>
+                <span class="text-[#1f2937]">{{ truncateText(chatSession.sessionname, 25) }}</span>
               </template>
             </div>
           </div>
@@ -563,9 +579,9 @@ onBeforeUnmount(() => {
               <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
               </svg>
-              <span class="hidden sm:inline">新建对话</span>
+              <span class="hidden md:inline">新建对话</span>
             </button>
-            <span class="flex h-9 items-center gap-1 px-2 text-sm text-[#9ca3af]">
+            <span class="hidden md:flex h-9 items-center gap-1 px-2 text-sm text-[#9ca3af]">
               Skills管理
               <svg class="h-3 w-3" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
@@ -635,7 +651,8 @@ onBeforeUnmount(() => {
               <div
                 v-if="Component"
                 :key="rv.name === 'chat' ? `${rv.params.pid}:${rv.params.sid}` : String(rv.name ?? '')"
-                class="absolute inset-0"
+                class="absolute inset-0 transition-[bottom] duration-100 ease-out"
+                :style="{ bottom: 'var(--keyboard-offset, 0px)' }"
               >
                 <component :is="Component" />
               </div>
