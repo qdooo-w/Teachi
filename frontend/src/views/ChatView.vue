@@ -31,6 +31,7 @@ import { type SkillMeta } from '../skills'
 import { useAuth } from '../composables/useAuth'
 import { useProjects } from '../composables/useProjects'
 import { useProjectSkills } from '../composables/useProjectSkills'
+import { useUserSkills } from '../composables/useUserSkills'
 import { usePreferences } from '../composables/usePreferences'
 import {
   CHAT_ATTACHMENT_MAX_BYTES,
@@ -113,10 +114,35 @@ const isChatReady = computed(
 const canSend = computed(() => Boolean(draft.value.trim() && isChatReady.value && !streaming.value))
 
 // ── Skill 状态 ──────────────────────────────────────────────────────────────
-// projectSkills 由共享 composable 提供，pid 变化或 App.vue 的对话框刷新时自动更新
+// projectSkills 与 userSkills 由共享 composable 提供，pid 变化或 App.vue 的对话框刷新时自动更新
 const pidOrNull = computed(() => pid.value || null)
 const { skills: projectSkills } = useProjectSkills(pidOrNull)
-const selectedSkills = ref<SkillMeta[]>([])
+const { skills: userSkills, load: loadUserSkills } = useUserSkills()
+
+interface ChatSkillMeta extends SkillMeta {
+  rawName: string
+  kind: 'user' | 'project'
+}
+
+const allSkills = computed<ChatSkillMeta[]>(() => {
+  const pList = projectSkills.value.map((s) => ({
+    ...s,
+    name: `project-${s.name}`,
+    rawName: s.name,
+    display_name: `${s.display_name || s.name} [项目]`,
+    kind: 'project' as const,
+  }))
+  const uList = userSkills.value.map((s) => ({
+    ...s,
+    name: `user-${s.name}`,
+    rawName: s.name,
+    display_name: `${s.display_name || s.name} [个人]`,
+    kind: 'user' as const,
+  }))
+  return [...pList, ...uList]
+})
+
+const selectedSkills = ref<ChatSkillMeta[]>([])
 const showSkillPicker = ref(false)
 
 // ── 附件状态与处理函数 ───────────────────────────────────────────────────────
@@ -702,10 +728,10 @@ function handleComposerKeydown(event: KeyboardEvent): void {
   }
 }
 
-function toggleSkill(name: string): void {
-  const skill = projectSkills.value.find((s) => s.name === name)
+function toggleSkill(prefixedName: string): void {
+  const skill = allSkills.value.find((s) => s.name === prefixedName)
   if (!skill) return
-  const idx = selectedSkills.value.findIndex((s) => s.name === name)
+  const idx = selectedSkills.value.findIndex((s) => s.name === prefixedName)
   if (idx === -1) {
     selectedSkills.value.push(skill)
   } else {
@@ -713,8 +739,8 @@ function toggleSkill(name: string): void {
   }
 }
 
-function removeSkill(name: string): void {
-  selectedSkills.value = selectedSkills.value.filter((s) => s.name !== name)
+function removeSkill(prefixedName: string): void {
+  selectedSkills.value = selectedSkills.value.filter((s) => s.name !== prefixedName)
 }
 
 function checkAtTrigger(): void {
@@ -745,12 +771,10 @@ function handlePickerToggle(name: string): void {
   }
 }
 
-function buildPayload(text: string, skills: SkillMeta[]): string {
+function buildPayload(text: string, skills: ChatSkillMeta[]): string {
   if (skills.length === 0) return text
   // 后端会为三层技能名各自加前缀（global- / project- / user-）再喂给模型。
-  // 这里的选择器只展示项目层技能，因此发送时对应拼 project- 前缀，
-  // 保证自然语言提示里的名字和模型 <skill> 列表、load_skill 参数一致。
-  const names = skills.map((s) => `project-${s.name}`).join('、')
+  const names = skills.map((s) => `${s.kind}-${s.rawName}`).join('、')
   return `[本轮请优先考虑使用技能：${names}]\n\n${text}`
 }
 
@@ -862,17 +886,32 @@ async function validateAndLoad(): Promise<void> {
   }
   currentSession.value = match
 
-  // 阶段 3：加载消息与项目技能。失败不离开视图，只在顶部显示错误，用户可手动重试。
+  // 阶段 3：加载消息、项目技能与用户技能。失败不离开视图，只在顶部显示错误，用户可手动重试。
   try {
     await loadMessages()
+    await loadUserSkills()
   } catch (error) {
     errorMessage.value = getErrorMessage(error)
   }
   // 项目技能由 useProjectSkills(pidOrNull) 的 watch 自动加载，这里不需要显式调用
 
-  // 阶段 4：消费 SubjectView 传入的初始草稿并自动发送
+  // 阶段 4：消费 SubjectView 传入的初始草稿与附件/技能并自动发送
   const initial = route.query.initial
   if (typeof initial === 'string' && initial.trim()) {
+    const state = window.history.state
+    if (state && Array.isArray(state.initialSkills)) {
+      selectedSkills.value = allSkills.value.filter((s) => state.initialSkills.includes(s.name) || state.initialSkills.includes(s.rawName))
+    }
+    if (state && Array.isArray(state.initialAttachments)) {
+      pendingAttachments.value = state.initialAttachments.map((att: any) => ({
+        attachment_id: att.attachment_id,
+        temp_id: att.temp_id,
+        original_filename: att.original_filename,
+        mime_type: att.mime_type,
+        uploading: false,
+        preview_url: att.preview_url,
+      }))
+    }
     draft.value = initial
     await router.replace({ name: 'chat', params: { pid: pid.value, sid: sid.value } })
     await nextTick()
@@ -1084,7 +1123,7 @@ watch(
         >
           <SkillPicker
             v-if="showSkillPicker"
-            :skills="projectSkills"
+            :skills="allSkills"
             :selected="selectedSkills.map((s) => s.name)"
             @toggle="handlePickerToggle"
             @close="showSkillPicker = false"
@@ -1159,7 +1198,7 @@ watch(
                 @click="triggerFileSelect"
               >
                 <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v14m7-7H5" />
                 </svg>
               </button>
 
@@ -1182,7 +1221,7 @@ watch(
                 @click="showSkillPicker = !showSkillPicker"
               >
                 <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v14m7-7H5" />
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
                 </svg>
               </button>
             </div>

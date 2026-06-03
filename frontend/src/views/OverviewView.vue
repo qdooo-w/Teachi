@@ -170,6 +170,10 @@ watch(newProjectDesc, () => { nextTick(autosizeDesc) })
 async function handleCreateProject(): Promise<void> {
   const name = newProjectName.value.trim()
   if (!name || creatingProject.value) return
+  if (name.length > 13) {
+    errorMessage.value = '科目名称最长为 13 个字符'
+    return
+  }
   const userId = getCurrentUserId()
   if (!userId) return
 
@@ -220,6 +224,10 @@ async function goToProject(project: ProjectItem): Promise<void> {
 }
 
 async function submitProjectRename(project: ProjectItem, nextName: string): Promise<void> {
+  if (nextName.length > 13) {
+    errorMessage.value = '科目名称最长为 13 个字符'
+    return
+  }
   renameSubmitting.value = true
   errorMessage.value = ''
   try {
@@ -329,6 +337,7 @@ onMounted(async () => {
                     <div class="mb-3 text-xs text-[#6b7280]">重命名科目</div>
                     <RenameInline
                       :initial="project.projectname"
+                      :maxLength="13"
                       :submitting="renameSubmitting"
                       placeholder="新科目名称"
                       @submit="(name) => submitProjectRename(project, name)"
@@ -381,6 +390,7 @@ onMounted(async () => {
                       <div class="mb-2 text-xs text-[#6b7280]">重命名科目</div>
                       <RenameInline
                         :initial="project.projectname"
+                        :maxLength="13"
                         :submitting="renameSubmitting"
                         placeholder="新科目名称"
                         @submit="(name) => submitProjectRename(project, name)"
@@ -454,6 +464,7 @@ onMounted(async () => {
                 type="text"
                 class="w-full border-none bg-transparent py-2 text-base font-medium text-[#1f2937] outline-none placeholder:text-[#9ca3af]"
                 placeholder="科目名称"
+                :maxlength="13"
                 :disabled="creatingProject"
                 @keydown.enter.prevent="handleCreateProject"
                 @keydown.esc.prevent="closeCreatePanel"

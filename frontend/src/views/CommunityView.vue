@@ -423,7 +423,7 @@ onMounted(() => {
 
       <div v-if="totalPages > 1" class="mt-5 flex items-center justify-center gap-2 text-sm">
         <button
-          class="rounded-lg border border-[#e5e7eb] px-3 py-1 text-xs text-[#6b7280] disabled:opacity-50 hover:bg-[#f3f4f6]"
+          class="rounded-xl border border-[#e5e7eb] px-3.5 py-1.5 text-xs text-[#6b7280] transition-all duration-200 hover:bg-[#f3f4f6] active:scale-[0.98] disabled:opacity-50"
           :disabled="currentPage === 1"
           type="button"
           @click="gotoPage(currentPage - 1)"
@@ -432,7 +432,7 @@ onMounted(() => {
         </button>
         <span class="text-xs tabular-nums text-[#9ca3af]">{{ currentPage }} / {{ totalPages }}</span>
         <button
-          class="rounded-lg border border-[#e5e7eb] px-3 py-1 text-xs text-[#6b7280] disabled:opacity-50 hover:bg-[#f3f4f6]"
+          class="rounded-xl border border-[#e5e7eb] px-3.5 py-1.5 text-xs text-[#6b7280] transition-all duration-200 hover:bg-[#f3f4f6] active:scale-[0.98] disabled:opacity-50"
           :disabled="currentPage === totalPages"
           type="button"
           @click="gotoPage(currentPage + 1)"
@@ -445,7 +445,7 @@ onMounted(() => {
     <Transition name="dialog-fade" appear>
       <div
         v-if="selected || detailLoading"
-        class="fixed inset-0 z-[1000] flex items-center justify-center bg-black/40"
+        class="fixed inset-0 z-[1000] flex items-center justify-center bg-black/40 backdrop-blur-sm"
         @click.self="closeDetail"
       >
         <div class="modal-card flex h-[640px] w-[760px] max-w-[95vw] flex-col rounded-2xl bg-white shadow-xl">
@@ -460,7 +460,7 @@ onMounted(() => {
               </span>
             </div>
             <button
-              class="flex h-8 w-8 items-center justify-center rounded-lg text-[#6b7280] hover:bg-[#e5e7eb] hover:text-[#1f2937]"
+              class="flex h-8 w-8 items-center justify-center rounded-full text-[#6b7280] transition-all duration-200 active:scale-90 hover:bg-[#e5e7eb] hover:text-[#1f2937]"
               type="button"
               @click="closeDetail"
             >
@@ -499,7 +499,7 @@ onMounted(() => {
               <div class="flex items-center justify-between">
                 <button
                   v-if="isAuthor"
-                  class="rounded-lg bg-[#b91c1c] hover:bg-[#991b1b] text-white px-3.5 py-1.5 text-sm font-medium transition disabled:opacity-50"
+                  class="rounded-xl bg-[#b91c1c] hover:bg-[#991b1b] active:scale-[0.98] text-white px-4 py-2 text-sm font-semibold transition-all duration-200 disabled:opacity-50"
                   :disabled="deleting"
                   type="button"
                   @click="doDelete"
@@ -510,7 +510,7 @@ onMounted(() => {
                 <div class="flex items-center gap-2">
                   <select
                     v-model="selectedProjectId"
-                    class="h-9 rounded-lg bg-white px-3 text-sm text-[#374151] outline-none shadow-sm focus:ring-2 focus:ring-[#1f2937]/20"
+                    class="h-9 max-w-[160px] rounded-xl bg-white px-3 text-sm text-[#374151] outline-none shadow-sm focus:ring-2 focus:ring-[#1f2937]/20"
                   >
                     <option value="">选择项目</option>
                     <option v-for="project in projects" :key="project.pid" :value="project.pid">
@@ -518,7 +518,7 @@ onMounted(() => {
                     </option>
                   </select>
                   <button
-                    class="h-9 rounded-lg bg-[#f3f4f6] px-4 text-sm text-[#374151] font-medium transition hover:bg-[#e5e7eb] disabled:cursor-not-allowed disabled:opacity-50"
+                    class="h-9 rounded-xl bg-[#f3f4f6] px-4 text-sm text-[#374151] font-semibold transition-all duration-200 hover:bg-[#e5e7eb] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 shadow-sm"
                     :disabled="installingProject || !selectedProjectId"
                     type="button"
                     @click="doInstallProject"
@@ -526,7 +526,7 @@ onMounted(() => {
                     {{ installingProject ? '安装中...' : '安装到项目' }}
                   </button>
                   <button
-                    class="h-9 rounded-lg bg-[#1f2937] px-4 text-sm text-white font-medium transition hover:bg-[#111827] disabled:cursor-not-allowed disabled:opacity-50"
+                    class="h-9 rounded-xl bg-[#1f2937] px-4 text-sm text-white font-semibold transition-all duration-200 hover:bg-[#111827] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 shadow-sm"
                     :disabled="installing"
                     type="button"
                     @click="doInstall"

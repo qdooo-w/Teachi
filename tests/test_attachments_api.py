@@ -132,8 +132,10 @@ def test_magic_bytes_mismatch_blocked(isolated_api_env):
     assert "Magic bytes validation failed" in r.json()["detail"]["message"]
 
 
-def test_upload_too_large_blocked(isolated_api_env):
+def test_upload_too_large_blocked(isolated_api_env, monkeypatch):
     client, facade, tmp_path = isolated_api_env
+    monkeypatch.setattr("backend.config.ATTACHMENT_MAX_BYTES", 20 * 1024 * 1024)
+    monkeypatch.setattr("backend.data.ATTACHMENT_MAX_BYTES", 20 * 1024 * 1024)
     token = register_and_login(client, "alice@example.com")
     user = facade.users.get_by_email("alice@example.com")
     user_uuid = user["uuid"]

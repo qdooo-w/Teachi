@@ -122,10 +122,49 @@ const PURIFY_OPTIONS = {
   ],
 } as const
 
+function preprocessMathPipes(src: string): string {
+  if (!src) return ''
+
+  const placeholders: string[] = []
+  let processed = src
+
+  // 1. Extract block code (```...```) to protect its content
+  processed = processed.replace(/(```[\s\S]*?```)/g, (match) => {
+    placeholders.push(match)
+    return `__CODE_BLOCK_PLACEHOLDER_${placeholders.length - 1}__`
+  })
+
+  // 2. Extract inline code (`...`) to protect its content
+  processed = processed.replace(/(`[^`\n]*?`)/g, (match) => {
+    placeholders.push(match)
+    return `__CODE_BLOCK_PLACEHOLDER_${placeholders.length - 1}__`
+  })
+
+  // 3. Replace pipes inside math blocks ($...$ and $$...$$) with LaTeX macros
+  const mathRegex = /(\$\$(?:\\[\s\S]|[^\\])+?\$\$)|(\$(?:\\[^\n]|[^\$\n\\])+\$)/g
+  processed = processed.replace(mathRegex, (match) => {
+    let mathContent = match
+    // Replace double escaped pipes/norm macros with \Vert{}
+    mathContent = mathContent.replace(/\\\|/g, '\\Vert{}')
+    // Replace single pipes with \vert{}
+    mathContent = mathContent.replace(/\|/g, '\\vert{}')
+    return mathContent
+  })
+
+  // 4. Restore extracted code blocks
+  for (let i = placeholders.length - 1; i >= 0; i--) {
+    processed = processed.replace(`__CODE_BLOCK_PLACEHOLDER_${i}__`, placeholders[i])
+  }
+
+  return processed
+}
+
 export function renderMarkdown(src: string): string {
-  const html = md.render(src || '')
+  const preprocessed = preprocessMathPipes(src || '')
+  const html = md.render(preprocessed)
   return DOMPurify.sanitize(html, PURIFY_OPTIONS as unknown as Record<string, unknown>) as string
 }
+
 
 function escapeHtml(raw: string): string {
   return raw

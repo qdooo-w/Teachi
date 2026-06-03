@@ -4,19 +4,31 @@ import { useRoute, useRouter } from 'vue-router'
 import RowMenu from '../components/RowMenu.vue'
 import RenameInline from '../components/RenameInline.vue'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
+import SkillPicker from '../components/SkillPicker.vue'
+import SkillChips from '../components/SkillChips.vue'
 import {
   createSession,
   deleteSession,
   getErrorMessage,
   listSessions,
   renameSession,
+  uploadAttachment,
   type ProjectItem,
   type SessionItem,
 } from '../api'
 import { useProjects } from '../composables/useProjects'
 import { useLayout } from '../composables/useLayout'
-import { readSkill, PROJECT_DESC_SKILL, parseSkillFile } from '../skills'
-import { SUBJECT_DESC_COLLAPSE_LIMIT } from '../config'
+import { useProjectSkills } from '../composables/useProjectSkills'
+import { useUserSkills } from '../composables/useUserSkills'
+import { readSkill, PROJECT_DESC_SKILL, parseSkillFile, type SkillMeta } from '../skills'
+import {
+  SUBJECT_DESC_COLLAPSE_LIMIT,
+  CHAT_ATTACHMENT_MAX_BYTES,
+  CHAT_DRAWER_ENTER_MAX_HEIGHT_MS,
+  CHAT_DRAWER_ENTER_OPACITY_MS,
+  CHAT_DRAWER_LEAVE_MAX_HEIGHT_MS,
+  CHAT_DRAWER_LEAVE_OPACITY_MS,
+} from '../config'
 
 const route = useRoute()
 const router = useRouter()
@@ -37,6 +49,213 @@ const messageInput = ref<HTMLTextAreaElement | null>(null)
 const creatingSession = ref(false)
 const errorMessage = ref('')
 
+// Store the created session ID so if uploads fail, retrying uses the same session
+const createdSessionId = ref<string | null>(null)
+
+// ── Skill 状态与逻辑 ─────────────────────────────────────────────────────────
+const pidOrNull = computed(() => pid.value || null)
+const { skills: projectSkills } = useProjectSkills(pidOrNull)
+const { skills: userSkills, load: loadUserSkills } = useUserSkills()
+
+interface ChatSkillMeta extends SkillMeta {
+  rawName: string
+  kind: 'user' | 'project'
+}
+
+const allSkills = computed<ChatSkillMeta[]>(() => {
+  const pList = projectSkills.value.map((s) => ({
+    ...s,
+    name: `project-${s.name}`,
+    rawName: s.name,
+    display_name: `${s.display_name || s.name} [项目]`,
+    kind: 'project' as const,
+  }))
+  const uList = userSkills.value.map((s) => ({
+    ...s,
+    name: `user-${s.name}`,
+    rawName: s.name,
+    display_name: `${s.display_name || s.name} [个人]`,
+    kind: 'user' as const,
+  }))
+  return [...pList, ...uList]
+})
+
+const selectedSkills = ref<ChatSkillMeta[]>([])
+const showSkillPicker = ref(false)
+
+function toggleSkill(prefixedName: string): void {
+  const skill = allSkills.value.find((s) => s.name === prefixedName)
+  if (!skill) return
+  const idx = selectedSkills.value.findIndex((s) => s.name === prefixedName)
+  if (idx === -1) {
+    selectedSkills.value.push(skill)
+  } else {
+    selectedSkills.value.splice(idx, 1)
+  }
+}
+
+function removeSkill(prefixedName: string): void {
+  selectedSkills.value = selectedSkills.value.filter((s) => s.name !== prefixedName)
+}
+
+function handlePickerToggle(name: string): void {
+  toggleSkill(name)
+  const el = messageInput.value
+  if (el) {
+    const pos = el.selectionStart ?? 0
+    const before = el.value.slice(0, pos)
+    const cleaned = before.replace(/(^|[\s\n])@([a-z0-9-]*)$/, '$1')
+    if (cleaned !== before) {
+      el.value = cleaned + el.value.slice(pos)
+      newSessionDraft.value = el.value
+      el.setSelectionRange(cleaned.length, cleaned.length)
+    }
+  }
+}
+
+function checkAtTrigger(): void {
+  const el = messageInput.value
+  if (!el) return
+  const pos = el.selectionStart ?? 0
+  const before = el.value.slice(0, pos)
+  const match = before.match(/(^|[\s\n])@([a-z0-9-]*)$/)
+  showSkillPicker.value = Boolean(match)
+}
+
+function handleComposerInput(): void {
+  checkAtTrigger()
+}
+
+function handleComposerKeydown(event: KeyboardEvent): void {
+  if (showSkillPicker.value && (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Enter' || event.key === 'Escape')) {
+    return
+  }
+  if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+    event.preventDefault()
+    void handleStartNewSessionFromSubject()
+  }
+}
+
+// ── 附件状态与逻辑 ───────────────────────────────────────────────────────────
+const fileInputRef = ref<HTMLInputElement | null>(null)
+const pendingAttachments = ref<Array<{
+  file: File
+  temp_id: string
+  original_filename: string
+  mime_type: string
+  uploading: boolean
+  preview_url?: string
+}>>([])
+
+const ALLOWED_MIMES = new Set([
+  'image/jpeg', 'image/png', 'image/webp', 'image/gif',
+  'text/plain', 'text/markdown', 'text/csv', 'text/html',
+  'application/json', 'application/pdf',
+])
+
+function triggerFileSelect(): void {
+  fileInputRef.value?.click()
+}
+
+function addPendingFile(file: File): void {
+  const limitMB = CHAT_ATTACHMENT_MAX_BYTES / (1024 * 1024)
+  if (file.size > CHAT_ATTACHMENT_MAX_BYTES) {
+    errorMessage.value = `"${file.name}" 大小超过 ${limitMB}MB 限制`
+    return
+  }
+  const mime = file.type || 'application/octet-stream'
+  if (!ALLOWED_MIMES.has(mime)) {
+    errorMessage.value = `"${file.name}" 格式不支持（支持：图片、文本、JSON、PDF、CSV）`
+    return
+  }
+
+  const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  const preview_url = mime.startsWith('image/') ? URL.createObjectURL(file) : undefined
+  pendingAttachments.value.push({
+    file,
+    temp_id: tempId,
+    original_filename: file.name,
+    mime_type: mime,
+    uploading: false,
+    preview_url,
+  })
+  errorMessage.value = ''
+}
+
+async function handleFileChange(event: Event): Promise<void> {
+  const target = event.target as HTMLInputElement
+  if (!target.files || target.files.length === 0) return
+  const files = Array.from(target.files)
+  target.value = ''
+  await Promise.all(files.map(addPendingFile))
+}
+
+async function handleComposerPaste(event: ClipboardEvent): Promise<void> {
+  const items = event.clipboardData?.items
+  if (!items) return
+  const fileItems = Array.from(items).filter((item) => item.kind === 'file')
+  if (fileItems.length === 0) return
+  event.preventDefault()
+  const files = fileItems.map((item) => item.getAsFile()).filter((f): f is File => f !== null)
+  await Promise.all(files.map(addPendingFile))
+}
+
+async function handleComposerDrop(event: DragEvent): Promise<void> {
+  const files = event.dataTransfer?.files
+  if (!files || files.length === 0) return
+  await Promise.all(Array.from(files).map(addPendingFile))
+}
+
+function removePendingAttachment(att: typeof pendingAttachments.value[0]): void {
+  if (att.preview_url) {
+    URL.revokeObjectURL(att.preview_url)
+  }
+  pendingAttachments.value = pendingAttachments.value.filter((item) => item.temp_id !== att.temp_id)
+}
+
+// ── Drawer 动画 ─────────────────────────────────────────────────────────────
+function onDrawerBeforeEnter(el: Element): void {
+  const target = el as HTMLElement
+  target.style.maxHeight = '0'
+  target.style.opacity = '0'
+}
+
+function onDrawerEnter(el: Element, done: () => void): void {
+  const target = el as HTMLElement
+  requestAnimationFrame(() => {
+    target.style.transition = `max-height ${CHAT_DRAWER_ENTER_MAX_HEIGHT_MS}ms ease, opacity ${CHAT_DRAWER_ENTER_OPACITY_MS}ms ease`
+    target.style.maxHeight = `${target.scrollHeight}px`
+    target.style.opacity = '1'
+    const handler = () => { target.removeEventListener('transitionend', handler); done() }
+    target.addEventListener('transitionend', handler)
+  })
+}
+
+function onDrawerAfterEnter(el: Element): void {
+  const target = el as HTMLElement
+  target.style.maxHeight = ''
+  target.style.transition = ''
+  target.style.opacity = ''
+}
+
+function onDrawerBeforeLeave(el: Element): void {
+  const target = el as HTMLElement
+  target.style.maxHeight = `${target.scrollHeight}px`
+  target.style.opacity = '1'
+}
+
+function onDrawerLeave(el: Element, done: () => void): void {
+  const target = el as HTMLElement
+  requestAnimationFrame(() => {
+    target.style.transition = `max-height ${CHAT_DRAWER_LEAVE_MAX_HEIGHT_MS}ms ease, opacity ${CHAT_DRAWER_LEAVE_OPACITY_MS}ms ease`
+    target.style.maxHeight = '0'
+    target.style.opacity = '0'
+    const handler = () => { target.removeEventListener('transitionend', handler); done() }
+    target.addEventListener('transitionend', handler)
+  })
+}
+
+// ── 创建面板控制 ─────────────────────────────────────────────────────────────
 async function openCreatePanel(): Promise<void> {
   showCreatePanel.value = true
   await nextTick()
@@ -49,6 +268,21 @@ function closeCreatePanel(): void {
   newSessionName.value = ''
   newSessionDraft.value = ''
   errorMessage.value = ''
+
+  // 销毁预览资源
+  for (const att of pendingAttachments.value) {
+    if (att.preview_url) {
+      URL.revokeObjectURL(att.preview_url)
+    }
+  }
+  pendingAttachments.value = []
+  selectedSkills.value = []
+  createdSessionId.value = null
+  showSkillPicker.value = false
+
+  nextTick(() => {
+    if (messageInput.value) messageInput.value.style.height = 'auto'
+  })
 }
 
 // ── 项目简介 ──────────────────────────────────────────────────────────────────
@@ -122,14 +356,57 @@ async function handleStartNewSessionFromSubject(): Promise<void> {
 
   creatingSession.value = true
   errorMessage.value = ''
+
+  let activeSid = createdSessionId.value
   try {
-    const session = await createSession(pid.value, name)
-    sessions.value = [session, ...sessions.value]
+    // 1. 创建会话（支持失败后重试不重复创会话）
+    if (!activeSid) {
+      const session = await createSession(pid.value, name)
+      activeSid = session.sid
+      createdSessionId.value = session.sid
+      sessions.value = [session, ...sessions.value]
+    }
+
+    // 2. 依次串行上传附件
+    const uploadedAttachmentsList: Array<{
+      attachment_id: string
+      temp_id: string
+      original_filename: string
+      mime_type: string
+      preview_url?: string
+    }> = []
+
+    for (const att of pendingAttachments.value) {
+      att.uploading = true
+      try {
+        const result = await uploadAttachment(activeSid, att.file)
+        uploadedAttachmentsList.push({
+          attachment_id: result.attachment_id,
+          temp_id: att.temp_id,
+          original_filename: result.original_filename,
+          mime_type: result.mime_type,
+          preview_url: att.preview_url,
+        })
+        att.uploading = false
+      } catch (err) {
+        att.uploading = false
+        throw err // 抛出异常由外层 catch
+      }
+    }
+
+    // 3. 构建 history state 传递给 ChatView
+    const stateObj = {
+      initialSkills: selectedSkills.value.map((s) => s.name),
+      initialAttachments: uploadedAttachmentsList,
+    }
+
     closeCreatePanel()
+
     await router.push({
       name: 'chat',
-      params: { pid: pid.value, sid: session.sid },
+      params: { pid: pid.value, sid: activeSid },
       query: { initial: text },
+      state: stateObj,
     })
   } catch (error) {
     errorMessage.value = getErrorMessage(error)
@@ -193,7 +470,11 @@ onMounted(async () => {
     await router.replace({ name: 'overview' })
     return
   }
-  await Promise.all([loadSessionsFor(pid.value), loadProjectDesc(pid.value)])
+  await Promise.all([
+    loadSessionsFor(pid.value),
+    loadProjectDesc(pid.value),
+    loadUserSkills(),
+  ])
 })
 
 watch(
@@ -208,6 +489,17 @@ watch(
     await Promise.all([loadSessionsFor(nextPid), loadProjectDesc(nextPid)])
   },
 )
+
+function autosizeMessageInput(): void {
+  const el = messageInput.value
+  if (!el) return
+  el.style.height = 'auto'
+  el.style.height = `${el.scrollHeight}px`
+}
+
+watch(newSessionDraft, () => {
+  nextTick(autosizeMessageInput)
+})
 
 watch(
   () => currentProject.value?.projectname,
@@ -300,7 +592,7 @@ watch(
 
           <!-- 展开态表单内容 -->
           <div class="create-fields">
-            <div class="create-fields-inner">
+            <div class="create-fields-inner flex flex-col">
               <input
                 ref="sessionNameInput"
                 v-model="newSessionName"
@@ -313,35 +605,139 @@ watch(
                 @click.stop
               />
               <div class="mx-2 border-t border-[#f3f4f6]" />
+
+              <!-- Skill Chips -->
+              <SkillChips
+                v-if="selectedSkills.length > 0"
+                :skills="selectedSkills"
+                class="mt-1"
+                @remove="removeSkill"
+                @click.stop
+              />
+
+              <!-- Pending Attachments Previews -->
+              <div v-if="pendingAttachments.length > 0" class="mb-2 mt-1 flex flex-wrap gap-2 px-1" @click.stop>
+                <div
+                  v-for="att in pendingAttachments"
+                  :key="att.temp_id"
+                  class="relative flex items-center gap-1.5 rounded-lg border border-[#e5e7eb] bg-[#f9fafb] px-2 py-1 text-xs text-[#374151]"
+                >
+                  <img
+                    v-if="att.preview_url"
+                    :src="att.preview_url"
+                    class="h-6 w-6 rounded object-cover flex-shrink-0"
+                    alt="Image preview"
+                  />
+                  <svg v-else class="h-3.5 w-3.5 text-[#6b7280]" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                  </svg>
+                  <span class="max-w-[120px] truncate" :title="att.original_filename">{{ att.original_filename }}</span>
+                  <span v-if="att.uploading" class="text-[10px] text-[#9ca3af] animate-pulse">上传中...</span>
+                  <button
+                    v-else
+                    type="button"
+                    class="flex h-4 w-4 items-center justify-center rounded-full text-[#9ca3af] hover:bg-[#e5e7eb] hover:text-[#1f2937]"
+                    @click.stop="removePendingAttachment(att)"
+                  >
+                    <svg class="h-3 w-3" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+
               <textarea
                 ref="messageInput"
                 v-model="newSessionDraft"
                 class="max-h-32 w-full resize-none border-none bg-transparent py-2 text-sm leading-normal text-[#1f2937] outline-none placeholder:text-[#9ca3af]"
-                placeholder="输入第一条消息..."
+                placeholder="输入第一条消息... (支持拖拽/粘贴文件，输入 @ 调用技能)"
                 rows="2"
                 :disabled="creatingSession"
-                @keydown.ctrl.enter.prevent="handleStartNewSessionFromSubject"
-                @keydown.meta.enter.prevent="handleStartNewSessionFromSubject"
-                @keydown.esc.prevent="closeCreatePanel"
+                @keydown="handleComposerKeydown"
+                @input="handleComposerInput"
+                @click="checkAtTrigger"
+                @paste="handleComposerPaste"
+                @dragover.prevent
+                @drop.prevent="handleComposerDrop"
                 @click.stop
               />
-              <div class="flex items-center justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  class="rounded-2xl px-4 py-2 text-sm text-[#6b7280] transition hover:bg-[#f3f4f6]"
-                  :disabled="creatingSession"
-                  @click.stop="closeCreatePanel"
-                >
-                  取消
-                </button>
-                <button
-                  type="button"
-                  class="flex h-9 items-center justify-center gap-1 rounded-2xl border border-transparent bg-[#1f2937] px-5 text-sm text-white transition hover:bg-[#111827] disabled:cursor-not-allowed disabled:border-[#d1d5db] disabled:bg-white disabled:text-[#9ca3af]"
-                  :disabled="!newSessionName.trim() || !newSessionDraft.trim() || creatingSession"
-                  @click.stop="handleStartNewSessionFromSubject"
-                >
-                  发送
-                </button>
+
+              <!-- Skill Picker Drawer -->
+              <Transition
+                name="skill-drawer"
+                @before-enter="onDrawerBeforeEnter"
+                @enter="onDrawerEnter"
+                @after-enter="onDrawerAfterEnter"
+                @before-leave="onDrawerBeforeLeave"
+                @leave="onDrawerLeave"
+              >
+                <SkillPicker
+                  v-if="showSkillPicker"
+                  :skills="allSkills"
+                  :selected="selectedSkills.map((s) => s.name)"
+                  class="my-2"
+                  @toggle="handlePickerToggle"
+                  @close="showSkillPicker = false"
+                  @click.stop
+                />
+              </Transition>
+
+              <div class="flex items-center justify-between pt-2">
+                <div class="flex items-center gap-1">
+                  <!-- 上传附件按钮 (Plus 符号) -->
+                  <button
+                    class="flex h-8 w-8 items-center justify-center rounded-full text-[#6b7280] transition hover:bg-[#f3f4f6] hover:text-[#1f2937] disabled:cursor-not-allowed disabled:opacity-50"
+                    :disabled="creatingSession"
+                    title="上传附件"
+                    type="button"
+                    @click.stop="triggerFileSelect"
+                  >
+                    <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v14m7-7H5" />
+                    </svg>
+                  </button>
+
+                  <input
+                    ref="fileInputRef"
+                    type="file"
+                    class="hidden"
+                    multiple
+                    accept="image/jpeg,image/png,image/webp,image/gif,text/plain,text/markdown,text/csv,application/json,application/pdf"
+                    @change="handleFileChange"
+                  />
+
+                  <!-- 添加技能按钮 (Paperclip 符号) -->
+                  <button
+                    class="flex h-8 w-8 items-center justify-center rounded-full text-[#6b7280] transition hover:bg-[#f3f4f6] hover:text-[#1f2937] disabled:cursor-not-allowed disabled:opacity-50"
+                    :disabled="creatingSession"
+                    title="添加技能"
+                    type="button"
+                    @click.stop="showSkillPicker = !showSkillPicker"
+                  >
+                    <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                    </svg>
+                  </button>
+                </div>
+
+                <div class="flex items-center gap-2">
+                  <button
+                    type="button"
+                    class="rounded-2xl px-4 py-2 text-sm text-[#6b7280] transition hover:bg-[#f3f4f6]"
+                    :disabled="creatingSession"
+                    @click.stop="closeCreatePanel"
+                  >
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    class="flex h-9 items-center justify-center gap-1 rounded-2xl border border-transparent bg-[#1f2937] px-5 text-sm text-white transition hover:bg-[#111827] disabled:cursor-not-allowed disabled:border-[#d1d5db] disabled:bg-white disabled:text-[#9ca3af]"
+                    :disabled="!newSessionName.trim() || !newSessionDraft.trim() || creatingSession"
+                    @click.stop="handleStartNewSessionFromSubject"
+                  >
+                    发送
+                  </button>
+                </div>
               </div>
             </div>
           </div>

@@ -70,13 +70,13 @@ class ProjectListResponse(BaseModel):
 class CreateProjectRequest(BaseModel):
     """创建项目请求"""
 
-    projectname: str = Field(..., min_length=1, max_length=100, description="项目名称")
+    projectname: str = Field(..., min_length=1, max_length=13, description="项目名称")
 
 
 class UpdateProjectRequest(BaseModel):
     """重命名项目请求"""
 
-    projectname: str = Field(..., min_length=1, max_length=100, description="项目新名称")
+    projectname: str = Field(..., min_length=1, max_length=13, description="项目新名称")
 
 
 class SessionItem(BaseModel):

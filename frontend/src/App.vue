@@ -20,6 +20,7 @@ import { useAuth } from './composables/useAuth'
 import { useProjects } from './composables/useProjects'
 import { useLayout } from './composables/useLayout'
 import { useProjectSkills } from './composables/useProjectSkills'
+import { useUserSkills } from './composables/useUserSkills'
 import { PREVIEW_PROJECT_LIMIT } from './config'
 
 // ── 认证（状态 / 行为均来自 composable，模板继续使用同名 ref） ───────────────
@@ -209,11 +210,18 @@ const userSkillSpace = computed<FileSpace | null>(() => {
 // 项目技能列表共享单例：ChatView 也通过它订阅；对话框关闭后 refresh() 一次
 // 所有订阅者都会更新，不再需要 window 事件总线。
 const { refresh: refreshProjectSkills } = useProjectSkills(currentPid)
+const { refresh: refreshUserSkills } = useUserSkills()
 
 async function closeProjectSkillManager(): Promise<void> {
   showProjectSkillManager.value = false
   // 对话框里可能有增删改，刷新缓存让所有订阅方同步
   await refreshProjectSkills()
+}
+
+async function closeUserSkillManager(): Promise<void> {
+  showUserSkillManager.value = false
+  // 对话框里可能有增删改，刷新缓存让所有订阅方同步
+  await refreshUserSkills()
 }
 
 // ── 工具函数 ──────────────────────────────────────────────────────────────────
@@ -643,7 +651,7 @@ onBeforeUnmount(() => {
         v-if="showUserSkillManager && userSkillSpace"
         :space="userSkillSpace"
         title="我的技能（用户级）"
-        @close="showUserSkillManager = false"
+        @close="closeUserSkillManager"
       />
     </Transition>
     <Transition name="dialog-fade" appear>
