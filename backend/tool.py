@@ -376,7 +376,7 @@ async def _generate_description(attachment: dict, db, user_uuid: str) -> str | N
         result = await vision_agent.run(
             [describe_prompt, BinaryContent(data=image_bytes, media_type=mime_type)]
         )
-        description = result.output if hasattr(result, "output") else str(result.data)
+        description = result.output
         logger.info("Successfully generated description using vision assistant model (length: %d chars)", len(description))
     except Exception as e:
         logger.exception("Failed to generate description using vision assistant model for %s: %s", filename_orig, e)

@@ -128,43 +128,79 @@ async def run_loop(ctx: LoopContext, entry: NodeName) -> None:
     current = entry
     logger.info("loop_start action=%s user=%s sid=%s", ctx.action.value, ctx.user_uuid, ctx.sid)
 
-    while True:
-        node_fn = _registry.get(current)#获取当前节点的执行函数实例
-        if node_fn is None:
-            ctx.error = f"Node not registered: {current}"
-            ctx.error_code = "LOOP_CONFIG_ERROR"
-            logger.error("loop_config_error node=%s user=%s sid=%s", current, ctx.user_uuid, ctx.sid)
-            current = NodeName.STREAM_ERROR
-            continue
+    try:
+        while True:
+            node_fn = _registry.get(current)#获取当前节点的执行函数实例
+            if node_fn is None:
+                ctx.error = f"Node not registered: {current}"
+                ctx.error_code = "LOOP_CONFIG_ERROR"
+                logger.error("loop_config_error node=%s user=%s sid=%s", current, ctx.user_uuid, ctx.sid)
+                current = NodeName.STREAM_ERROR
+                continue
 
-        try:
-            output = await node_fn(ctx)
-        except Exception as exc:
-            ctx.error = str(exc)
-            ctx.error_code = "LOOP_EXECUTION_ERROR"
-            logger.exception("loop_execution_error node=%s user=%s sid=%s", current, ctx.user_uuid, ctx.sid)
-            current = NodeName.STREAM_ERROR
-            continue
+            try:
+                output = await node_fn(ctx)
+            except Exception as exc:
+                ctx.error = str(exc)
+                ctx.error_code = "LOOP_EXECUTION_ERROR"
+                logger.exception("loop_execution_error node=%s user=%s sid=%s", current, ctx.user_uuid, ctx.sid)
+                current = NodeName.STREAM_ERROR
+                continue
 
-        # 节点主动跳转（优先级高于图查询）
-        if output.transition:
-            current = NodeName(output.transition)
-            continue
+            # 节点主动跳转（优先级高于图查询）
+            if output.transition:
+                current = NodeName(output.transition)
+                continue
 
-        # 查图: 取满足条件的候选边
-        candidates = _graph.next_nodes(current, ctx)
-        if not candidates:
-            logger.info(
-                "loop_end action=%s user=%s sid=%s error_code=%s",
-                ctx.action.value,
-                ctx.user_uuid,
-                ctx.sid,
-                ctx.error_code,
-            )
-            break  # 无候选，自然终止
+            # 查图: 取满足条件的候选边
+            candidates = _graph.next_nodes(current, ctx)
+            if not candidates:
+                logger.info(
+                    "loop_end action=%s user=%s sid=%s error_code=%s",
+                    ctx.action.value,
+                    ctx.user_uuid,
+                    ctx.sid,
+                    ctx.error_code,
+                )
+                break  # 无候选，自然终止
 
-        # 路由: 当前取第一条候选（后期替换为路由 Agent）
-        current = await _graph.route(ctx, candidates)
+            # 路由: 当前取第一条候选（后期替换为路由 Agent）
+            current = await _graph.route(ctx, candidates)
+    finally:
+        # 收底落库：如果未曾保存，且有新产生的新消息
+        if ctx.action in (ActionKind.SEND, ActionKind.REGENERATE) and not getattr(ctx, "saved", False):
+            new_messages = [m for m in ctx.messages if m not in ctx.history_messages]
+            if new_messages:
+                logger.info("loop_emergency_save action=%s user=%s sid=%s", ctx.action.value, ctx.user_uuid, ctx.sid)
+                db = ctx.db
+                if ctx.action == ActionKind.REGENERATE and ctx.anchor_msg_id:
+                    db.messages.bump_versions_for_anchor(anchor_msg_id=ctx.anchor_msg_id)
+                    anchor_for_save: str | None = ctx.anchor_msg_id
+                else:
+                    anchor_for_save = None
+
+                try:
+                    response_msg_id, anchor_msg_id = db.messages.save_agent_messages(
+                        sid=ctx.sid,
+                        user_uuid=ctx.user_uuid,
+                        new_messages=new_messages,
+                        is_final_turn=True,
+                        anchor_msg_id=anchor_for_save,
+                    )
+                    ctx.response_msg_id = response_msg_id
+                    if ctx.action == ActionKind.SEND:
+                        ctx.anchor_msg_id = anchor_msg_id
+
+                    if ctx.attachment_ids and ctx.anchor_msg_id:
+                        db.attachments.bind_anchor(
+                            attachment_ids=ctx.attachment_ids,
+                            anchor_msg_id=ctx.anchor_msg_id,
+                            user_uuid=ctx.user_uuid,
+                        )
+                    ctx.saved = True
+                    db.sessions.touch_timestamp(sid=ctx.sid)
+                except Exception as e:
+                    logger.exception("emergency_save_failed error=%s", str(e))
 
 
 # ── SSE 流式响应 ──

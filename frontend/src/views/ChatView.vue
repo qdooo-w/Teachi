@@ -64,6 +64,10 @@ const streaming = ref(false)
 const toolStatus = ref('')
 const draft = ref('')
 const messages = ref<DisplayMessage[]>([])
+const PAGE_LIMIT = 20
+const hasMore = ref(true)
+const loadingMore = ref(false)
+let currentOffset = 0
 const chatContainer = ref<HTMLElement | null>(null)
 const currentAbort = ref<AbortController | null>(null)
 const stickToBottom = ref(true)
@@ -186,12 +190,13 @@ const pendingAttachments = ref<Array<{
 const sessionAttachments = ref<AttachmentItem[]>([])
 const attachmentUrls = ref<Record<string, string>>({})
 
-async function loadAttachmentUrls(): Promise<void> {
+async function loadAttachmentUrls(targetAttachments?: AttachmentItem[]): Promise<void> {
   if (!currentSession.value) return
   const sidVal = currentSession.value.sid
   const activeImageIds = new Set<string>()
+  const atts = targetAttachments || sessionAttachments.value
 
-  const promises = sessionAttachments.value
+  const promises = atts
     .filter((att) => att.mime_type.startsWith('image/'))
     .map(async (att) => {
       activeImageIds.add(att.attachment_id)
@@ -365,32 +370,119 @@ function isChatAtBottom(): boolean {
 
 function handleChatScroll(): void {
   stickToBottom.value = isChatAtBottom()
+  
+  const container = chatContainer.value
+  if (container && container.scrollTop <= 15) {
+    void loadMoreMessages()
+  }
+}
+
+function handleImageLoad(): void {
+  if (stickToBottom.value) {
+    scrollToBottom()
+  }
+}
+
+async function loadMoreMessages(): Promise<void> {
+  if (loadingMore.value || !hasMore.value || streaming.value || !currentSession.value) return
+
+  const container = chatContainer.value
+  if (!container) return
+
+  loadingMore.value = true
+  const previousScrollHeight = container.scrollHeight
+  const previousScrollTop = container.scrollTop
+
+  try {
+    const nextOffset = currentOffset + PAGE_LIMIT
+    const newMsgs = await listDisplayMessages(currentSession.value.sid, PAGE_LIMIT, nextOffset)
+    
+    if (newMsgs.length < PAGE_LIMIT) {
+      hasMore.value = false
+    }
+
+    if (newMsgs.length > 0) {
+      // 头部拼接
+      messages.value = [...newMsgs, ...messages.value]
+      currentOffset = nextOffset
+
+      // 异步刷新版本地图
+      await refreshVersionMap()
+
+      // 保持滚动视口相对位置
+      await nextTick()
+      const heightDifference = container.scrollHeight - previousScrollHeight
+      container.scrollTop = previousScrollTop + heightDifference
+    }
+  } catch (error) {
+    console.error('Failed to load more messages:', error)
+  } finally {
+    loadingMore.value = false
+  }
 }
 
 function handleVisualViewportResize(): void {
   scrollToBottom()
 }
 
-async function loadMessages(): Promise<void> {
+async function loadMessages(init = false): Promise<void> {
   if (!currentSession.value) return
+
+  if (init) {
+    currentOffset = 0
+    hasMore.value = true
+  }
+
+  const fetchLimit = init ? PAGE_LIMIT : Math.max(messages.value.length, PAGE_LIMIT)
   const [msgs, atts] = await Promise.all([
-    listDisplayMessages(currentSession.value.sid),
+    listDisplayMessages(currentSession.value.sid, fetchLimit, 0),
     listAttachments(currentSession.value.sid),
   ])
+
+  if (init && msgs.length < PAGE_LIMIT) {
+    hasMore.value = false
+  }
+
+  // 关键：在更新响应式数据前，先预加载消息的所有版本信息和图片的 Blob URL。
+  // 这样做能在单次 Tick 内把完整的 DOM（包括正确的图片地址与版本下拉框）渲染出来，
+  // 彻底避免先渲染出不完整 DOM 占位，导致滚动高度变化而产生的“卡顿跳动”感。
+  await Promise.all([
+    refreshVersionMap(msgs),
+    loadAttachmentUrls(atts),
+  ])
+
   messages.value = msgs
   sessionAttachments.value = atts
-  await refreshVersionMap()
-  await loadAttachmentUrls()
+
+  try {
+    const cacheKey = `chat_cache_${currentSession.value.sid}`
+    localStorage.setItem(
+      cacheKey,
+      JSON.stringify({
+        messages: msgs,
+        attachments: atts,
+        timestamp: Date.now(),
+      })
+    )
+  } catch (e) {
+    console.warn('Failed to save chat cache:', e)
+  }
+
   // 不强制贴底：仅当用户当前停留在底部（stickToBottom）时才跟随到底部。
   // 首次打开会话时 stickToBottom 默认为 true，故首屏仍落在底部；
   // 之后重新拉取（版本切换 / 重放 / 删除回合等）若用户正在上方阅读则不打断。
-  scrollToBottom()
+  if (init) {
+    scrollToBottom(true)
+  } else {
+    scrollToBottom()
+  }
 }
 
-async function refreshVersionMap(): Promise<void> {
+async function refreshVersionMap(targetMessages?: DisplayMessage[]): Promise<void> {
+  const msgs = targetMessages || messages.value
   // 收集 messages 中出现的所有 anchor，逐个拉取版本快照
   const anchors = new Set<string>()
-  for (const m of messages.value) {
+  for (const m of msgs) {
     if (m.anchor_msg_id) anchors.add(m.anchor_msg_id)
   }
   const next: Record<string, MessageVersionItem[]> = {}
@@ -487,13 +579,15 @@ async function regenerateMessage(message: DisplayMessage, newPrompt = ''): Promi
 
     if (done.error) {
       errorMessage.value = done.error_code ? `${done.error_code}: ${done.error}` : done.error
+      await loadMessages(false)
       return
     }
 
-    await loadMessages()
+    await loadMessages(false)
   } catch (error) {
     if (targetAssistant) targetAssistant.pending = false
     if (!isAbortError(error)) errorMessage.value = getErrorMessage(error)
+    await loadMessages(false)
   } finally {
     streaming.value = false
     toolStatus.value = ''
@@ -540,7 +634,7 @@ async function handleDeleteTurnConfirm(): Promise<void> {
     deleteDialogOpen.value = false
     deleteDialogAnchor.value = null
     delete displayedPosByAnchor.value[anchor]
-    await loadMessages()
+    await loadMessages(true)
   } catch (error) {
     deleteDialogError.value = getErrorMessage(error)
   } finally {
@@ -689,11 +783,12 @@ async function sendMessage(): Promise<void> {
           messages.value.find((message) => message.id === assistantId)?.content || '生成失败。',
       })
       errorMessage.value = done.error_code ? `${done.error_code}: ${done.error}` : done.error
+      await loadMessages(false)
       return
     }
 
     if (done.msg_id) updateMessage(assistantId, { id: done.msg_id })
-    await loadMessages()
+    await loadMessages(false)
   } catch (error) {
     updateMessage(assistantId, {
       pending: false,
@@ -702,6 +797,7 @@ async function sendMessage(): Promise<void> {
         : messages.value.find((message) => message.id === assistantId)?.content || '生成失败。',
     })
     if (!isAbortError(error)) errorMessage.value = getErrorMessage(error)
+    await loadMessages(false)
   } finally {
     streaming.value = false
     toolStatus.value = ''
@@ -917,9 +1013,28 @@ async function validateAndLoad(): Promise<void> {
   }
   currentSession.value = match
 
+  // 尝试从本地缓存恢复历史数据，快速显示首屏，避免白屏卡顿
+  try {
+    const cacheKey = `chat_cache_${sid.value}`
+    const cachedData = localStorage.getItem(cacheKey)
+    if (cachedData) {
+      const parsed = JSON.parse(cachedData)
+      if (parsed && Array.isArray(parsed.messages) && Array.isArray(parsed.attachments)) {
+        messages.value = parsed.messages
+        sessionAttachments.value = parsed.attachments
+        // 异步加载缓存图片的 Blob URL，使用户能够瞬间看到图片而无卡顿
+        void loadAttachmentUrls()
+        // 瞬间定位到底部，避免首屏第一条消息跳动
+        scrollToBottom(true)
+      }
+    }
+  } catch (e) {
+    console.warn('Failed to restore chat cache:', e)
+  }
+
   // 阶段 3：加载消息、项目技能与用户技能。失败不离开视图，只在顶部显示错误，用户可手动重试。
   try {
-    await loadMessages()
+    await loadMessages(true)
     await loadUserSkills()
   } catch (error) {
     errorMessage.value = getErrorMessage(error)
@@ -989,13 +1104,9 @@ watch(
 <template>
   <div class="absolute inset-0">
     <!-- 消息滚动区铺满整个区域，消息可滚动到浮动 composer 之下（composer 叠在其上层） -->
-    <div ref="chatContainer" class="absolute inset-0 overflow-y-auto px-4 py-5 md:px-6" @scroll.passive="handleChatScroll">
+    <div ref="chatContainer" class="absolute inset-0 overflow-y-auto px-4 py-5 md:px-6" @scroll.passive="handleChatScroll" @load.capture="handleImageLoad">
       <!-- pb-40 预留空间，使最后一条消息可滚动至浮动 composer 上方而不被永久遮挡 -->
       <div class="mx-auto flex max-w-3xl flex-col gap-5 pb-40">
-        <div v-if="messages.length === 0" class="mt-16 rounded-lg border border-dashed border-[#d1d5db] bg-white px-4 py-8 text-center text-sm text-[#6b7280]">
-          还没有消息。
-        </div>
-
         <div v-for="message in messages" :key="message.id" class="flex w-full flex-col">
           <div v-if="message.role === 'user'" class="group flex justify-end">
             <div class="flex max-w-[85%] flex-col items-end gap-1.5">

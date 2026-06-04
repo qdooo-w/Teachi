@@ -444,29 +444,14 @@ class MessagesFacade(_DataBase):
             rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
-    def list_by_session_page(self, sid: str, limit: int = 20, offset: int = 0) -> list[dict]:
-        with self._cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT m.msg_id, m.sid, m.kind, m.raw_json, m.timestamp, m.anchor_msg_id, m.version, m.created_at
-                FROM messages AS m
-                LEFT JOIN messages AS a ON m.anchor_msg_id = a.msg_id
-                WHERE m.sid = ?
-                ORDER BY COALESCE(a.timestamp, m.timestamp) ASC, m.timestamp ASC
-                LIMIT ? OFFSET ?
-                """,
-                (sid, limit, offset),
-            )
-            rows = cursor.fetchall()
-        return [dict(row) for row in rows]
-
-    def list_by_session_page_for_user(
+    def list_latest_by_session_page_for_user(
         self,
         sid: str,
         user_uuid: str,
         limit: int = 20,
         offset: int = 0,
     ) -> list[dict]:
+        """倒序加载会话消息分页（从最新往最旧，内部翻转回升序返回）。"""
         with self._cursor() as cursor:
             cursor.execute(
                 """
@@ -476,13 +461,16 @@ class MessagesFacade(_DataBase):
                 JOIN projects AS p ON s.pid = p.pid
                 LEFT JOIN messages AS a ON m.anchor_msg_id = a.msg_id
                 WHERE m.sid = ? AND p.user_uuid = ?
-                ORDER BY COALESCE(a.timestamp, m.timestamp) ASC, m.timestamp ASC
+                ORDER BY COALESCE(a.timestamp, m.timestamp) DESC, m.timestamp DESC
                 LIMIT ? OFFSET ?
                 """,
                 (sid, user_uuid, limit, offset),
             )
             rows = cursor.fetchall()
-        return [dict(row) for row in rows]
+        res = [dict(row) for row in rows]
+        res.reverse()
+        return res
+
 
     def count_by_session(self, sid: str) -> int:
         with self._cursor() as cursor:

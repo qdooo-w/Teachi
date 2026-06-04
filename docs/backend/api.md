@@ -608,7 +608,7 @@ FastAPI 和后端当前可能返回两类错误体：
 
 ### GET `/sessions/{sid}/messages`
 
-意义：获取当前用户某个会话下已经保存的消息列表。
+意义：查询会话的分页消息（按需倒序分页加载）。
 
 认证：需要 `Authorization: Bearer <access_token>`。
 
@@ -618,6 +618,13 @@ FastAPI 和后端当前可能返回两类错误体：
 |---|---|---|---|
 | `sid` | string | 是 | 会话 ID |
 
+查询参数：
+
+| 名称 | 类型 | 必填 | 默认值 | 说明 |
+|---|---|---|---|---|
+| `limit` | integer | 否 | 20 | 限制返回的最大消息条数，必须大于等于 1。|
+| `offset` | integer | 否 | 0 | 偏移量（跳过消息条数），必须大于等于 0。|
+
 请求体：无。
 
 成功返回：`200 OK`
@@ -626,7 +633,7 @@ FastAPI 和后端当前可能返回两类错误体：
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `messages` | `MessageItem[]` | 消息列表，按 `timestamp` 升序排列；返回该会话下所有消息（包含全部 `version`），前端按 `(anchor_msg_id, version=0)` 取出活跃链；按 `anchor_msg_id` 分组可拿到各回合的全部版本 |
+| `messages` | `MessageItem[]` | 消息列表，从最新的消息开始倒序分页拉取，并在返回时转换为时间升序排列；前端按 `(anchor_msg_id, version=0)` 取出活跃链；按 `anchor_msg_id` 分组可拿到各回合的全部版本 |
 
 错误：
 

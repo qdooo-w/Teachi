@@ -17,7 +17,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile, Query
 from pydantic import BaseModel, Field
 
 from backend.auth import get_current_user
@@ -114,7 +114,7 @@ class MessageItem(BaseModel):
     raw_json: str
     timestamp: float
     created_at: float
-    anchor_msg_id: str | None = None
+    anchor_msg_id: str | None = None# 用于标识同一回合的消息，便于版本管理
     version: int = 0
 
 
@@ -391,10 +391,12 @@ def delete_session(
 @router.get("/sessions/{sid}/messages", response_model=MessageListResponse)
 def list_session_messages(
     sid: str,
+    limit: int = Query(default=20, ge=1),
+    offset: int = Query(default=0, ge=0),
     current_user: dict[str, Any] = Depends(get_current_user),
     db: DatabaseFacade = Depends(get_db),
 ) -> MessageListResponse:
-    """查询会话的所有消息"""
+    """查询会话的分页消息（按需加载）"""
     user_uuid = current_user.get("uuid")
     if not isinstance(user_uuid, str):
         raise HTTPException(
@@ -409,7 +411,10 @@ def list_session_messages(
             detail={"code": "RESOURCE_NOT_FOUND", "message": "Session not found"},
         )
 
-    messages = db.messages.list_by_session_for_user(sid=sid, user_uuid=user_uuid)
+    messages = db.messages.list_latest_by_session_page_for_user(
+        sid=sid, user_uuid=user_uuid, limit=limit, offset=offset
+    )
+
     return MessageListResponse(
         messages=[
             MessageItem(
