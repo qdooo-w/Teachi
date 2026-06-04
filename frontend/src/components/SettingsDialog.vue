@@ -14,6 +14,7 @@ import {
   deleteModelConfig,
   testConnectionWithParams,
   testConnectionWithConfig,
+  fetchModels,
   getAccountInfo,
   updateUsername,
   changePassword,
@@ -40,6 +41,12 @@ const loading = ref(false)
 const saving = ref(false)
 const deleting = ref(false)
 const testing = ref(false)
+const fetchingModels = ref(false)
+const availableModels = ref<string[]>([])
+const showModelDropdown = ref(false)
+const modelDropdownIndex = ref(-1)
+const modelDropdownEl = ref<HTMLElement | null>(null)
+const modelListCache = ref<Map<string, string[]>>(new Map())
 const errorMsg = ref('')
 const testResult = ref<TestConnectionResponse | null>(null)
 const editingId = ref<string | null>(null)
@@ -177,6 +184,89 @@ async function testConnection(): Promise<void> {
   }
   finally { testing.value = false }
 }
+
+async function fetchModelList(): Promise<void> {
+  const apiKey = form.value.api_key
+  const baseUrl = form.value.base_url
+  if (!apiKey || apiKey.startsWith('*')) {
+    errorMsg.value = '请先填写 API Key'
+    return
+  }
+  if (!baseUrl) {
+    errorMsg.value = '请先填写 Base URL'
+    return
+  }
+
+  const cacheKey = `${apiKey}|${baseUrl}`
+  if (modelListCache.value.has(cacheKey)) {
+    availableModels.value = modelListCache.value.get(cacheKey)!
+    showModelDropdown.value = true
+    return
+  }
+
+  fetchingModels.value = true; errorMsg.value = ''
+  try {
+    const result = await fetchModels({ api_key: apiKey, base_url: baseUrl })
+    if (result.success) {
+      if (result.models.length === 0) {
+        errorMsg.value = '该提供商返回了空的模型列表'
+      } else {
+        availableModels.value = result.models
+        modelListCache.value.set(cacheKey, result.models)
+        showModelDropdown.value = true
+      }
+    } else {
+      errorMsg.value = result.message || '获取模型列表失败'
+    }
+  } catch (e) {
+    errorMsg.value = getErrorMessage(e)
+  } finally { fetchingModels.value = false }
+}
+
+function selectModel(name: string): void {
+  form.value.model_name = name
+  showModelDropdown.value = false
+}
+
+function handleModelDropdownKeydown(e: KeyboardEvent): void {
+  if (!showModelDropdown.value || availableModels.value.length === 0) return
+  if (e.key === 'ArrowDown') {
+    e.preventDefault()
+    modelDropdownIndex.value = Math.min(modelDropdownIndex.value + 1, availableModels.value.length - 1)
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault()
+    modelDropdownIndex.value = Math.max(modelDropdownIndex.value - 1, 0)
+  } else if (e.key === 'Enter' && modelDropdownIndex.value >= 0) {
+    e.preventDefault()
+    selectModel(availableModels.value[modelDropdownIndex.value])
+  } else if (e.key === 'Escape') {
+    showModelDropdown.value = false
+  }
+}
+
+function handleModelDropdownMousedown(e: MouseEvent): void {
+  if (modelDropdownEl.value && !modelDropdownEl.value.contains(e.target as Node)) {
+    showModelDropdown.value = false
+  }
+}
+
+watch(showModelDropdown, (open) => {
+  if (open) {
+    document.addEventListener('mousedown', handleModelDropdownMousedown, true)
+  } else {
+    document.removeEventListener('mousedown', handleModelDropdownMousedown, true)
+    modelDropdownIndex.value = -1
+  }
+})
+
+watch(
+  () => [form.value.api_key, form.value.base_url],
+  () => {
+    if (isInitializing.value) return
+    availableModels.value = []
+    showModelDropdown.value = false
+  }
+)
 
 const accountInfo = ref<AccountInfo | null>(null)
 const accountLoading = ref(false)
@@ -336,6 +426,16 @@ onMounted(() => { loadConfigs(); loadAccountInfo(); loadPreferences() })
                     <span class="text-sm font-medium text-[#374151]">模型名称</span>
                     <!-- 视觉模型帮助提示（trigger + body Teleport，不受 overflow 裁剪） -->
                     <span ref="visionTooltipTrigger" class="flex h-4 w-4 cursor-help items-center justify-center rounded-full bg-[#e5e7eb] text-[10px] font-bold text-[#6b7280]" @mouseenter="showVisionTooltipFn" @mouseleave="hideVisionTooltipFn">?</span>
+                    <!-- 获取模型列表按钮 -->
+                    <button
+                      type="button"
+                      class="flex items-center gap-1 text-[11px] text-[#6b7280] hover:text-[#1f2937] disabled:cursor-not-allowed disabled:text-[#d1d5db]"
+                      :disabled="fetchingModels || !form.api_key || form.api_key.startsWith('*') || !form.base_url"
+                      @click="fetchModelList"
+                    >
+                      <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                      {{ fetchingModels ? '获取中...' : '获取列表' }}
+                    </button>
                     <!-- 视觉模型开关（摇杆） -->
                     <label class="ml-auto flex cursor-pointer items-center gap-2 select-none" title="开启后，此配置可作为视觉模型用于图片理解">
                       <span class="text-[11px] text-[#9ca3af]">视觉</span>
@@ -345,7 +445,27 @@ onMounted(() => { loadConfigs(); loadAccountInfo(); loadPreferences() })
                       <input v-model="form.supports_vision" type="checkbox" class="sr-only" />
                     </label>
                   </div>
-                  <input v-model="form.model_name" class="h-10 w-full rounded-xl bg-[#f3f4f6] px-3 text-sm outline-none transition focus:bg-[#e5e7eb] focus:ring-2 focus:ring-[#1f2937]/20" placeholder="gpt-4o" />
+                  <div ref="modelDropdownEl" class="relative">
+                    <input v-model="form.model_name" class="h-10 w-full rounded-xl bg-[#f3f4f6] px-3 text-sm outline-none transition focus:bg-[#e5e7eb] focus:ring-2 focus:ring-[#1f2937]/20" placeholder="gpt-4o" @keydown="handleModelDropdownKeydown" @focus="() => { if (availableModels.length > 0) showModelDropdown = true }" />
+                    <div
+                      v-if="showModelDropdown && availableModels.length > 0"
+                      class="absolute left-0 right-0 top-full z-20 mt-1 max-h-48 overflow-y-auto rounded-xl border border-[#e5e7eb] bg-white py-1 shadow-lg"
+                    >
+                      <button
+                        v-for="(name, i) in availableModels"
+                        :key="name"
+                        type="button"
+                        :class="[
+                          'flex w-full items-center px-3 py-2 text-left text-sm transition-colors',
+                          i === modelDropdownIndex ? 'bg-[#f3f4f6] text-[#1f2937]' : 'text-[#374151] hover:bg-[#f9fafb]',
+                        ]"
+                        @click="selectModel(name)"
+                        @mouseenter="modelDropdownIndex = i"
+                      >
+                        {{ name }}
+                      </button>
+                    </div>
+                  </div>
                 </label>
                 <label class="block">
                   <span class="mb-1 block text-sm font-medium text-[#374151]">自定义指令</span>

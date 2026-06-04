@@ -13,6 +13,8 @@ from urllib.parse import urlparse
 import ipaddress
 import logging
 
+from openai import AuthenticationError, NotFoundError, APIConnectionError
+
 from backend.context import ChatDeps
 
 def load_instruction() -> str:
@@ -41,6 +43,9 @@ MODEL_NAME = os.getenv("MODEL_NAME", "")
 
 # 测试连接默认超时时间（秒）
 TEST_CONNECTION_TIMEOUT = 15
+
+# 获取模型列表默认超时时间（秒）
+FETCH_MODELS_TIMEOUT = 10
 
 
 _logger = logging.getLogger(__name__)
@@ -305,3 +310,39 @@ async def test_connection(
         "message": f"连接失败（可能是 API 地址或 API Key 有误，网络超时等）。错误详情：{primary_error}",
         "model": model.model_name,
     }
+
+
+async def fetch_available_models(
+    api_key: str | None = None,
+    base_url: str | None = None,
+) -> dict:
+    """从提供商获取可用模型列表。
+
+    调用 OpenAI 兼容的 /models 端点，返回模型 ID 列表。
+    返回 {"success": bool, "models": list[str], "message": str}。
+    """
+    try:
+        model = GetProvider(api_key=api_key, base_url=base_url, model_name="placeholder")
+        client = model.client
+    except ValueError as e:
+        return {"success": False, "models": [], "message": f"参数校验失败：{e}"}
+    except RuntimeError as e:
+        return {"success": False, "models": [], "message": str(e)}
+
+    try:
+        response = await asyncio.wait_for(
+            client.models.list(),
+            timeout=FETCH_MODELS_TIMEOUT,
+        )
+        model_ids = sorted(m.id for m in response.data)
+        return {"success": True, "models": model_ids, "message": ""}
+    except AuthenticationError:
+        return {"success": False, "models": [], "message": "API Key 无效或无权限访问模型列表"}
+    except NotFoundError:
+        return {"success": False, "models": [], "message": "该提供商不支持模型列表查询（/models 端点不可用）"}
+    except APIConnectionError as e:
+        return {"success": False, "models": [], "message": f"网络连接失败：{e}"}
+    except asyncio.TimeoutError:
+        return {"success": False, "models": [], "message": "获取模型列表超时，请检查网络连接"}
+    except Exception as e:
+        return {"success": False, "models": [], "message": f"获取模型列表失败：{e}"}

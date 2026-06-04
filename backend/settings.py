@@ -115,6 +115,27 @@ class TestConnectionResponse(BaseModel):
     message: str
     model: str | None = None
 
+class FetchModelsRequest(BaseModel):
+    """获取模型列表请求"""
+
+    api_key: str = Field(default="", max_length=500, description="API Key")
+    base_url: str = Field(default="", max_length=500, description="API Base URL")
+
+    @field_validator('base_url')
+    @classmethod
+    def _validate_base_url(cls, v: str | None) -> str | None:
+        from backend.config.model import validate_base_url
+        if v:
+            validate_base_url(v)
+        return v
+
+class FetchModelsResponse(BaseModel):
+    """获取模型列表响应"""
+
+    success: bool
+    models: list[str] = []
+    message: str = ""
+
 # ─── 辅助函数 ──────────────────────────────────────────────────────────────
 
 def _mask_api_key(api_key: str) -> str:
@@ -287,6 +308,20 @@ async def test_connection_with_params(
         supports_vision=payload.supports_vision,
     )
     return TestConnectionResponse(**result)
+
+@router.post("/model-configs/fetch-models", response_model=FetchModelsResponse)
+async def fetch_models(
+    payload: FetchModelsRequest,
+    current_user: dict = Depends(get_current_user),
+) -> FetchModelsResponse:
+    """从提供商获取可用模型列表。"""
+    from backend.config.model import fetch_available_models
+
+    result = await fetch_available_models(
+        api_key=payload.api_key or None,
+        base_url=payload.base_url or None,
+    )
+    return FetchModelsResponse(**result)
 
 @router.post("/model-configs/{config_id}/test-connection", response_model=TestConnectionResponse)
 async def test_connection_with_config(
