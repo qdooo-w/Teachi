@@ -747,6 +747,24 @@ export async function testConnectionWithConfig(configId: string): Promise<TestCo
   })
 }
 
+export interface FetchModelsRequest {
+  api_key?: string
+  base_url?: string
+}
+
+export interface FetchModelsResponse {
+  success: boolean
+  models: string[]
+  message: string
+}
+
+export async function fetchModels(payload: FetchModelsRequest): Promise<FetchModelsResponse> {
+  return request<FetchModelsResponse>('/settings/model-configs/fetch-models', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
 // ── 社区技能广场 ────────────────────────────────────────────────────────────────
 
 export type CommunitySort = 'popular' | 'newest'
