@@ -311,7 +311,6 @@ async def test_connection(
         "model": model.model_name,
     }
 
-
 async def fetch_available_models(
     api_key: str | None = None,
     base_url: str | None = None,

@@ -162,3 +162,123 @@ class TestModelConfigUserInstruction:
         token = _reg(sclient)
         r = sclient.post('/settings/model-configs', headers=auth_headers(token), json={'config_name': 'NoInst'})
         assert r.json()['user_instruction'] == ''
+
+
+class TestFetchModels:
+    """POST /settings/model-configs/fetch-models 端点测试。"""
+
+    def test_unauthenticated(self, sclient):
+        r = sclient.post('/settings/model-configs/fetch-models', json={
+            'api_key': 'sk-test', 'base_url': 'https://api.openai.com/v1',
+        })
+        assert r.status_code == 401
+
+    def test_invalid_base_url_ssrf(self, sclient):
+        token = _reg(sclient)
+        r = sclient.post('/settings/model-configs/fetch-models', headers=auth_headers(token), json={
+            'api_key': 'sk-test', 'base_url': 'http://127.0.0.1/v1',
+        })
+        assert r.status_code == 422
+
+    def test_empty_api_key_returns_failure(self, sclient, monkeypatch):
+        """空 api_key 时 GetProvider 抛出 RuntimeError，端点应返回 success=false。"""
+        token = _reg(sclient)
+        # 确保 env 默认 api_key 也为空
+        monkeypatch.setattr('backend.config.model.MODEL_PROVIDER_API_KEY', '')
+        r = sclient.post('/settings/model-configs/fetch-models', headers=auth_headers(token), json={
+            'api_key': '', 'base_url': 'https://api.openai.com/v1',
+        })
+        assert r.status_code == 200
+        data = r.json()
+        assert data['success'] is False
+        assert 'API key' in data['message'] or 'Missing' in data['message']
+
+    def test_successful_fetch(self, sclient, monkeypatch):
+        """模拟 OpenAI client.models.list() 返回模型列表。"""
+        from unittest.mock import AsyncMock, MagicMock
+
+        mock_model_1 = MagicMock()
+        mock_model_1.id = 'gpt-4o'
+        mock_model_2 = MagicMock()
+        mock_model_2.id = 'gpt-4o-mini'
+
+        mock_response = MagicMock()
+        mock_response.data = [mock_model_1, mock_model_2]
+
+        mock_client = MagicMock()
+        mock_client.models = MagicMock()
+        mock_client.models.list = AsyncMock(return_value=mock_response)
+
+        mock_openai_chat_model = MagicMock()
+        mock_openai_chat_model.client = mock_client
+
+        def mock_get_provider(*, api_key, base_url, model_name):
+            return mock_openai_chat_model
+
+        monkeypatch.setattr('backend.config.model.GetProvider', mock_get_provider)
+
+        token = _reg(sclient)
+        r = sclient.post('/settings/model-configs/fetch-models', headers=auth_headers(token), json={
+            'api_key': 'sk-test', 'base_url': 'https://api.openai.com/v1',
+        })
+        assert r.status_code == 200
+        data = r.json()
+        assert data['success'] is True
+        assert data['models'] == ['gpt-4o', 'gpt-4o-mini']
+        assert data['message'] == ''
+
+    def test_provider_not_support_models_endpoint(self, sclient, monkeypatch):
+        """模拟 NotFoundError（提供商不支持 /models）。"""
+        from openai import NotFoundError
+        from unittest.mock import AsyncMock, MagicMock
+
+        mock_client = MagicMock()
+        mock_client.models = MagicMock()
+        mock_client.models.list = AsyncMock(
+            side_effect=NotFoundError(message='Not found', response=MagicMock(status_code=404), body=None)
+        )
+
+        mock_openai_chat_model = MagicMock()
+        mock_openai_chat_model.client = mock_client
+
+        def mock_get_provider(*, api_key, base_url, model_name):
+            return mock_openai_chat_model
+
+        monkeypatch.setattr('backend.config.model.GetProvider', mock_get_provider)
+
+        token = _reg(sclient)
+        r = sclient.post('/settings/model-configs/fetch-models', headers=auth_headers(token), json={
+            'api_key': 'sk-test', 'base_url': 'https://api.example.com/v1',
+        })
+        assert r.status_code == 200
+        data = r.json()
+        assert data['success'] is False
+        assert '不支持' in data['message']
+
+    def test_invalid_api_key(self, sclient, monkeypatch):
+        """模拟 AuthenticationError（API Key 无效）。"""
+        from openai import AuthenticationError
+        from unittest.mock import AsyncMock, MagicMock
+
+        mock_client = MagicMock()
+        mock_client.models = MagicMock()
+        mock_client.models.list = AsyncMock(
+            side_effect=AuthenticationError(message='Invalid API key', response=MagicMock(status_code=401), body=None)
+        )
+
+        mock_openai_chat_model = MagicMock()
+        mock_openai_chat_model.client = mock_client
+
+        def mock_get_provider(*, api_key, base_url, model_name):
+            return mock_openai_chat_model
+
+        monkeypatch.setattr('backend.config.model.GetProvider', mock_get_provider)
+
+        token = _reg(sclient)
+        r = sclient.post('/settings/model-configs/fetch-models', headers=auth_headers(token), json={
+            'api_key': 'sk-invalid', 'base_url': 'https://api.openai.com/v1',
+        })
+        assert r.status_code == 200
+        data = r.json()
+        assert data['success'] is False
+        assert 'API Key' in data['message']
