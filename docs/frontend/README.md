@@ -140,7 +140,7 @@ main.ts
   - `tool_call` —— 在输入框上方显示「正在调用 XX」
   - `tool_result` —— 清除工具状态
   - `done` —— 携带 `msg_id`（成功）、`anchor_msg_id`（本回合 anchor）或 `error` / `error_code`（失败）
-- 发送后立即乐观 push 一条 `pending: true` 的 assistant 占位气泡，收到 `done` 后再 `loadMessages()` 拉服务端权威版本
+- 发送后立即乐观 push 一条 `pending: true` 的 assistant 占位气泡。流正常结束、流返回 `done.error` 或 `catch` 到异常/取消时，前端均会调用 `loadMessages(false)` 重新同步最新的后端真实消息，避免前后端状态不一致，并保证在出错和取消时能立即拥有 `anchor_msg_id` 以便用户无刷新直接重试。
 - 「停止生成」：调用 `POST /loop/{sid}` 带 `action=stop`，同时 `AbortController.abort()` 关闭前端 SSE。停止后把刚发出去那条 user 文本回填到输入框（仅当输入框为空时），便于用户改一改再发
 - 自动贴底滚动：监听容器 scroll，只有用户停留在底部（阈值 32px）时才自动贴底
 
@@ -213,14 +213,15 @@ type FileSpace =
 4. DOMPurify 兜底：打开 html / svg / mathMl 白名单，放行 KaTeX 的 `eq / eqn / section` 和自定义的 `data-*` 属性
 5. 消息容器里挂 click 代理，把 `[data-copy]` 按钮接上复制 → 「已复制」1.5s 反馈
 6. Mermaid 图表点击放大预览：渲染完成的 Mermaid 图表支持点击打开预览模态框。在预览框中可以对图表进行缩放、重置视图，并支持一键复制 Mermaid 源码。
+7. **公式流式节流渲染优化**：在大模型流式打字接收字符期间（`streaming === true`），对公式与 Markdown 渲染进行了 `150ms` 节流更新控制（通过自定义 `throttle` 闭包函数），大幅度降低了 CPU 重绘开销并消除了公式频繁闪烁卡顿。生成完毕后（`streaming === false`），立刻强制同步无延迟渲染一次，保障最终视觉交互完整。
 
-Mermaid 渲染失败降级为可见的 error 卡片而不是白屏。
+Mermaid 渲染失败降级为可见 of error 卡片而不是白屏。
 
-### 8. 消息历史
+### 8. 消息历史与动态加载
 
-- `GET /sessions/{sid}/messages` 拉原始 PydanticAI `ModelMessage` 序列化数据
-- 前端只渲染 `version === 0` 的条目（活跃版本，历史版本通过版本切换按钮访问）
-- `MessageItem.anchor_msg_id` 是回合 anchor，同一回合内 `user` / `tool_call` / `tool_result` / `assistant` 共享，`DisplayMessage` 也会带上方便后续重放 / 切换 / 删除使用
+- **SWR (Stale-While-Revalidate) 本地缓存**：进入会话时优先从 `localStorage` 中加载缓存好的最近消息并乐观秒开渲染、直接强制滚到底部，解决首屏卡顿白屏和消息跳底。随后后台异步拉取真实 API 并在返回后完成静默覆盖更新并写入缓存。
+- **按需倒序懒加载**：API 接口变更为分页查询 `/sessions/{sid}/messages?limit=20&offset=0`，前端默认仅拉取最新的 20 条，往上滚动到顶部（`scrollTop <= 15px`）且有历史数据时，触发 `loadMoreMessages()` 向上懒加载前一页历史，追加到消息头部。
+- **视口防抖动**：追加新加载的历史消息渲染后，利用 `nextTick` 自动计算新增内容高度，自动调回相对 `scrollTop` 滚动位置，确保用户视口画面不发生任何位移跳动或闪烁。
 - 解析逻辑在 `api.ts#parseMessage`：
   - `kind === 'user'` + `parsed.kind === 'request'` → 取 `user-prompt` 部分
   - `kind === 'assistant' | 'agent_response'` + `parsed.kind === 'response'` → 取 `text` 部分

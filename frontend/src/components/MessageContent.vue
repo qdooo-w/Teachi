@@ -148,12 +148,39 @@ async function enhance(): Promise<void> {
     await renderMermaidInElement(root)
   }
 }
+function throttle<T extends (...args: any[]) => void>(fn: T, delay: number): T {
+  let timer: number | null = null
+  let lastArgs: any[] | null = null
+  return function(this: any, ...args: any[]) {
+    if (timer) {
+      lastArgs = args
+      return
+    }
+    fn.apply(this, args)
+    timer = window.setTimeout(() => {
+      timer = null
+      if (lastArgs) {
+        fn.apply(this, lastArgs)
+        lastArgs = null
+      }
+    }, delay)
+  } as unknown as T
+}
+
+const throttledRenderAndEnhance = throttle(() => {
+  renderNow()
+  void enhance()
+}, 150)
 
 watch(
   () => props.content,
   () => {
-    renderNow()
-    void enhance()
+    if (props.streaming) {
+      throttledRenderAndEnhance()
+    } else {
+      renderNow()
+      void enhance()
+    }
   },
   { immediate: true },
 )
@@ -161,7 +188,10 @@ watch(
 watch(
   () => props.streaming,
   (streaming) => {
-    if (!streaming) void enhance()
+    if (!streaming) {
+      renderNow()
+      void enhance()
+    }
   },
 )
 

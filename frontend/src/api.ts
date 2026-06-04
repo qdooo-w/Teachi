@@ -354,8 +354,18 @@ export async function listRawMessages(sid: string): Promise<MessageItem[]> {
   return response.messages
 }
 
-export async function listDisplayMessages(sid: string): Promise<DisplayMessage[]> {
-  const response = await request<MessageListResponse>(`/sessions/${encodeURIComponent(sid)}/messages`)
+export async function listDisplayMessages(
+  sid: string,
+  limit?: number,
+  offset?: number
+): Promise<DisplayMessage[]> {
+  let url = `/sessions/${encodeURIComponent(sid)}/messages`
+  const params: string[] = []
+  if (limit !== undefined) params.push(`limit=${limit}`)
+  if (offset !== undefined) params.push(`offset=${offset}`)
+  if (params.length > 0) url += `?${params.join('&')}`
+
+  const response = await request<MessageListResponse>(url)
   return response.messages
     .filter((message) => message.version === 0)
     .map(parseMessage)

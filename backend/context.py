@@ -83,6 +83,7 @@ class LoopContext:
     error_code: str | None = None
 
     sse_queue: asyncio.Queue | None = field(default=None, repr=False)
+    saved: bool = False
 
 
 @dataclass

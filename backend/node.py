@@ -501,6 +501,7 @@ async def save_node(ctx: LoopContext) -> NodeOutput:
                 user_uuid=ctx.user_uuid,
             )
 
+    ctx.saved = True
     db.sessions.touch_timestamp(sid=ctx.sid)
     return NodeOutput()
 

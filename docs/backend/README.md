@@ -74,7 +74,7 @@ VALIDATE → LOAD_HISTORY → BUILD_MESSAGES → BUILD_MODEL → CALL_MODEL → 
 
 - **`LoopGraph`**（`context.py`）：声明节点和带条件的边
 - **`LoopContext`**：请求级可变上下文，在节点间流转
-- **`run_loop`**（`loop.py`）：引擎——执行节点、查询图获取下一步、循环
+- **`run_loop`**（`loop.py`）：引擎——执行节点、查询图获取下一步、循环；并在 `finally` 块中实现了紧急落库兜底机制，确保流中断、异常或被取消时已发送的消息不丢失。
 - **SSE 流式**：节点通过 `asyncio.Queue` 推送事件，生成器消费
 - **并发控制**：per-user `asyncio.Lock`，防止同一用户并发生成
 
@@ -128,7 +128,7 @@ VALIDATE → LOAD_HISTORY → BUILD_MESSAGES → BUILD_MODEL → CALL_MODEL → 
 | POST | `/projects/{pid}/sessions` | 创建会话 |
 | PATCH | `/sessions/{sid}` | 重命名会话 |
 | DELETE | `/sessions/{sid}` | 删除会话（级联） |
-| GET | `/sessions/{sid}/messages` | 列出会话消息 |
+| GET | `/sessions/{sid}/messages` | 列出会话分页消息（按需加载） |
 | GET | `/tools/registry` | 列出已注册 AI 工具 |
 | GET | `/messages/{msg_id}/versions` | 获取消息所有版本 |
 | POST | `/messages/{msg_id}/switch-version` | 切换版本组 |
