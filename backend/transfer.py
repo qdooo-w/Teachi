@@ -37,56 +37,15 @@ from backend.skill_parser import SkillFields, SkillParseError, parse_skill_file
 router = APIRouter(tags=["transfer"])
 
 
-class CommunitySkillDetail(BaseModel):
-    id: str
-    owner_uuid: str
-    name: str
-    display_name: str | None = None
-    description: str
-    license: str | None = None
-    compatibility: str | None = None
-    size_bytes: int
-    downloads: int
-    created_at: float
-    updated_at: float
-
-
-def _community_skill_detail(record: dict[str, Any]) -> CommunitySkillDetail:
-    return CommunitySkillDetail(
-        id=str(record["id"]),
-        owner_uuid=str(record["owner_uuid"]),
-        name=str(record["name"]),
-        display_name=record.get("display_name"),
-        description=str(record["description"]),
-        license=record.get("license"),
-        compatibility=record.get("compatibility"),
-        size_bytes=int(record["size_bytes"]),
-        downloads=int(record["downloads"]),
-        created_at=float(record["created_at"]),
-        updated_at=float(record["updated_at"]),
-    )
-
-
-def _community_archive_root() -> Path:
-    root = (BASE_DIR / "archived_skill").resolve()
-    root.mkdir(parents=True, exist_ok=True)
-    return root
-
-
-def _community_archive_rel_path(skill_id: str) -> str:
-    return f"archived_skill/{skill_id}"
-
-
-def _resolve_community_archive_path(archive_path: str) -> Path:
-    root = _community_archive_root()
-    target = (BASE_DIR / archive_path).resolve()
-    if target != root and root not in target.parents:
-        raise FileError("Archived skill path is outside archived_skill directory.")
-    return target
+from backend.community import CommunitySkillSummary, _archive_root, _resolve_archive_path, _to_summary
 
 
 def _directory_size(path: Path) -> int:
     return sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
+
+
+def _community_archive_rel_path(skill_id: str, version: str) -> str:
+    return f"archived_skill/{skill_id}/{version}"
 
 
 def _zip_validation_error(message: str, status_code: int = status.HTTP_422_UNPROCESSABLE_ENTITY) -> None:
@@ -273,7 +232,6 @@ async def _read_limited_zip_body(request: Request) -> bytes:
 
 @router.post(
     "/community/skills/upload",
-    response_model=CommunitySkillDetail,
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(verify_nonce)],
 )
@@ -281,7 +239,7 @@ async def upload_community_skill_zip(
     request: Request,
     current_user: dict[str, Any] = Depends(get_current_user),
     db: DatabaseFacade = Depends(get_db),
-) -> CommunitySkillDetail:
+):
     content_type = (request.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
     if content_type and content_type not in SKILL_ZIP_ALLOWED_CONTENT_TYPES:
         raise HTTPException(
@@ -295,42 +253,58 @@ async def upload_community_skill_zip(
 
     owner_uuid = current_user["uuid"]
     skill_id = str(uuid.uuid4())
-    archive_rel_path = _community_archive_rel_path(skill_id)
-    archive_dir = _resolve_community_archive_path(archive_rel_path)
+    version_id = str(uuid.uuid4())
+    version_str = "1.0.0"
+    archive_rel_path = _community_archive_rel_path(skill_id, version_str)
+    archive_dir = _resolve_archive_path(archive_rel_path) / "skill"
 
     try:
         with zipfile.ZipFile(BytesIO(body)) as zip_file:
             fields, entries = _validate_community_skill_zip(zip_file)
             _extract_community_skill_zip(zip_file, entries, archive_dir)
 
-        record = db.community.create(
+        import json
+        db.community.create_skill(
             skill_id=skill_id,
             owner_uuid=owner_uuid,
             name=fields.name,
             display_name=fields.display_name,
             description=fields.description,
+            admin_uuids=json.dumps([owner_uuid])
+        )
+        readme_path = archive_dir / "README.md"
+        readme_content = readme_path.read_text(encoding="utf-8") if readme_path.is_file() else ""
+        db.community.create_version(
+            version_id=version_id,
+            skill_id=skill_id,
+            version=version_str,
+            readme_md=readme_content,
+            changelog="Uploaded via zip",
+            tags="[]",
             archive_path=archive_rel_path,
             size_bytes=_directory_size(archive_dir),
-            license=fields.license,
-            compatibility=fields.compatibility,
+            source="upload",
+            status="PENDING_OWNER",
+            submitted_by=owner_uuid
         )
+        record = db.community.get_skill(skill_id)
     except HTTPException:
-        if archive_dir.exists():
-            shutil.rmtree(archive_dir, ignore_errors=True)
+        if archive_dir.parent.exists():
+            shutil.rmtree(archive_dir.parent, ignore_errors=True)
         raise
     except (zipfile.BadZipFile, FileError) as e:
-        if archive_dir.exists():
-            shutil.rmtree(archive_dir, ignore_errors=True)
+        if archive_dir.parent.exists():
+            shutil.rmtree(archive_dir.parent, ignore_errors=True)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": "ZIP_VALIDATION_ERROR", "message": str(e)},
         ) from e
     except Exception:
-        if archive_dir.exists():
-            shutil.rmtree(archive_dir, ignore_errors=True)
+        if archive_dir.parent.exists():
+            shutil.rmtree(archive_dir.parent, ignore_errors=True)
         raise
 
-    return _community_skill_detail(record)
+    return _to_summary(record).model_dump()
 
 
 @router.get(

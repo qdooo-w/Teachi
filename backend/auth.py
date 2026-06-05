@@ -43,6 +43,7 @@ class UserRecord(TypedDict):
     username: str
     email: str
     password_hash: str
+    role: str
     created_at: float
 
 
@@ -52,6 +53,7 @@ class SafeUser(TypedDict):
     uuid: str
     username: str
     email: str
+    role: str
     created_at: float
 
 class TokenPayload(TypedDict):
@@ -335,7 +337,7 @@ def get_current_user(user_uuid: str = Depends(get_current_user_uuid), db: Databa
     user = db.users.get_by_uuid(user_uuid)
     user = _ensure_user_record(user)
 
-    return SafeUser(uuid=user["uuid"], username=user["username"], email=user["email"], created_at=user["created_at"])
+    return SafeUser(uuid=user["uuid"], username=user["username"], email=user["email"], role=user["role"], created_at=user["created_at"])
 
 @router.get("/me", response_model=UserOut)
 def read_current_user(current_user: UserRecord = Depends(get_current_user)) -> UserOut:

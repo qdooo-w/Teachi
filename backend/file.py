@@ -156,6 +156,17 @@ class UserFile(FileBase):
         super().__init__(user_path)
 
 
+class LibraryFile(FileBase):
+    """
+    仓库文件子类，限制在 data/{user_uuid}/library/{library_id}。
+    """
+    def __init__(self, library_id: str, user_uuid: str, db_facade):
+        # 验证 user_uuid 是否拥有该 library_id，如果需要的话可以添加
+        # 但这里的限制已经确保路径安全
+        library_path = BASE_DIR / "data" / user_uuid / "library" / library_id
+        super().__init__(library_path)
+
+
 class SessionFile(FileBase):
     """
     会话文件子类，限制在 data/{user_uuid}/{pid}/{sid}/。
