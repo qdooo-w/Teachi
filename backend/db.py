@@ -57,7 +57,7 @@ class UsersFacade(_DataBase):
     def get_by_email(self, email: str) -> dict | None:
         with self._cursor() as cursor:
             cursor.execute(
-                "SELECT uuid, username, email, password_hash, role, created_at FROM users WHERE email = ?",
+                "SELECT uuid, username, email, password_hash, role, self_description, major, head_file, created_at FROM users WHERE email = ?",
                 (email,),
             )
             row = cursor.fetchone()
@@ -66,7 +66,7 @@ class UsersFacade(_DataBase):
     def get_by_uuid(self, user_uuid: str) -> dict | None:
         with self._cursor() as cursor:
             cursor.execute(
-                "SELECT uuid, username, email, password_hash, role, created_at FROM users WHERE uuid = ?",
+                "SELECT uuid, username, email, password_hash, role, self_description, major, head_file, created_at FROM users WHERE uuid = ?",
                 (user_uuid,),
             )
             row = cursor.fetchone()
@@ -96,6 +96,23 @@ class UsersFacade(_DataBase):
             )
             affected = cursor.rowcount
         return affected > 0
+
+    def update_profile(
+        self,
+        user_uuid: str,
+        username: str,
+        self_description: str | None,
+        major: str | None,
+        head_file: str | None,
+    ) -> dict | None:
+        with self._cursor() as cursor:
+            cursor.execute(
+                "UPDATE users SET username = ?, self_description = ?, major = ?, head_file = ? WHERE uuid = ?",
+                (username, self_description, major, head_file, user_uuid),
+            )
+            if cursor.rowcount == 0:
+                return None
+        return self.get_by_uuid(user_uuid)
 
 class ProjectsFacade(_DataBase):
     def create(self, projectname: str, user_uuid: str) -> dict:
@@ -1758,8 +1775,15 @@ class DatabaseFacade:
     def _migrate_to_v2_pre(cursor: sqlite3.Cursor) -> None:
         cursor.execute("PRAGMA table_info(users)")
         user_cols = {r["name"] for r in cursor.fetchall()}
-        if user_cols and "role" not in user_cols:
-            cursor.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
+        if user_cols:
+            if "role" not in user_cols:
+                cursor.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
+            if "self_description" not in user_cols:
+                cursor.execute("ALTER TABLE users ADD COLUMN self_description TEXT")
+            if "major" not in user_cols:
+                cursor.execute("ALTER TABLE users ADD COLUMN major TEXT")
+            if "head_file" not in user_cols:
+                cursor.execute("ALTER TABLE users ADD COLUMN head_file TEXT")
         
         cursor.execute("PRAGMA table_info(community_skills)")
         cs_cols = {r["name"] for r in cursor.fetchall()}
@@ -1822,6 +1846,9 @@ class DatabaseFacade:
                 email TEXT NOT NULL UNIQUE,
                 password_hash TEXT NOT NULL,
                 role TEXT NOT NULL DEFAULT 'user',
+                self_description TEXT,
+                major TEXT,
+                head_file TEXT,
                 created_at REAL NOT NULL
             );
             CREATE TABLE IF NOT EXISTS projects (

@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import SkillManagerDialog from './components/SkillManagerDialog.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
+import UserProfileDialog from './components/UserProfileDialog.vue'
 import RowMenu from './components/RowMenu.vue'
 import RenameInline from './components/RenameInline.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
@@ -12,6 +13,8 @@ import {
   getErrorMessage,
   listSessions,
   renameProject,
+  register,
+  requestPasswordReset,
   type ProjectItem,
   type SessionItem,
 } from './api'
@@ -21,7 +24,7 @@ import { useProjects } from './composables/useProjects'
 import { useLayout } from './composables/useLayout'
 import { useProjectSkills } from './composables/useProjectSkills'
 import { useUserSkills } from './composables/useUserSkills'
-import { PREVIEW_PROJECT_LIMIT } from './config'
+import { PREVIEW_PROJECT_LIMIT, REGISTRATION_FORM_URL, API_BASE_URL } from './config'
 
 // ── 认证（状态 / 行为均来自 composable，模板继续使用同名 ref） ───────────────
 const {
@@ -40,6 +43,48 @@ const {
   setOnTokenReady,
   displayUser: displayUserFn,
 } = useAuth()
+
+async function handleSubmitAuth(): Promise<void> {
+  authError.value = ''
+  if (authMode.value === 'login') {
+    await submitAuth()
+  } else if (authMode.value === 'register') {
+    if (!authForm.email.trim()) {
+      authError.value = '请输入邮箱地址。'
+      return
+    }
+    authSubmitting.value = true
+    try {
+      await register(authForm.email.trim())
+      await router.push({
+        name: 'register-confirm',
+        query: { email: authForm.email.trim() },
+      })
+    } catch (error) {
+      authError.value = getErrorMessage(error)
+    } finally {
+      authSubmitting.value = false
+    }
+  } else {
+    // forgot
+    if (!authForm.email.trim()) {
+      authError.value = '请输入邮箱地址。'
+      return
+    }
+    authSubmitting.value = true
+    try {
+      await requestPasswordReset(authForm.email.trim())
+      await router.push({
+        name: 'register-confirm',
+        query: { email: authForm.email.trim(), is_reset: 'true' },
+      })
+    } catch (error) {
+      authError.value = getErrorMessage(error)
+    } finally {
+      authSubmitting.value = false
+    }
+  }
+}
 
 // ── 路由 / 共享状态 ─────────────────────────────────────────────────────────
 const router = useRouter()
@@ -253,6 +298,13 @@ function updateKeyboardOffset() {
   }
 }
 
+const showUserProfileDialog = ref(false)
+const avatarVersion = ref(0)
+
+function handleAvatarUpdated() {
+  avatarVersion.value++
+}
+
 onMounted(() => {
   setOnTokenReady(async () => {
     preparing.value = true
@@ -265,6 +317,7 @@ onMounted(() => {
   })
   window.addEventListener('learnova-token-change', handleTokenChange)
   window.addEventListener('resize', handleResize)
+  window.addEventListener('learnova-avatar-updated', handleAvatarUpdated)
   if (window.visualViewport) {
     window.visualViewport.addEventListener('resize', updateKeyboardOffset)
     window.visualViewport.addEventListener('scroll', updateKeyboardOffset)
@@ -277,6 +330,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('learnova-token-change', handleTokenChange)
   window.removeEventListener('resize', handleResize)
+  window.removeEventListener('learnova-avatar-updated', handleAvatarUpdated)
   if (window.visualViewport) {
     window.visualViewport.removeEventListener('resize', updateKeyboardOffset)
     window.visualViewport.removeEventListener('scroll', updateKeyboardOffset)
@@ -295,23 +349,32 @@ onBeforeUnmount(() => {
       </div>
     </section>
 
-    <!-- 登录 / 注册 -->
-    <section v-else-if="!isAuthenticated" class="flex h-full items-center justify-center px-4">
+    <!-- 注册确认 / 密码设置（无需登录的特殊路径，直接挂载视图） -->
+    <section v-else-if="!isAuthenticated && (route.name === 'set-password' || route.name === 'register-confirm')" class="flex h-full items-center justify-center px-4">
+      <div class="w-full max-w-[1200px]">
+        <RouterView />
+      </div>
+    </section>
+
+    <!-- 登录 / 注册 / 找回密码 -->
+    <section v-else-if="!isAuthenticated && route.name !== 'set-password' && route.name !== 'register-confirm'" class="flex h-full items-center justify-center px-4">
       <div class="w-full max-w-[420px] rounded-lg border border-[#d1d5db] bg-white p-6 shadow-sm">
         <div class="mb-6">
           <div class="text-2xl font-bold tracking-normal">Learnova</div>
-          <div class="mt-1 text-sm text-[#6b7280]">登录后开始对话</div>
+          <div class="mt-1 text-sm text-[#6b7280]">
+            {{ authMode === 'forgot' ? '重置您的密码' : '登录后开始对话' }}
+          </div>
         </div>
 
-        <form class="space-y-4" @submit.prevent="submitAuth">
-          <div class="grid grid-cols-2 rounded-md border border-[#d1d5db] bg-[#f9fafb] p-1">
+        <form class="space-y-4" @submit.prevent="handleSubmitAuth">
+          <div v-if="authMode !== 'forgot'" class="grid grid-cols-2 rounded-md border border-[#d1d5db] bg-[#f9fafb] p-1">
             <button
               type="button"
               :class="[
                 'h-9 rounded px-3 text-sm font-medium transition-colors',
                 authMode === 'login' ? 'bg-white text-[#111827] shadow-sm' : 'text-[#6b7280] hover:text-[#111827]',
               ]"
-              @click="authMode = 'login'"
+              @click="authMode = 'login'; authError = ''"
             >
               登录
             </button>
@@ -321,41 +384,68 @@ onBeforeUnmount(() => {
                 'h-9 rounded px-3 text-sm font-medium transition-colors',
                 authMode === 'register' ? 'bg-white text-[#111827] shadow-sm' : 'text-[#6b7280] hover:text-[#111827]',
               ]"
-              @click="authMode = 'register'"
+              @click="authMode = 'register'; authError = ''"
             >
               注册
             </button>
           </div>
 
-          <label v-if="authMode === 'register'" class="block">
-            <span class="mb-1 block text-sm font-medium">用户名</span>
-            <input
-              v-model="authForm.username"
-              class="h-11 w-full rounded-md border border-[#d1d5db] bg-white px-3 outline-none transition focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20"
-              autocomplete="username"
-              type="text"
-            />
-          </label>
+          <template v-if="authMode === 'login'">
+            <label class="block">
+              <span class="mb-1 block text-sm font-medium">邮箱</span>
+              <input
+                v-model="authForm.email"
+                class="h-11 w-full rounded-md border border-[#d1d5db] bg-white px-3 outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
+                autocomplete="email"
+                type="email"
+              />
+            </label>
 
-          <label class="block">
-            <span class="mb-1 block text-sm font-medium">邮箱</span>
-            <input
-              v-model="authForm.email"
-              class="h-11 w-full rounded-md border border-[#d1d5db] bg-white px-3 outline-none transition focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20"
-              autocomplete="email"
-              type="email"
-            />
-          </label>
+            <label class="block">
+              <div class="mb-1 flex justify-between items-center">
+                <span class="text-sm font-medium">密码</span>
+                <button
+                  type="button"
+                  class="text-xs text-[#1f6f5b] hover:underline bg-transparent border-none p-0 cursor-pointer"
+                  @click="authMode = 'forgot'; authError = ''"
+                >
+                  忘记密码？
+                </button>
+              </div>
+              <input
+                v-model="authForm.password"
+                class="h-11 w-full rounded-md border border-[#d1d5db] bg-white px-3 outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
+                autocomplete="current-password"
+                type="password"
+              />
+            </label>
+          </template>
 
-          <label class="block">
-            <span class="mb-1 block text-sm font-medium">密码</span>
-            <input
-              v-model="authForm.password"
-              class="h-11 w-full rounded-md border border-[#d1d5db] bg-white px-3 outline-none transition focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20"
-              autocomplete="current-password"
-              type="password"
-            />
-          </label>
+          <template v-else-if="authMode === 'register'">
+            <label class="block">
+              <span class="mb-1 block text-sm font-medium">邮箱</span>
+              <input
+                v-model="authForm.email"
+                class="h-11 w-full rounded-md border border-[#d1d5db] bg-white px-3 outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
+                autocomplete="email"
+                type="email"
+                placeholder="请输入您的学校邮箱"
+              />
+            </label>
+          </template>
+
+          <template v-else-if="authMode === 'forgot'">
+            <label class="block">
+              <span class="mb-1 block text-sm font-medium">邮箱</span>
+              <input
+                v-model="authForm.email"
+                class="h-11 w-full rounded-md border border-[#d1d5db] bg-white px-3 outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
+                autocomplete="email"
+                type="email"
+                placeholder="请输入您注册的学校邮箱"
+              />
+            </label>
+          </template>
 
           <p v-if="authError" class="rounded-md border border-[#efb3a7] bg-[#fff7ed] px-3 py-2 text-sm text-[#9a3412]">
             {{ authError }}
@@ -366,8 +456,18 @@ onBeforeUnmount(() => {
             :disabled="authSubmitting"
             type="submit"
           >
-            {{ authSubmitting ? '处理中...' : authMode === 'login' ? '登录' : '创建账号' }}
+            {{ authSubmitting ? '处理中...' : authMode === 'login' ? '登录' : authMode === 'register' ? '发送激活邮件' : '发送重置密码邮件' }}
           </button>
+
+          <div v-if="authMode === 'forgot'" class="text-center mt-2">
+            <button
+              type="button"
+              class="text-sm text-[#6b7280] hover:text-[#111827] bg-transparent border-none cursor-pointer"
+              @click="authMode = 'login'; authError = ''"
+            >
+              &larr; 返回登录
+            </button>
+          </div>
         </form>
       </div>
     </section>
@@ -518,15 +618,21 @@ onBeforeUnmount(() => {
             </button>
             <div
               class="mt-2 flex cursor-pointer items-center gap-3 rounded-2xl px-3 py-2.5 shadow-sm transition-colors hover:bg-[#e5e7eb]"
-              title="退出登录"
-              @click="handleLogout"
+              title="个人中心"
+              @click="showUserProfileDialog = true"
             >
-              <div class="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-[#d1d5db] text-sm">
-                {{ avatarLetter }}
+              <div class="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-[#d1d5db] text-sm overflow-hidden border border-slate-200">
+                <img 
+                  v-if="currentUser" 
+                  :src="`${API_BASE_URL}/auth/avatar/${currentUser.uuid}?t=${avatarVersion}`" 
+                  class="h-full w-full object-cover" 
+                  alt="Avatar" 
+                />
+                <span v-else>{{ avatarLetter }}</span>
               </div>
               <div class="min-w-0 flex-1">
                 <div class="truncate text-sm font-medium">{{ displayUser }}</div>
-                <div class="truncate text-xs text-[#6b7280]">点击退出登录</div>
+                <div class="truncate text-xs text-[#6b7280]">个人中心</div>
               </div>
             </div>
           </div>
@@ -698,6 +804,12 @@ onBeforeUnmount(() => {
         @cancel="cancelDelete"
       />
     </Transition>
+
+    <!-- 个人主页管理弹窗 -->
+    <UserProfileDialog
+      :show="showUserProfileDialog"
+      @close="showUserProfileDialog = false"
+    />
   </main>
 </template>
 

@@ -23,6 +23,18 @@ const routes: RouteRecordRaw[] = [
     component: () => import('../views/CommunityView.vue'),
     meta: { title: '社区' },
   },
+  {
+    path: '/set-password',
+    name: 'set-password',
+    component: () => import('../views/SetPasswordView.vue'),
+    meta: { title: '设置密码' },
+  },
+  {
+    path: '/register/confirm',
+    name: 'register-confirm',
+    component: () => import('../views/RegisterConfirm.vue'),
+    meta: { title: '注册确认' },
+  },
   { path: '/:pathMatch(.*)*', redirect: { name: 'overview' } },
 ]
 
