@@ -158,7 +158,14 @@ class UserFile(FileBase):
 
 class LibraryFile(FileBase):
     """
-    仓库文件子类，限制在 data/{user_uuid}/library/{library_id}。
+    个人技能仓库文件管理器类 (LibraryFile)
+    
+    【核心数据流/沙箱限制】
+    - 限定仓库技能的文件根目录为 `data/{user_uuid}/library/{library_id}`，防止跨目录路径遍历攻击。
+    - 作用：管理本地仓库技能的物理存储（含 `SKILL.md` 与其他关联资产）。
+    
+    【调用链】
+    - 在 `backend/library.py` 的收集（`collect_skill_to_library`）、发布（`publish_from_library`）和本地安装（`install_from_library`）等核心生命周期中被实例化。
     """
     def __init__(self, library_id: str, user_uuid: str, db_facade):
         # 验证 user_uuid 是否拥有该 library_id，如果需要的话可以添加

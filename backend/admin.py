@@ -11,10 +11,12 @@ from backend.db_dep import get_db
 
 logger = logging.getLogger(__name__)
 
+# 定义 Owner（技能管理员）和 Admin（系统管理员）路由
 router_owner = APIRouter(prefix="/owner", tags=["owner"])
 router_admin = APIRouter(prefix="/admin", tags=["admin"])
 
 def _resolve_db(db_param: Any) -> DatabaseFacade:
+    """解析并返回数据库门面实例"""
     if isinstance(db_param, DatabaseFacade):
         return db_param
     global_db = globals().get("db")
@@ -23,6 +25,7 @@ def _resolve_db(db_param: Any) -> DatabaseFacade:
     raise RuntimeError("DatabaseFacade not initialized in admin module")
 
 class ReviewActionRequest(BaseModel):
+    """审核决策请求负载模型，包含审核备注信息"""
     note: str = ""
 
 @router_owner.get("/reviews")
@@ -31,8 +34,16 @@ def list_owner_reviews(
     db: DatabaseFacade = Depends(get_db),
 ):
     """
-    List versions waiting for OWNER approval (PENDING_OWNER).
-    Only includes skills where current user is in community_skill_admins.
+    列出当前用户作为技能管理员 (Owner) 待审核的版本列表
+    
+    【数据流】
+    - 输入：当前登录用户 UUID
+    - 数据库流：关联 `community_skill_versions`、`community_skills` 和 `community_skill_admins` 专用管理员子表，
+      过滤状态为 `PENDING_OWNER` 且该用户为管理员的技能版本记录。
+    
+    【调用链】
+    - 客户端请求 -> APIRouter -> list_owner_reviews()
+    - 通过 sqlite 直连或门面连接执行连表查询
     """
     db = _resolve_db(db)
     user_uuid = current_user["uuid"]
@@ -55,6 +66,18 @@ def owner_approve(
     current_user: dict[str, Any] = Depends(get_current_user),
     db: DatabaseFacade = Depends(get_db),
 ):
+    """
+    Owner (技能管理员) 审批通过某个技能版本，将其状态流转为 PENDING_ADMIN，等待全局管理员审批。
+    
+    【数据流/验证逻辑】
+    - 校验版本是否存在。
+    - 校验当前用户是否为该技能的管理员 (`db.community.is_skill_admin()`)。
+    - 校验版本状态是否为 `PENDING_OWNER`。
+    - 数据库流：写入审核日志 `APPROVE_BY_OWNER`，版本状态跃迁至 `PENDING_ADMIN`。
+    
+    【调用链】
+    - 客户端请求 -> APIRouter -> owner_approve() -> db.reviews.create() -> 原子化更新并记录日志。
+    """
     db = _resolve_db(db)
     user_uuid = current_user["uuid"]
     version = db.community.get_version(version_id)
@@ -84,6 +107,13 @@ def owner_reject(
     current_user: dict[str, Any] = Depends(get_current_user),
     db: DatabaseFacade = Depends(get_db),
 ):
+    """
+    Owner (技能管理员) 拒绝某个技能版本，将其状态流转为 REJECTED。
+    
+    【数据流/验证逻辑】
+    - 权限校验同 approve。
+    - 数据库流：写入审核日志 `REJECT_BY_OWNER`，版本状态流转至 `REJECTED`。
+    """
     db = _resolve_db(db)
     user_uuid = current_user["uuid"]
     version = db.community.get_version(version_id)
@@ -113,7 +143,11 @@ def list_admin_reviews(
     db: DatabaseFacade = Depends(get_db),
 ):
     """
-    List versions waiting for ADMIN approval (PENDING_ADMIN).
+    列出所有等待全局系统管理员审批的技能版本 (PENDING_ADMIN)
+    
+    【数据流/权限验证】
+    - 校验当前登录用户的全局角色必须为 `admin`。
+    - 数据库流：查询状态为 `PENDING_ADMIN` 的全部版本记录。
     """
     if current_user.get("role") != "admin":
         raise HTTPException(status_code=403, detail={"code": "FORBIDDEN", "message": "System admin only"})
@@ -136,6 +170,17 @@ def admin_approve(
     current_user: dict[str, Any] = Depends(get_current_user),
     db: DatabaseFacade = Depends(get_db),
 ):
+    """
+    全局系统管理员审批通过某个技能版本，将其状态流转为 APPROVED，上架社区
+    
+    【数据流/调用链】
+    - 验证当前用户角色是否为 `admin`。
+    - 验证该版本是否存在且当前状态为 `PENDING_ADMIN`。
+    - 数据库流：
+      1. 写入审核日志 `APPROVE_BY_ADMIN`。
+      2. 状态原子流转至 `APPROVED`。
+      3. 调用 `db.community.update_latest_version` 将社区主表的 `latest_version` 设置为此版本，发布生效。
+    """
     if current_user.get("role") != "admin":
         raise HTTPException(status_code=403, detail={"code": "FORBIDDEN", "message": "System admin only"})
         
@@ -168,6 +213,14 @@ def admin_reject(
     current_user: dict[str, Any] = Depends(get_current_user),
     db: DatabaseFacade = Depends(get_db),
 ):
+    """
+    全局系统管理员拒绝某个技能版本，将其状态流转为 REJECTED
+    
+    【数据流/调用链】
+    - 验证当前用户角色是否为 `admin`。
+    - 验证版本状态。
+    - 数据库流：写入日志 `REJECT_BY_ADMIN`，状态修改为 `REJECTED`。
+    """
     if current_user.get("role") != "admin":
         raise HTTPException(status_code=403, detail={"code": "FORBIDDEN", "message": "System admin only"})
         

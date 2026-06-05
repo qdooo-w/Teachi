@@ -120,7 +120,22 @@ def collect_skill_to_library(
     current_user: dict[str, Any] = Depends(get_current_user),
     db: DatabaseFacade = Depends(get_db),
 ):
-    """收集操作：从运行层 skills/{name} 复制到 library/{library_id}/skill/"""
+    """
+    收集操作：从运行层 skills/{name} 复制到 library/{library_id}/skill/
+    
+    【数据流】
+    - 输入：Payload 中的运行层技能名称 (skill_name)
+    - 文件流：读取 data/{user_uuid}/skills/{skill_name} -> 复制到 data/{user_uuid}/library/{library_id}/skill/
+    - 数据库流：在 user_library_skills 表中新建一条记录，初始版本为 1.0.0，物理大小为收集后的目录大小，community_skill_id 初始为 NULL。
+    
+    【调用链】
+    - 客户端请求 -> APIRouter -> collect_skill_to_library()
+    - 获取当前用户 -> get_current_user()
+    - 初始化文件系统管理器 -> UserFile, LibraryFile (file.py)
+    - 解析 SKILL.md -> parse_skill_file() (skill_parser.py)
+    - 文件复制 -> _copy_skill_dir()
+    - 创建数据库记录 -> db.library.create() (db.py::UserLibrarySkillsFacade)
+    """
     db = _resolve_db(db)
     skill_name = payload.skill_name.strip()
     if name_err := validate_skill_name(skill_name):
@@ -190,7 +205,24 @@ def publish_from_library(
     current_user: dict[str, Any] = Depends(get_current_user),
     db: DatabaseFacade = Depends(get_db),
 ):
-    """发布操作：将 library 中的技能发布至社区"""
+    """
+    发布操作：将 library 中的技能发布至社区（两阶段审核流第一步）
+    
+    【数据流】
+    - 输入：仓库技能 ID (library_id), 目标版本号 (version) 及变更说明 (changelog)
+    - 关联检查：如果该仓库技能没有绑定社区技能 ID，则新建社区技能主表记录（owner 设为当前用户，admin_uuids 包含当前用户），并同步双写管理员子表；接着将更新写回仓库表的 community_skill_id 列。
+    - 文件流：从仓库技能目录 data/{user_uuid}/library/{library_id}/skill/ -> 复制到社区归档目录 archived_skill/{community_skill_id}/{version}/skill/
+    - 数据库流：在 community_skill_versions 表中创建待审核版本，status 初始为 'PENDING_OWNER'，等候技能管理员或全局管理员审批。
+    
+    【调用链】
+    - 客户端请求 -> APIRouter -> publish_from_library()
+    - 校验仓库记录归属 -> db.library.get_by_id() (db.py)
+    - 若无绑定，初始化社区主表 -> db.community.create_skill() (db.py::CommunitySkillsFacade)
+    - 反向更新仓库绑定 -> db.library.update_community_skill_id() (db.py::UserLibrarySkillsFacade)
+    - 初始化文件系统 -> LibraryFile, _resolve_archive_path() (file.py / library.py)
+    - 文件复制 -> _copy_skill_dir()
+    - 创建待审版本记录 -> db.community.create_version() (db.py::CommunitySkillsFacade)
+    """
     db = _resolve_db(db)
     user_uuid = current_user["uuid"]
     
@@ -306,7 +338,20 @@ def install_from_library(
     current_user: dict[str, Any] = Depends(get_current_user),
     db: DatabaseFacade = Depends(get_db),
 ):
-    """仓库→运行层安装：将 library/{library_id}/skill/ 复制到 skills/{name}/，无 DB 写入。"""
+    """
+    仓库→运行层安装：将 library/{library_id}/skill/ 复制到 skills/{name}/，无 DB 写入。
+    
+    【数据流】
+    - 输入：仓库技能 ID (library_id), 安装目标 ("user" 运行层或特定 "project" 运行层)
+    - 文件流：读取仓库目录 data/{user_uuid}/library/{library_id}/skill/ -> 复制到目标运行目录（例如 data/{user_uuid}/skills/{name}/ 或 data/{user_uuid}/{pid}/skills/{name}/）
+    
+    【调用链】
+    - 客户端请求 -> APIRouter -> install_from_library()
+    - 读取仓库信息 -> db.library.get_by_id() (db.py)
+    - 校验/创建目标目录安全句柄 -> UserFile 或 ProjectFile (file.py)
+    - 冲突检查 -> 确保目标路径下尚不存在同名目录
+    - 物理复制 -> _copy_skill_dir()
+    """
     db = _resolve_db(db)
     user_uuid = current_user["uuid"]
     lib_record = db.library.get_by_id(library_id)

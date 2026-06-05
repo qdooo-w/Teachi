@@ -74,6 +74,13 @@ class ReportCreateRequest(BaseModel):
     detail: str = ""
 
 def _to_summary(record: dict) -> CommunitySkillSummary:
+    """
+    将数据库中的技能记录字典转换为统一的社区技能摘要响应对象
+    
+    【数据流】
+    - 输入：包含数据库字段的字典
+    - 输出：结构化的 CommunitySkillSummary 实例
+    """
     return CommunitySkillSummary(
         id=record["id"],
         owner_uuid=record["owner_uuid"],
@@ -117,6 +124,13 @@ def _install_target_fs(
     db_facade: DatabaseFacade,
     library_id: str | None = None
 ) -> FileBase:
+    """
+    根据安装目标类型获取对应的文件系统管理器句柄
+    
+    【调用链】
+    - 被 `install_community_skill` 接口调用，用于在执行文件复制前确认目标沙箱路径安全。
+    - 返回：ProjectFile, LibraryFile 或 UserFile 的具体实例。
+    """
     if payload.target == "project":
         if not payload.pid:
             raise HTTPException(status_code=422, detail={"code": "VALIDATION_ERROR", "message": "pid is required"})
@@ -192,6 +206,24 @@ def install_community_skill(
     current_user: dict[str, Any] = Depends(get_current_user),
     db: DatabaseFacade = Depends(get_db),
 ):
+    """
+    安装社区技能：下载指定的已上架社区技能版本至本地或个人仓库
+    
+    【数据流】
+    - 输入：社区技能 ID (skill_id), 目标安装层级 ("user"/"project"/"library"), 目标版本 ID (version_id)
+    - 数据库流：如果是安装到仓库层 ("library")，在 user_library_skills 写入一条新记录同步。
+    - 文件流：读取社区归档目录 archived_skill/{skill_id}/{version}/skill/ -> 复制到指定的目标运行路径或仓库路径。
+    - 计数器流：更新 community_skills 及 community_skill_versions 中的下载量 (downloads + 1)。
+    
+    【调用链】
+    - 客户端请求 -> APIRouter -> install_community_skill()
+    - 获取社区技能记录 -> db.community.get_skill()
+    - 获取指定版本记录 -> db.community.get_version()
+    - 准备目标文件系统安全句柄 -> _install_target_fs() -> UserFile/ProjectFile/LibraryFile (file.py)
+    - 物理文件复制 -> _copy_skill_dir()
+    - 若目标为仓库，写入仓库记录 -> db.library.create() (db.py)
+    - 更新下载量统计 -> db.community.increment_downloads() (db.py)
+    """
     db = _resolve_db(db)
     user_uuid = current_user["uuid"]
     
@@ -282,6 +314,18 @@ def create_comment(
     current_user: dict[str, Any] = Depends(get_current_user),
     db: DatabaseFacade = Depends(get_db),
 ):
+    """
+    发表技能评论：支持一级评论和针对一级评论的回复（二级评论，即楼中楼）
+    
+    【数据流】
+    - 输入：社区技能 ID (skill_id), 评论内容 (content), 父评论 ID (parent_id) 可选, 被回复用户 UUID (reply_to_uuid) 可选。
+    - 验证：若是二级评论（parent_id 不为空），校验父评论是否存在且父评论层级本身必须是一级评论（最大层级嵌套为 2，即深度限制 <= 1）。
+    - 数据库流：在 community_skill_comments 插入一条新记录。
+    
+    【调用链】
+    - 客户端请求 -> APIRouter -> create_comment()
+    - 写入数据库记录与嵌套校验 -> db.community.create_comment() (db.py::CommunitySkillsFacade)
+    """
     db = _resolve_db(db)
     comment_id = str(uuid.uuid4())
     try:
@@ -353,7 +397,18 @@ def delete_comment_endpoint(
     current_user: dict[str, Any] = Depends(get_current_user),
     db: DatabaseFacade = Depends(get_db),
 ):
-    """删除评论：本人可删自己的评论，全局 admin 可强删任意评论。"""
+    """
+    删除评论：支持评论作者自行删除，以及全局系统管理员 (role == 'admin') 强行删除
+    
+    【数据流】
+    - 输入：技能 ID (skill_id), 评论 ID (comment_id)
+    - 权限判断：校验当前用户的 role 是否为 'admin' 以决定是否开启全局删除权限。
+    - 数据库流：在 community_skill_comments 删除指定记录。
+    
+    【调用链】
+    - 客户端请求 -> APIRouter -> delete_comment_endpoint()
+    - 执行带权限控制的数据库删除 -> db.community.delete_comment() (db.py::CommunitySkillsFacade)
+    """
     db = _resolve_db(db)
     is_admin = current_user.get("role") == "admin"
     deleted = db.community.delete_comment(comment_id, current_user["uuid"], is_admin=is_admin)

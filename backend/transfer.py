@@ -240,6 +240,24 @@ async def upload_community_skill_zip(
     current_user: dict[str, Any] = Depends(get_current_user),
     db: DatabaseFacade = Depends(get_db),
 ):
+    """
+    通过上传 ZIP 压缩包来发布社区技能
+    
+    【数据流】
+    - 输入：ZIP 物理文件字节流。
+    - 校验：解析 ZIP 内部的 SKILL.md 前言配置，验证技能标识与内容安全性。
+    - 文件流：解压并将技能物理文件解压到归档路径 `archived_skill/{skill_id}/1.0.0/skill/`。
+    - 数据库流：
+      1. 在 community_skills 表中创建技能记录，并初始化 admin_uuids JSON 数组，双写管理员子表。
+      2. 在 community_skill_versions 表中创建 1.0.0 待审核版本记录。
+    - 异常流：若解压或写入数据库失败，回滚并清理物理目录。
+    
+    【调用链】
+    - 客户端上传 -> upload_community_skill_zip()
+    - 读取字节 -> _read_limited_zip_body()
+    - ZIP 验证与提取 -> _validate_community_skill_zip() & _extract_community_skill_zip()
+    - 数据库写入 -> db.community.create_skill() & db.community.create_version()
+    """
     content_type = (request.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
     if content_type and content_type not in SKILL_ZIP_ALLOWED_CONTENT_TYPES:
         raise HTTPException(

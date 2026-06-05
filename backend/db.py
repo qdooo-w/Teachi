@@ -1172,6 +1172,15 @@ class CommunitySkillsFacade(_DataBase):
                 return True
 
     def create_comment(self, *, comment_id: str, skill_id: str, user_uuid: str, content: str, parent_id: str | None, reply_to_uuid: str | None) -> dict:
+        """
+        创建评论或回复，并强制校验最大嵌套层级（不超过2层，即 depth 最大为 1）
+        
+        【数据流/验证逻辑】
+        - 若提供 parent_id，查出父评论并获取其 depth。
+        - 验证：parent_depth >= 1 表示父评论已经是二级回复，再次回复将超出嵌套限制，抛出 ValueError。
+        - 计算当前评论 depth = parent_depth + 1。
+        - 插入 community_skill_comments 表。
+        """
         now_ts = self._now_timestamp()
         depth = 0
         with self._cursor() as cursor:
@@ -1337,6 +1346,14 @@ class CommunitySkillsFacade(_DataBase):
                 return True
 
 class UserLibrarySkillsFacade(_DataBase):
+    """
+    用户个人技能仓库数据访问层对象 (UserLibrarySkillsFacade)
+    
+    【核心数据流】
+    - 提供用户将运行层技能“收集 (Collect)”到个人仓库，以及从仓库安装技能至运行层的持久化支持。
+    - 管理个人仓库记录及其关联的社区技能 ID (`community_skill_id`)。
+    """
+
     def create(
         self,
         *,
@@ -1354,6 +1371,13 @@ class UserLibrarySkillsFacade(_DataBase):
         size_bytes: int,
         skill_id: str | None = None
     ) -> dict:
+        """
+        在用户仓库中新增一条技能记录
+        
+        【数据流】
+        - 保存本地文件路径 (`local_path`)、大小 (`size_bytes`) 及基本前言元数据。
+        - 初始版本为 1.0.0。
+        """
         skill_id = skill_id or str(uuid.uuid4())
         now_ts = self._now_timestamp()
         with self._cursor() as cursor:
@@ -1371,11 +1395,18 @@ class UserLibrarySkillsFacade(_DataBase):
         return record
 
     def get_by_id(self, skill_id: str) -> dict | None:
+        """根据仓库技能 ID 精确获取单条记录详情"""
         with self._cursor() as cursor:
             cursor.execute("SELECT * FROM user_library_skills WHERE id = ?", (skill_id,))
             return self._row_to_dict(cursor.fetchone())
 
     def get_latest_by_name(self, user_uuid: str, name: str) -> dict | None:
+        """
+        按技能唯一标识名称 and 用户 UUID 获取仓库中最新的记录
+        
+        【调用链】
+        - 被用于 `GET /library/skills/parse-runtime` 接口，用以做同名技能的匹配与表单自动预填。
+        """
         with self._cursor() as cursor:
             cursor.execute(
                 "SELECT * FROM user_library_skills WHERE user_uuid = ? AND name = ? ORDER BY created_at DESC LIMIT 1",
@@ -1384,11 +1415,18 @@ class UserLibrarySkillsFacade(_DataBase):
             return self._row_to_dict(cursor.fetchone())
 
     def list_by_user(self, user_uuid: str) -> list[dict]:
+        """获取该用户个人仓库下的所有技能列表"""
         with self._cursor() as cursor:
             cursor.execute("SELECT * FROM user_library_skills WHERE user_uuid = ? ORDER BY created_at DESC", (user_uuid,))
             return [dict(row) for row in cursor.fetchall()]
 
     def update_community_skill_id(self, library_id: str, community_skill_id: str) -> bool:
+        """
+        更新本地仓库技能绑定的社区技能 ID，主要在将本地技能发布至社区后被调用（绑定两端）
+        
+        【调用链说明】
+        - 被 backend/library.py 中的 publish_from_library() 接口直接调用。
+        """
         now_ts = self._now_timestamp()
         with self._cursor() as cursor:
             cursor.execute(
@@ -1398,6 +1436,14 @@ class UserLibrarySkillsFacade(_DataBase):
             return cursor.rowcount > 0
 
 class ReviewLogsFacade(_DataBase):
+    """
+    版本审核日志数据访问层对象 (ReviewLogsFacade)
+    
+    【核心数据流】
+    - 处理技能版本在 Owner 审核和全局 Admin 审核两个节点的状态流转日志。
+    - 负责在写入审核历史的同时，将更新写回 `community_skill_versions` 的 `status`。
+    """
+
     def create(
         self,
         *,
@@ -1408,6 +1454,16 @@ class ReviewLogsFacade(_DataBase):
         to_status: str,
         note: str = ""
     ) -> dict:
+        """
+        创建一条审核历史日志，并在同一事务中原子化更新技能版本的状态值
+        
+        【数据流】
+        - 插入 `skill_review_logs` 记录。
+        - 触发 `UPDATE community_skill_versions SET status` 原子流转。
+        
+        【调用链】
+        - 被 `/owner/reviews/{version_id}/approve` & `reject` 以及 `/admin/reviews/{version_id}/approve` & `reject` 等审核处理接口调用。
+        """
         log_id = str(uuid.uuid4())
         now_ts = self._now_timestamp()
         with self._cursor() as cursor:
@@ -1429,6 +1485,7 @@ class ReviewLogsFacade(_DataBase):
             return self._row_to_dict(cursor.fetchone())
 
     def list_by_version(self, version_id: str) -> list[dict]:
+        """获取特定技能版本的全部流转审核日志（按时间正序排列）"""
         with self._cursor() as cursor:
             cursor.execute("SELECT * FROM skill_review_logs WHERE version_id = ? ORDER BY created_at ASC", (version_id,))
             return [dict(row) for row in cursor.fetchall()]
