@@ -331,7 +331,7 @@ onBeforeUnmount(() => {
             <span class="mb-1 block text-sm font-medium">用户名</span>
             <input
               v-model="authForm.username"
-              class="h-11 w-full rounded-md border border-[#d1d5db] bg-white px-3 outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
+              class="h-11 w-full rounded-md border border-[#d1d5db] bg-white px-3 outline-none transition focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20"
               autocomplete="username"
               type="text"
             />
@@ -341,7 +341,7 @@ onBeforeUnmount(() => {
             <span class="mb-1 block text-sm font-medium">邮箱</span>
             <input
               v-model="authForm.email"
-              class="h-11 w-full rounded-md border border-[#d1d5db] bg-white px-3 outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
+              class="h-11 w-full rounded-md border border-[#d1d5db] bg-white px-3 outline-none transition focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20"
               autocomplete="email"
               type="email"
             />
@@ -351,7 +351,7 @@ onBeforeUnmount(() => {
             <span class="mb-1 block text-sm font-medium">密码</span>
             <input
               v-model="authForm.password"
-              class="h-11 w-full rounded-md border border-[#d1d5db] bg-white px-3 outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
+              class="h-11 w-full rounded-md border border-[#d1d5db] bg-white px-3 outline-none transition focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20"
               autocomplete="current-password"
               type="password"
             />
