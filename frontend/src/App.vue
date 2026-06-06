@@ -25,6 +25,7 @@ import { useLayout } from './composables/useLayout'
 import { useProjectSkills } from './composables/useProjectSkills'
 import { useUserSkills } from './composables/useUserSkills'
 import { PREVIEW_PROJECT_LIMIT, API_BASE_URL } from './config'
+import { useNotification } from './composables/useNotification'
 
 // ── 认证（状态 / 行为均来自 composable，模板继续使用同名 ref） ───────────────
 const {
@@ -44,6 +45,29 @@ const {
   setOnTokenReady,
   displayUser: displayUserFn,
 } = useAuth()
+
+// ── 全局悬浮通知 ───────────────────────────────────────────────────────────
+const {
+  notifications,
+  showError: showGlobalError,
+  removeNotification,
+  clearAllNotifications,
+  toggleNotificationExpanded,
+} = useNotification()
+
+// 监听旧的 errorMessage 变化以支持 legacy code
+watch(errorMessage, (newVal) => {
+  if (newVal) {
+    showGlobalError(newVal)
+  }
+})
+
+// 当全局通知全部被清除时，同步清空 legacy errorMessage
+watch(() => notifications.value.length, (newCount) => {
+  if (newCount === 0) {
+    errorMessage.value = ''
+  }
+})
 
 async function handleSubmitAuth(): Promise<void> {
   authError.value = ''
@@ -315,6 +339,20 @@ function handleAvatarUpdated() {
 watch([avatarVersion, currentUser], () => {
   hasAvatarError.value = false
 })
+
+// 当页面大范围切换（路由变化）或打开各类弹窗时，自动清除所有提示框
+watch(
+  [
+    () => route.path,
+    showUserSkillManager,
+    showProjectSkillManager,
+    showSettingsDialog,
+    showUserProfileDialog,
+  ],
+  () => {
+    clearAllNotifications()
+  }
+)
 
 onMounted(() => {
   setOnTokenReady(async () => {
@@ -735,25 +773,7 @@ onBeforeUnmount(() => {
             </button>
           </div>
         </header>
-
-        <!-- 全局错误提示（sidebar 改名 / 删除 / token 恢复失败等会写入 errorMessage） -->
-        <div
-          v-if="errorMessage"
-          class="mx-4 mt-2 flex items-center justify-between rounded-md border border-[#efb3a7] bg-[#fff7ed] px-3 py-2 text-sm text-[#9a3412]"
-          role="alert"
-        >
-          <span class="truncate">{{ errorMessage }}</span>
-          <button
-            class="ml-3 flex-shrink-0 text-[#9a3412] hover:text-[#7c2d12]"
-            type="button"
-            title="关闭"
-            @click="errorMessage = ''"
-          >
-            <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
+        <!-- 全局错误提示已移至顶栏下方悬浮显示 -->
 
         <div class="relative flex-1 overflow-hidden">
           <RouterView v-slot="{ Component, route: rv }">
@@ -819,6 +839,81 @@ onBeforeUnmount(() => {
       @close="showUserProfileDialog = false"
       @logout="handleLogout"
     />
+
+    <!-- 全局悬浮提示框堆叠容器 (黑底白字，从屏幕正上方/顶栏下方弹出) -->
+    <div class="fixed top-14 left-1/2 -translate-x-1/2 z-[9999] w-[calc(100%-2rem)] sm:w-[520px] pointer-events-none flex flex-col gap-2 px-1">
+      <TransitionGroup name="toast-slide">
+        <div
+          v-for="item in notifications"
+          :key="item.id"
+          class="w-full bg-neutral-950/95 backdrop-blur-md text-white rounded-2xl shadow-[0_20px_40px_-10px_rgba(0,0,0,0.45)] border border-neutral-800/80 overflow-hidden pointer-events-auto toast-slide-item"
+          role="alert"
+        >
+          <div class="flex items-center justify-between p-4 gap-3.5">
+            <!-- 勾/叉 图标 -->
+            <div v-if="item.type === 'success'" class="flex items-center justify-center w-8 h-8 rounded-full bg-emerald-500/10 text-emerald-400 flex-shrink-0">
+              <svg class="h-4.5 w-4.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+              </svg>
+            </div>
+            <div v-else class="flex items-center justify-center w-8 h-8 rounded-full bg-rose-500/10 text-rose-400 flex-shrink-0">
+              <svg class="h-4.5 w-4.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </div>
+
+            <!-- 内容 -->
+            <div class="flex-1 min-w-0 text-sm font-medium tracking-wide leading-relaxed text-neutral-100">
+              {{ item.message }}
+            </div>
+
+            <!-- 右侧操作 -->
+            <div class="flex items-center gap-1 flex-shrink-0">
+              <!-- 展开详情按钮 -->
+              <button
+                v-if="item.details"
+                type="button"
+                class="p-1.5 rounded-lg text-neutral-400 hover:text-white hover:bg-neutral-800/80 transition-all duration-200 active:scale-95 focus:outline-none cursor-pointer"
+                :title="item.expanded ? '收起详情' : '展开详情'"
+                @click="toggleNotificationExpanded(item.id)"
+              >
+                <svg
+                  class="h-4 w-4 transform transition-transform duration-300"
+                  :class="{ 'rotate-180': item.expanded }"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  viewBox="0 0 24 24"
+                >
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+
+              <!-- 关闭按钮 -->
+              <button
+                type="button"
+                class="p-1.5 rounded-lg text-neutral-400 hover:text-white hover:bg-neutral-800/80 transition-all duration-200 active:scale-95 focus:outline-none cursor-pointer"
+                title="关闭"
+                @click="removeNotification(item.id)"
+              >
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <!-- 详情面板 -->
+          <div
+            v-if="item.details && item.expanded"
+            class="border-t border-neutral-800/80 px-4.5 py-3.5 bg-black/40 max-h-48 overflow-y-auto"
+          >
+            <div class="text-[10px] uppercase tracking-wider text-neutral-500 font-semibold mb-1.5">错误详情</div>
+            <pre class="text-xs text-neutral-300 font-mono break-all whitespace-pre-wrap leading-relaxed select-text">{{ item.details }}</pre>
+          </div>
+        </div>
+      </TransitionGroup>
+    </div>
   </main>
 </template>
 
@@ -876,5 +971,31 @@ onBeforeUnmount(() => {
 .view-slide-backward-leave-to {
   opacity: 0;
   transform: translateX(20px);
+}
+
+/* ── 全局悬浮提示框弹出过渡 ── */
+.toast-slide-item {
+  transform: translateY(0);
+}
+.toast-slide-enter-active {
+  transition: transform 380ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 250ms ease;
+}
+.toast-slide-leave-active {
+  position: absolute;
+  width: 100%;
+  transition: transform 250ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 150ms ease;
+}
+.toast-slide-move {
+  transition: transform 300ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.toast-slide-enter-from,
+.toast-slide-leave-to {
+  transform: translateY(-20px) scale(0.95);
+  opacity: 0;
+}
+.toast-slide-enter-to,
+.toast-slide-leave-from {
+  transform: translateY(0) scale(1);
+  opacity: 1;
 }
 </style>

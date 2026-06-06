@@ -6,3 +6,5 @@ export * from './community'
 export * from './chat'
 export * from './overview'
 export * from './subject'
+export * from './placeholders'
+

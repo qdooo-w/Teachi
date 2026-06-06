@@ -47,7 +47,16 @@ const showCreatePanel = ref(false)
 const sessionNameInput = ref<HTMLInputElement | null>(null)
 const messageInput = ref<HTMLTextAreaElement | null>(null)
 const creatingSession = ref(false)
+import { useNotification } from '../composables/useNotification'
 const errorMessage = ref('')
+const { showError } = useNotification()
+
+watch(errorMessage, (newVal) => {
+  if (newVal) {
+    showError(newVal)
+    errorMessage.value = ''
+  }
+})
 
 // Store the created session ID so if uploads fail, retrying uses the same session
 const createdSessionId = ref<string | null>(null)
@@ -577,10 +586,6 @@ watch(
       </div>
 
       <div class="mt-auto w-full pb-4">
-        <p v-if="errorMessage" class="mb-2 rounded-md border border-[#efb3a7] bg-[#fff7ed] px-3 py-2 text-sm text-[#9a3412]">
-          {{ errorMessage }}
-        </p>
-
         <!-- 创建面板：同一元素的展开/收起变换 -->
         <div
           class="create-panel"

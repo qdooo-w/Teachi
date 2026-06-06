@@ -130,7 +130,16 @@ const newProjectDesc = ref('')
 const nameInput = ref<HTMLInputElement | null>(null)
 const descTextarea = ref<HTMLTextAreaElement | null>(null)
 const creatingProject = ref(false)
+import { useNotification } from '../composables/useNotification'
 const errorMessage = ref('')
+const { showError } = useNotification()
+
+watch(errorMessage, (newVal) => {
+  if (newVal) {
+    showError(newVal)
+    errorMessage.value = ''
+  }
+})
 
 const DESC_MAX = 100
 // 描述输入框自动增高的最大高度（像素），超出后出现滚动条
@@ -455,9 +464,6 @@ onMounted(async () => {
 
           <div class="create-fields">
             <div class="create-fields-inner">
-              <p v-if="errorMessage" class="mb-3 rounded-md border border-[#efb3a7] bg-[#fff7ed] px-3 py-2 text-sm text-[#9a3412]">
-                {{ errorMessage }}
-              </p>
               <input
                 ref="nameInput"
                 v-model="newProjectName"

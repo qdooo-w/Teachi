@@ -66,16 +66,22 @@ nextTick(() => { inputEl.value?.focus() })
     class="overflow-hidden rounded-t-3xl border-x border-t border-[#d1d5db] bg-[#e5e7eb]"
     @keydown="handleKeydown"
   >
-    <div class="flex items-center justify-between border-b border-[#d1d5db]/70 px-4 py-2">
-      <input
-        ref="inputEl"
-        v-model="query"
-        class="h-7 flex-1 bg-transparent text-sm outline-none placeholder:text-[#9ca3af]"
-        placeholder="搜索技能..."
-        type="text"
-      />
+    <div class="flex items-center justify-between border-b border-[#d1d5db]/70 px-4 py-1">
+      <div class="flex-1 overflow-hidden flex items-center gap-1">
+        <svg class="h-3.5 w-3.5 text-[#9ca3af] flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+        </svg>
+        <input
+          ref="inputEl"
+          v-model="query"
+          class="h-6 w-[125%] bg-transparent text-xs outline-none placeholder:text-[#9ca3af]"
+          style="transform: scale(0.8); transform-origin: left center;"
+          placeholder="搜索技能..."
+          type="text"
+        />
+      </div>
       <button
-        class="ml-2 flex h-6 w-6 items-center justify-center rounded text-[#6b7280] hover:bg-white/60 hover:text-[#1f2937]"
+        class="ml-2 flex h-5.5 w-5.5 items-center justify-center rounded text-[#6b7280] hover:bg-white/60 hover:text-[#1f2937] cursor-pointer"
         type="button"
         title="关闭 (Esc)"
         @click="emit('close')"

@@ -4,6 +4,8 @@ import { useAuth } from '../composables/useAuth'
 import { updateProfile, uploadAvatar, getErrorMessage } from '../api'
 import { API_BASE_URL } from '../config'
 
+import { useNotification } from '../composables/useNotification'
+
 interface Props {
   show: boolean
 }
@@ -18,9 +20,8 @@ const emit = defineEmits<{
 const { currentUser } = useAuth()
 const submitting = ref(false)
 const uploading = ref(false)
-const errorMessage = ref('')
-const successMessage = ref('')
 const avatarVersion = ref(0)
+const { showSuccess, showError, hideNotification } = useNotification()
 const fileInput = ref<HTMLInputElement | null>(null)
 const hasAvatarError = ref(false)
 
@@ -53,8 +54,7 @@ function handleAvatarError() {
 watch(() => props.show, (newVal) => {
   if (newVal) {
     syncForm()
-    errorMessage.value = ''
-    successMessage.value = ''
+    hideNotification()
   }
 })
 
@@ -94,8 +94,6 @@ async function handleAvatarChange(event: Event) {
 
   const file = files[0]
   uploading.value = true
-  errorMessage.value = ''
-  successMessage.value = ''
 
   try {
     const updatedUser = await uploadAvatar(file)
@@ -104,9 +102,9 @@ async function handleAvatarChange(event: Event) {
     }
     avatarVersion.value++
     window.dispatchEvent(new CustomEvent('learnova-avatar-updated'))
-    successMessage.value = '头像上传成功！'
+    showSuccess('头像上传成功！')
   } catch (error) {
-    errorMessage.value = getErrorMessage(error)
+    showError(getErrorMessage(error))
   } finally {
     uploading.value = false
     target.value = '' // reset input
@@ -115,13 +113,11 @@ async function handleAvatarChange(event: Event) {
 
 async function handleSaveProfile() {
   if (!form.username.trim()) {
-    errorMessage.value = '用户名不能为空。'
+    showError('用户名不能为空。')
     return
   }
 
   submitting.value = true
-  errorMessage.value = ''
-  successMessage.value = ''
 
   try {
     const updatedUser = await updateProfile(
@@ -134,9 +130,9 @@ async function handleSaveProfile() {
       currentUser.value.self_description = updatedUser.self_description
       currentUser.value.major = updatedUser.major
     }
-    successMessage.value = '个人信息修改成功！'
+    showSuccess('个人信息修改成功！')
   } catch (error) {
-    errorMessage.value = getErrorMessage(error)
+    showError(getErrorMessage(error))
   } finally {
     submitting.value = false
   }
@@ -213,13 +209,7 @@ function clickLogout() {
             />
           </div>
 
-          <!-- Messages -->
-          <div v-if="errorMessage" class="rounded-xl border border-[#efb3a7] bg-[#fff7ed] px-4 py-2 text-xs text-[#9a3412]">
-            {{ errorMessage }}
-          </div>
-          <div v-if="successMessage" class="rounded-xl border border-emerald-200 bg-emerald-50/50 px-4 py-2 text-xs text-emerald-700">
-            {{ successMessage }}
-          </div>
+
 
           <!-- Form fields -->
           <form class="space-y-3" @submit.prevent="handleSaveProfile">
