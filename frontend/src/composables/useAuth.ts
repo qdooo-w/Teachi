@@ -7,7 +7,6 @@ import {
   login,
   logout,
   refreshAccessToken,
-  register as registerAccount,
   setStoredToken,
   getErrorMessage,
   type UserOut,
@@ -22,9 +21,8 @@ const authSubmitting = ref(false)
 const authError = ref('')
 const errorMessage = ref('')
 
-const authMode = ref<'login' | 'register'>('login')
+const authMode = ref<'login' | 'register' | 'forgot'>('login')
 const authForm = reactive({
-  username: '',
   email: localStorage.getItem(LAST_EMAIL_KEY) || '',
   password: '',
 })
@@ -36,11 +34,15 @@ function setOnTokenReady(fn: () => Promise<void>): void {
   onTokenReady = fn
 }
 
-function handleTokenChange(event: Event): void {
+async function handleTokenChange(event: Event): Promise<void> {
   const next = (event as CustomEvent<string | null>).detail
   token.value = next
   // token 被清掉（如 401 刷新失败）时同步清缓存的用户信息
-  if (!next) currentUser.value = null
+  if (!next) {
+    currentUser.value = null
+  } else {
+    await refreshCurrentUser()
+  }
 }
 
 // 拉取并缓存当前登录用户信息；失败时不阻断整体流程，只记录用于回退展示。
@@ -84,16 +86,9 @@ async function submitAuth(): Promise<void> {
     authError.value = '请输入邮箱和密码。'
     return
   }
-  if (authMode.value === 'register' && !authForm.username.trim()) {
-    authError.value = '请输入用户名。'
-    return
-  }
 
   authSubmitting.value = true
   try {
-    if (authMode.value === 'register') {
-      await registerAccount(authForm.username.trim(), authForm.email.trim(), authForm.password)
-    }
     await login(authForm.email.trim(), authForm.password)
     localStorage.setItem(LAST_EMAIL_KEY, authForm.email.trim())
     await refreshCurrentUser()

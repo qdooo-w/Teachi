@@ -4,6 +4,10 @@ export interface UserOut {
   uuid: string
   username: string
   email: string
+  role: string
+  self_description: string | null
+  major: string | null
+  head_file: string | null
   created_at: number
 }
 
@@ -194,11 +198,51 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   return (await response.json()) as T
 }
 
-export async function register(username: string, email: string, password: string): Promise<UserOut> {
-  return request<UserOut>('/auth/register', {
+export async function register(email: string): Promise<{ message: string }> {
+  return request<{ message: string }>('/auth/register', {
     method: 'POST',
     skipAuth: true,
-    body: JSON.stringify({ username, email, password }),
+    body: JSON.stringify({ email }),
+  })
+}
+
+export async function setPassword(
+  tempToken: string,
+  username: string | undefined,
+  password: string,
+): Promise<AccessTokenOut | undefined> {
+  return request<AccessTokenOut>('/auth/set-password', {
+    method: 'POST',
+    skipAuth: true,
+    body: JSON.stringify({ temp_token: tempToken, username, password }),
+  })
+}
+
+export async function requestPasswordReset(email: string): Promise<{ message: string }> {
+  return request<{ message: string }>('/auth/password-reset/request', {
+    method: 'POST',
+    skipAuth: true,
+    body: JSON.stringify({ email }),
+  })
+}
+
+export async function updateProfile(
+  username: string,
+  selfDescription: string | null,
+  major: string | null,
+): Promise<UserOut> {
+  return request<UserOut>('/auth/profile', {
+    method: 'PUT',
+    body: JSON.stringify({ username, self_description: selfDescription, major }),
+  })
+}
+
+export async function uploadAvatar(file: File): Promise<UserOut> {
+  const formData = new FormData()
+  formData.append('file', file)
+  return request<UserOut>('/auth/avatar', {
+    method: 'POST',
+    body: formData,
   })
 }
 

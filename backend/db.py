@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
+import json
 import logging
 from contextlib import contextmanager
 from datetime import datetime
@@ -56,7 +57,7 @@ class UsersFacade(_DataBase):
     def get_by_email(self, email: str) -> dict | None:
         with self._cursor() as cursor:
             cursor.execute(
-                "SELECT uuid, username, email, password_hash, created_at FROM users WHERE email = ?",
+                "SELECT uuid, username, email, password_hash, role, self_description, major, head_file, created_at FROM users WHERE email = ?",
                 (email,),
             )
             row = cursor.fetchone()
@@ -65,7 +66,7 @@ class UsersFacade(_DataBase):
     def get_by_uuid(self, user_uuid: str) -> dict | None:
         with self._cursor() as cursor:
             cursor.execute(
-                "SELECT uuid, username, email, password_hash, created_at FROM users WHERE uuid = ?",
+                "SELECT uuid, username, email, password_hash, role, self_description, major, head_file, created_at FROM users WHERE uuid = ?",
                 (user_uuid,),
             )
             row = cursor.fetchone()
@@ -95,6 +96,23 @@ class UsersFacade(_DataBase):
             )
             affected = cursor.rowcount
         return affected > 0
+
+    def update_profile(
+        self,
+        user_uuid: str,
+        username: str,
+        self_description: str | None,
+        major: str | None,
+        head_file: str | None,
+    ) -> dict | None:
+        with self._cursor() as cursor:
+            cursor.execute(
+                "UPDATE users SET username = ?, self_description = ?, major = ?, head_file = ? WHERE uuid = ?",
+                (username, self_description, major, head_file, user_uuid),
+            )
+            if cursor.rowcount == 0:
+                return None
+        return self.get_by_uuid(user_uuid)
 
 class ProjectsFacade(_DataBase):
     def create(self, projectname: str, user_uuid: str) -> dict:
@@ -968,162 +986,526 @@ class UserPreferencesFacade(_DataBase):
         return self.get_for_user(user_uuid)
 
 class CommunitySkillsFacade(_DataBase):
-    """社区技能广场。每条记录指向一份归档 skill 文件夹。
+    """社区技能广场数据访问层"""
 
-    设计取舍：
-    - skill 内容本体存放在 archived_skill/{id}/，数据库只保存路径和展示元信息。
-    - 同作者可重复发布同名 skill：每次 publish 都是独立 id；老条目作者可手动删除。
-    - 下载时把归档文件夹 copy 到用户私有目录，作者删除后已下载副本不受影响（解耦）。
-    """
-
-    _COLUMNS = (
-        "id, owner_uuid, name, display_name, description, archive_path, license, compatibility, "
-        "size_bytes, downloads, created_at, updated_at"
-    )
-
-    def create(
+    def create_skill(
         self,
         *,
+        skill_id: str,
         owner_uuid: str,
         name: str,
         display_name: str | None = None,
         description: str,
-        archive_path: str,
-        size_bytes: int,
-        license: str | None = None,
-        compatibility: str | None = None,
-        skill_id: str | None = None,
+        admin_uuids: str,
     ) -> dict:
-        skill_id = skill_id or str(uuid.uuid4())
         now_ts = self._now_timestamp()
         with self._cursor() as cursor:
-            cursor.execute("PRAGMA table_info(community_skills)")
-            table_columns = {row["name"] for row in cursor.fetchall()}
-            if "body_md" in table_columns:
-                insert_columns = (
-                    "id, owner_uuid, name, display_name, description, archive_path, body_md, "
-                    "license, compatibility, size_bytes, downloads, created_at, updated_at"
-                )
-                values = (
-                    skill_id,
-                    owner_uuid,
-                    name,
-                    display_name,
-                    description,
-                    archive_path,
-                    "",
-                    license,
-                    compatibility,
-                    size_bytes,
-                    0,
-                    now_ts,
-                    now_ts,
-                )
-            else:
-                insert_columns = self._COLUMNS
-                values = (
-                    skill_id,
-                    owner_uuid,
-                    name,
-                    display_name,
-                    description,
-                    archive_path,
-                    license,
-                    compatibility,
-                    size_bytes,
-                    0,
-                    now_ts,
-                    now_ts,
-                )
             cursor.execute(
-                f"INSERT INTO community_skills ({insert_columns}) VALUES ({','.join(['?'] * len(values))})",
-                values,
+                """
+                INSERT INTO community_skills 
+                (id, owner_uuid, name, display_name, description, admin_uuids, likes, downloads, latest_version, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, 0, 0, NULL, ?, ?)
+                """,
+                (skill_id, owner_uuid, name, display_name, description, admin_uuids, now_ts, now_ts)
             )
-        record = self.get_by_id(skill_id)
+            # 双写：同步 admin_uuids 到专用子表
+            try:
+                uuids = json.loads(admin_uuids)
+            except Exception:
+                uuids = []
+            for u in uuids:
+                if u:
+                    cursor.execute(
+                        "INSERT OR IGNORE INTO community_skill_admins (skill_id, user_uuid, created_at) VALUES (?, ?, ?)",
+                        (skill_id, u, now_ts),
+                    )
+        record = self.get_skill(skill_id)
         if record is None:
-            raise RuntimeError("Community skill was inserted but could not be loaded.")
+            raise RuntimeError("Skill could not be loaded after insert")
         return record
 
-    def get_by_id(self, skill_id: str) -> dict | None:
+    def create_version(
+        self,
+        *,
+        version_id: str,
+        skill_id: str,
+        version: str,
+        readme_md: str,
+        changelog: str,
+        tags: str,
+        archive_path: str,
+        size_bytes: int,
+        source: str | None,
+        status: str,
+        submitted_by: str,
+    ) -> dict:
+        now_ts = self._now_timestamp()
         with self._cursor() as cursor:
             cursor.execute(
-                f"SELECT {self._COLUMNS} FROM community_skills WHERE id = ?",
-                (skill_id,),
+                """
+                INSERT INTO community_skill_versions
+                (id, skill_id, version, readme_md, changelog, tags, archive_path, size_bytes, downloads, source, status, submitted_by, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
+                """,
+                (version_id, skill_id, version, readme_md, changelog, tags, archive_path, size_bytes, source, status, submitted_by, now_ts)
             )
-            row = cursor.fetchone()
-        return self._row_to_dict(row)
+        record = self.get_version(version_id)
+        if record is None:
+            raise RuntimeError("Version could not be loaded after insert")
+        return record
 
-    def list(
+    def get_skill(self, skill_id: str) -> dict | None:
+        with self._cursor() as cursor:
+            cursor.execute("SELECT * FROM community_skills WHERE id = ?", (skill_id,))
+            return self._row_to_dict(cursor.fetchone())
+
+    def get_skill_by_name(self, name: str) -> dict | None:
+        """按技能名称（唯一键）精确查找社区 skill。"""
+        with self._cursor() as cursor:
+            cursor.execute("SELECT * FROM community_skills WHERE name = ?", (name,))
+            return self._row_to_dict(cursor.fetchone())
+
+    def get_version(self, version_id: str) -> dict | None:
+        with self._cursor() as cursor:
+            cursor.execute("SELECT * FROM community_skill_versions WHERE id = ?", (version_id,))
+            return self._row_to_dict(cursor.fetchone())
+
+    def get_latest_approved_version(self, skill_id: str) -> dict | None:
+        with self._cursor() as cursor:
+            cursor.execute(
+                "SELECT * FROM community_skill_versions WHERE skill_id = ? AND status = 'APPROVED' ORDER BY created_at DESC LIMIT 1",
+                (skill_id,)
+            )
+            return self._row_to_dict(cursor.fetchone())
+
+    def update_latest_version(self, skill_id: str, latest_version: str) -> bool:
+        now_ts = self._now_timestamp()
+        with self._cursor() as cursor:
+            cursor.execute(
+                "UPDATE community_skills SET latest_version = ?, updated_at = ? WHERE id = ?",
+                (latest_version, now_ts, skill_id)
+            )
+            return cursor.rowcount > 0
+
+    def list_skills(
         self,
         *,
         keyword: str | None = None,
+        tag: str | None = None,
         limit: int = 20,
         offset: int = 0,
         sort: str = "popular",
     ) -> list[dict]:
-        """列表查询。
-
-        sort:
-            - "popular"（默认）：downloads DESC, created_at DESC
-            - "newest"        ：created_at DESC
-        keyword 不为空时，按 name/display_name/description 过滤（大小写不敏感）。
-        """
-        if sort == "newest":
-            order_clause = "ORDER BY created_at DESC"
-        else:
-            order_clause = "ORDER BY downloads DESC, created_at DESC"
-
+        order_clause = "ORDER BY s.created_at DESC" if sort == "newest" else "ORDER BY s.downloads DESC, s.created_at DESC"
         params: list = []
-        where_clause = ""
+        where_parts: list = ["v.status = 'APPROVED'"]
+        
         if keyword:
             like = f"%{keyword.strip()}%"
-            where_clause = "WHERE (name LIKE ? OR display_name LIKE ? OR description LIKE ?)"
+            where_parts.append("(s.name LIKE ? OR s.display_name LIKE ? OR s.description LIKE ?)")
             params.extend([like, like, like])
-        params.extend([int(limit), int(offset)])
-
-        sql = (
-            f"SELECT {self._COLUMNS} FROM community_skills "
-            f"{where_clause} {order_clause} LIMIT ? OFFSET ?"
-        )
+            
+        if tag:
+            where_parts.append("json_each.value = ?")
+            params.append(tag)
+            
+        where_clause = f"WHERE {' AND '.join(where_parts)}"
+        tag_join = ", json_each(v.tags)" if tag else ""
+        
+        sql = f"""
+            SELECT s.*, v.version, v.tags, v.size_bytes 
+            FROM community_skills s
+            JOIN community_skill_versions v ON s.id = v.skill_id
+            {tag_join}
+            {where_clause}
+            GROUP BY s.id
+            {order_clause}
+            LIMIT ? OFFSET ?
+        """
+        params.extend([limit, offset])
+        
         with self._cursor() as cursor:
             cursor.execute(sql, params)
-            rows = cursor.fetchall()
-        return [dict(row) for row in rows]
+            return [dict(row) for row in cursor.fetchall()]
 
-    def count(self, *, keyword: str | None = None) -> int:
+    def count_skills(self, *, keyword: str | None = None, tag: str | None = None) -> int:
         params: list = []
-        where_clause = ""
+        where_parts: list = ["v.status = 'APPROVED'"]
         if keyword:
             like = f"%{keyword.strip()}%"
-            where_clause = "WHERE (name LIKE ? OR display_name LIKE ? OR description LIKE ?)"
+            where_parts.append("(s.name LIKE ? OR s.display_name LIKE ? OR s.description LIKE ?)")
             params.extend([like, like, like])
+        if tag:
+            where_parts.append("json_each.value = ?")
+            params.append(tag)
 
+        where_clause = f"WHERE {' AND '.join(where_parts)}"
+        tag_join = ", json_each(v.tags)" if tag else ""
+
+        sql = f"""
+            SELECT COUNT(DISTINCT s.id) AS total
+            FROM community_skills s
+            JOIN community_skill_versions v ON s.id = v.skill_id
+            {tag_join}
+            {where_clause}
+        """
         with self._cursor() as cursor:
-            cursor.execute(
-                f"SELECT COUNT(1) AS total FROM community_skills {where_clause}",
-                params,
-            )
+            cursor.execute(sql, params)
             row = cursor.fetchone()
         return int(row["total"]) if row else 0
 
-    def delete_for_owner(self, skill_id: str, owner_uuid: str) -> bool:
+    def delete_skill(self, skill_id: str) -> bool:
         with self._cursor() as cursor:
-            cursor.execute(
-                "DELETE FROM community_skills WHERE id = ? AND owner_uuid = ?",
-                (skill_id, owner_uuid),
-            )
-            affected = cursor.rowcount
-        return affected > 0
+            cursor.execute("DELETE FROM community_skills WHERE id = ?", (skill_id,))
+            return cursor.rowcount > 0
 
-    def increment_downloads(self, skill_id: str) -> bool:
+    def increment_downloads(self, skill_id: str, version_id: str | None = None) -> bool:
         now_ts = self._now_timestamp()
         with self._cursor() as cursor:
             cursor.execute(
                 "UPDATE community_skills SET downloads = downloads + 1, updated_at = ? WHERE id = ?",
-                (now_ts, skill_id),
+                (now_ts, skill_id)
             )
             affected = cursor.rowcount
+            if version_id:
+                cursor.execute(
+                    "UPDATE community_skill_versions SET downloads = downloads + 1 WHERE id = ?",
+                    (version_id,)
+                )
         return affected > 0
+
+    def toggle_like(self, skill_id: str, user_uuid: str) -> bool:
+        now_ts = self._now_timestamp()
+        with self._cursor() as cursor:
+            cursor.execute("SELECT 1 FROM community_skill_likes WHERE skill_id = ? AND user_uuid = ?", (skill_id, user_uuid))
+            exists = cursor.fetchone()
+            if exists:
+                cursor.execute("DELETE FROM community_skill_likes WHERE skill_id = ? AND user_uuid = ?", (skill_id, user_uuid))
+                cursor.execute("UPDATE community_skills SET likes = likes - 1 WHERE id = ?", (skill_id,))
+                return False
+            else:
+                cursor.execute("INSERT INTO community_skill_likes (skill_id, user_uuid, created_at) VALUES (?, ?, ?)", (skill_id, user_uuid, now_ts))
+                cursor.execute("UPDATE community_skills SET likes = likes + 1 WHERE id = ?", (skill_id,))
+                return True
+
+    def create_comment(self, *, comment_id: str, skill_id: str, user_uuid: str, content: str, parent_id: str | None, reply_to_uuid: str | None) -> dict:
+        """
+        创建评论或回复，并强制校验最大嵌套层级（不超过2层，即 depth 最大为 1）
+        
+        【数据流/验证逻辑】
+        - 若提供 parent_id，查出父评论并获取其 depth。
+        - 验证：parent_depth >= 1 表示父评论已经是二级回复，再次回复将超出嵌套限制，抛出 ValueError。
+        - 计算当前评论 depth = parent_depth + 1。
+        - 插入 community_skill_comments 表。
+        """
+        now_ts = self._now_timestamp()
+        depth = 0
+        with self._cursor() as cursor:
+            if parent_id:
+                cursor.execute("SELECT depth FROM community_skill_comments WHERE id = ?", (parent_id,))
+                row = cursor.fetchone()
+                if not row:
+                    raise ValueError("Parent comment not found")
+                parent_depth = row["depth"]
+                if parent_depth >= 1:
+                    raise ValueError("Max nesting depth exceeded")
+                depth = parent_depth + 1
+
+            cursor.execute(
+                """
+                INSERT INTO community_skill_comments (id, skill_id, user_uuid, content, parent_id, depth, reply_to_uuid, likes, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+                """,
+                (comment_id, skill_id, user_uuid, content, parent_id, depth, reply_to_uuid, now_ts, now_ts)
+            )
+            cursor.execute("SELECT * FROM community_skill_comments WHERE id = ?", (comment_id,))
+            return self._row_to_dict(cursor.fetchone())
+
+    def create_report(self, *, report_id: str, comment_id: str, reporter_uuid: str, reason: str, detail: str = "") -> dict:
+        now_ts = self._now_timestamp()
+        with self._cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO community_comment_reports (id, comment_id, reporter_uuid, reason, detail, status, created_at)
+                VALUES (?, ?, ?, ?, ?, 'PENDING', ?)
+                """,
+                (report_id, comment_id, reporter_uuid, reason, detail, now_ts)
+            )
+            cursor.execute("SELECT * FROM community_comment_reports WHERE id = ?", (report_id,))
+            return self._row_to_dict(cursor.fetchone())
+
+    def update_admin_uuids(self, skill_id: str, admin_uuids: str) -> bool:
+        """更新 admin_uuids JSON 字段，并同步重建 community_skill_admins 子表记录。"""
+        now_ts = self._now_timestamp()
+        with self._cursor() as cursor:
+            cursor.execute(
+                "UPDATE community_skills SET admin_uuids = ?, updated_at = ? WHERE id = ?",
+                (admin_uuids, now_ts, skill_id),
+            )
+            affected = cursor.rowcount
+            if affected:
+                cursor.execute("DELETE FROM community_skill_admins WHERE skill_id = ?", (skill_id,))
+                try:
+                    uuids = json.loads(admin_uuids)
+                except Exception:
+                    uuids = []
+                for u in uuids:
+                    if u:
+                        cursor.execute(
+                            "INSERT OR IGNORE INTO community_skill_admins (skill_id, user_uuid, created_at) VALUES (?, ?, ?)",
+                            (skill_id, u, now_ts),
+                        )
+        return affected > 0
+
+    def add_admin(self, skill_id: str, user_uuid: str) -> bool:
+        """将用户加入 skill 管理员（同步双写 JSON 字段与子表）。"""
+        now_ts = self._now_timestamp()
+        with self._cursor() as cursor:
+            cursor.execute("SELECT admin_uuids FROM community_skills WHERE id = ?", (skill_id,))
+            row = cursor.fetchone()
+            if not row:
+                return False
+            try:
+                uuids: list = json.loads(row["admin_uuids"])
+            except Exception:
+                uuids = []
+            if user_uuid not in uuids:
+                uuids.append(user_uuid)
+                cursor.execute(
+                    "UPDATE community_skills SET admin_uuids = ?, updated_at = ? WHERE id = ?",
+                    (json.dumps(uuids), now_ts, skill_id),
+                )
+            cursor.execute(
+                "INSERT OR IGNORE INTO community_skill_admins (skill_id, user_uuid, created_at) VALUES (?, ?, ?)",
+                (skill_id, user_uuid, now_ts),
+            )
+        return True
+
+    def remove_admin(self, skill_id: str, user_uuid: str) -> bool:
+        """将用户从 skill 管理员中移除（同步双写 JSON 字段与子表）。"""
+        now_ts = self._now_timestamp()
+        with self._cursor() as cursor:
+            cursor.execute("SELECT admin_uuids FROM community_skills WHERE id = ?", (skill_id,))
+            row = cursor.fetchone()
+            if not row:
+                return False
+            try:
+                uuids: list = json.loads(row["admin_uuids"])
+            except Exception:
+                uuids = []
+            uuids = [u for u in uuids if u != user_uuid]
+            cursor.execute(
+                "UPDATE community_skills SET admin_uuids = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(uuids), now_ts, skill_id),
+            )
+            cursor.execute(
+                "DELETE FROM community_skill_admins WHERE skill_id = ? AND user_uuid = ?",
+                (skill_id, user_uuid),
+            )
+        return True
+
+    def is_skill_admin(self, skill_id: str, user_uuid: str) -> bool:
+        """通过有索引的子表校验用户是否为 skill 管理员（O(log n) 查询）。"""
+        with self._cursor() as cursor:
+            cursor.execute(
+                "SELECT 1 FROM community_skill_admins WHERE skill_id = ? AND user_uuid = ?",
+                (skill_id, user_uuid),
+            )
+            return cursor.fetchone() is not None
+
+    def is_liked_by_user(self, skill_id: str, user_uuid: str) -> bool:
+        with self._cursor() as cursor:
+            cursor.execute("SELECT 1 FROM community_skill_likes WHERE skill_id = ? AND user_uuid = ?", (skill_id, user_uuid))
+            return cursor.fetchone() is not None
+
+    def list_versions(self, skill_id: str) -> list[dict]:
+        with self._cursor() as cursor:
+            cursor.execute("SELECT * FROM community_skill_versions WHERE skill_id = ? AND status = 'APPROVED' ORDER BY created_at DESC", (skill_id,))
+            return [dict(row) for row in cursor.fetchall()]
+
+    def get_contributors(self, skill_id: str) -> list[dict]:
+        with self._cursor() as cursor:
+            cursor.execute("SELECT * FROM community_skill_contributors WHERE skill_id = ?", (skill_id,))
+            return [dict(row) for row in cursor.fetchall()]
+
+    def list_comments(self, skill_id: str, parent_id: str | None = None, limit: int = 50, offset: int = 0) -> list[dict]:
+        with self._cursor() as cursor:
+            if parent_id:
+                cursor.execute("SELECT * FROM community_skill_comments WHERE skill_id = ? AND parent_id = ? ORDER BY created_at ASC LIMIT ? OFFSET ?", (skill_id, parent_id, limit, offset))
+            else:
+                cursor.execute("SELECT * FROM community_skill_comments WHERE skill_id = ? AND parent_id IS NULL ORDER BY created_at DESC LIMIT ? OFFSET ?", (skill_id, limit, offset))
+            return [dict(row) for row in cursor.fetchall()]
+
+    def delete_comment(self, comment_id: str, user_uuid: str, *, is_admin: bool = False) -> bool:
+        """删除评论：本人可删自己的评论，全局 admin 可删任意评论。"""
+        with self._cursor() as cursor:
+            if is_admin:
+                cursor.execute("DELETE FROM community_skill_comments WHERE id = ?", (comment_id,))
+            else:
+                cursor.execute(
+                    "DELETE FROM community_skill_comments WHERE id = ? AND user_uuid = ?",
+                    (comment_id, user_uuid),
+                )
+            return cursor.rowcount > 0
+
+    def toggle_comment_like(self, comment_id: str, user_uuid: str) -> bool:
+        now_ts = self._now_timestamp()
+        with self._cursor() as cursor:
+            cursor.execute("SELECT 1 FROM community_comment_likes WHERE comment_id = ? AND user_uuid = ?", (comment_id, user_uuid))
+            exists = cursor.fetchone()
+            if exists:
+                cursor.execute("DELETE FROM community_comment_likes WHERE comment_id = ? AND user_uuid = ?", (comment_id, user_uuid))
+                cursor.execute("UPDATE community_skill_comments SET likes = likes - 1 WHERE id = ?", (comment_id,))
+                return False
+            else:
+                cursor.execute("INSERT INTO community_comment_likes (comment_id, user_uuid, created_at) VALUES (?, ?, ?)", (comment_id, user_uuid, now_ts))
+                cursor.execute("UPDATE community_skill_comments SET likes = likes + 1 WHERE id = ?", (comment_id,))
+                return True
+
+class UserLibrarySkillsFacade(_DataBase):
+    """
+    用户个人技能仓库数据访问层对象 (UserLibrarySkillsFacade)
+    
+    【核心数据流】
+    - 提供用户将运行层技能“收集 (Collect)”到个人仓库，以及从仓库安装技能至运行层的持久化支持。
+    - 管理个人仓库记录及其关联的社区技能 ID (`community_skill_id`)。
+    """
+
+    def create(
+        self,
+        *,
+        user_uuid: str,
+        name: str,
+        display_name: str | None,
+        description: str,
+        readme_md: str,
+        tags: str,
+        version: str,
+        changelog: str,
+        source: str | None,
+        community_skill_id: str | None,
+        local_path: str,
+        size_bytes: int,
+        skill_id: str | None = None
+    ) -> dict:
+        """
+        在用户仓库中新增一条技能记录
+        
+        【数据流】
+        - 保存本地文件路径 (`local_path`)、大小 (`size_bytes`) 及基本前言元数据。
+        - 初始版本为 1.0.0。
+        """
+        skill_id = skill_id or str(uuid.uuid4())
+        now_ts = self._now_timestamp()
+        with self._cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO user_library_skills
+                (id, user_uuid, name, display_name, description, readme_md, tags, version, changelog, source, community_skill_id, local_path, size_bytes, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (skill_id, user_uuid, name, display_name, description, readme_md, tags, version, changelog, source, community_skill_id, local_path, size_bytes, now_ts, now_ts)
+            )
+        record = self.get_by_id(skill_id)
+        if record is None:
+            raise RuntimeError("Library skill could not be loaded after insert")
+        return record
+
+    def get_by_id(self, skill_id: str) -> dict | None:
+        """根据仓库技能 ID 精确获取单条记录详情"""
+        with self._cursor() as cursor:
+            cursor.execute("SELECT * FROM user_library_skills WHERE id = ?", (skill_id,))
+            return self._row_to_dict(cursor.fetchone())
+
+    def get_latest_by_name(self, user_uuid: str, name: str) -> dict | None:
+        """
+        按技能唯一标识名称 and 用户 UUID 获取仓库中最新的记录
+        
+        【调用链】
+        - 被用于 `GET /library/skills/parse-runtime` 接口，用以做同名技能的匹配与表单自动预填。
+        """
+        with self._cursor() as cursor:
+            cursor.execute(
+                "SELECT * FROM user_library_skills WHERE user_uuid = ? AND name = ? ORDER BY created_at DESC LIMIT 1",
+                (user_uuid, name)
+            )
+            return self._row_to_dict(cursor.fetchone())
+
+    def list_by_user(self, user_uuid: str) -> list[dict]:
+        """获取该用户个人仓库下的所有技能列表"""
+        with self._cursor() as cursor:
+            cursor.execute("SELECT * FROM user_library_skills WHERE user_uuid = ? ORDER BY created_at DESC", (user_uuid,))
+            return [dict(row) for row in cursor.fetchall()]
+
+    def update_community_skill_id(self, library_id: str, community_skill_id: str) -> bool:
+        """
+        更新本地仓库技能绑定的社区技能 ID，主要在将本地技能发布至社区后被调用（绑定两端）
+        
+        【调用链说明】
+        - 被 backend/library.py 中的 publish_from_library() 接口直接调用。
+        """
+        now_ts = self._now_timestamp()
+        with self._cursor() as cursor:
+            cursor.execute(
+                "UPDATE user_library_skills SET community_skill_id = ?, updated_at = ? WHERE id = ?",
+                (community_skill_id, now_ts, library_id)
+            )
+            return cursor.rowcount > 0
+
+class ReviewLogsFacade(_DataBase):
+    """
+    版本审核日志数据访问层对象 (ReviewLogsFacade)
+    
+    【核心数据流】
+    - 处理技能版本在 Owner 审核和全局 Admin 审核两个节点的状态流转日志。
+    - 负责在写入审核历史的同时，将更新写回 `community_skill_versions` 的 `status`。
+    """
+
+    def create(
+        self,
+        *,
+        version_id: str,
+        reviewer_uuid: str,
+        action: str,
+        from_status: str,
+        to_status: str,
+        note: str = ""
+    ) -> dict:
+        """
+        创建一条审核历史日志，并在同一事务中原子化更新技能版本的状态值
+        
+        【数据流】
+        - 插入 `skill_review_logs` 记录。
+        - 触发 `UPDATE community_skill_versions SET status` 原子流转。
+        
+        【调用链】
+        - 被 `/owner/reviews/{version_id}/approve` & `reject` 以及 `/admin/reviews/{version_id}/approve` & `reject` 等审核处理接口调用。
+        """
+        log_id = str(uuid.uuid4())
+        now_ts = self._now_timestamp()
+        with self._cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO skill_review_logs
+                (id, version_id, reviewer_uuid, action, from_status, to_status, note, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (log_id, version_id, reviewer_uuid, action, from_status, to_status, note, now_ts)
+            )
+            
+            cursor.execute(
+                "UPDATE community_skill_versions SET status = ? WHERE id = ?",
+                (to_status, version_id)
+            )
+            
+            cursor.execute("SELECT * FROM skill_review_logs WHERE id = ?", (log_id,))
+            return self._row_to_dict(cursor.fetchone())
+
+    def list_by_version(self, version_id: str) -> list[dict]:
+        """获取特定技能版本的全部流转审核日志（按时间正序排列）"""
+        with self._cursor() as cursor:
+            cursor.execute("SELECT * FROM skill_review_logs WHERE version_id = ? ORDER BY created_at ASC", (version_id,))
+            return [dict(row) for row in cursor.fetchall()]
 
 
 class AttachmentsFacade(_DataBase):
@@ -1310,6 +1692,8 @@ class DatabaseFacade:
         self.model_configs = ModelConfigsFacade(self)
         self.preferences = UserPreferencesFacade(self)
         self.community = CommunitySkillsFacade(self)
+        self.library = UserLibrarySkillsFacade(self)
+        self.reviews = ReviewLogsFacade(self)
         self.attachments = AttachmentsFacade(self)
 
     @staticmethod
@@ -1387,14 +1771,84 @@ class DatabaseFacade:
                 (f"archived_skill/{skill_id}", size_bytes, skill_id),
             )
 
+    @staticmethod
+    def _migrate_to_v2_pre(cursor: sqlite3.Cursor) -> None:
+        cursor.execute("PRAGMA table_info(users)")
+        user_cols = {r["name"] for r in cursor.fetchall()}
+        if user_cols:
+            if "role" not in user_cols:
+                cursor.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
+            if "self_description" not in user_cols:
+                cursor.execute("ALTER TABLE users ADD COLUMN self_description TEXT")
+            if "major" not in user_cols:
+                cursor.execute("ALTER TABLE users ADD COLUMN major TEXT")
+            if "head_file" not in user_cols:
+                cursor.execute("ALTER TABLE users ADD COLUMN head_file TEXT")
+        
+        cursor.execute("PRAGMA table_info(community_skills)")
+        cs_cols = {r["name"] for r in cursor.fetchall()}
+        if cs_cols and "admin_uuids" not in cs_cols:
+            cursor.execute("DROP INDEX IF EXISTS idx_community_skills_created_at")
+            cursor.execute("DROP INDEX IF EXISTS idx_community_skills_downloads")
+            cursor.execute("DROP INDEX IF EXISTS idx_community_skills_owner")
+            cursor.execute("DROP INDEX IF EXISTS idx_community_skills_name")
+            cursor.execute("ALTER TABLE community_skills RENAME TO community_skills_old")
+
+    @staticmethod
+    def _migrate_to_v2_post(cursor: sqlite3.Cursor) -> None:
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='community_skills_old'")
+        if not cursor.fetchone():
+            return
+            
+        import json
+        import uuid
+        cursor.execute("SELECT * FROM community_skills_old")
+        for row in cursor.fetchall():
+            skill_id = row["id"]
+            owner_uuid = row["owner_uuid"]
+            admin_uuids = json.dumps([owner_uuid])
+            
+            cursor.execute(
+                """
+                INSERT INTO community_skills 
+                (id, owner_uuid, name, display_name, description, admin_uuids, likes, downloads, latest_version, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    skill_id, owner_uuid, row["name"], row.get("display_name"), row["description"],
+                    admin_uuids, 0, row.get("downloads", 0), "1.0.0", row["created_at"], row["updated_at"]
+                )
+            )
+            
+            version_id = str(uuid.uuid4())
+            cursor.execute(
+                """
+                INSERT INTO community_skill_versions
+                (id, skill_id, version, readme_md, changelog, tags, archive_path, size_bytes, downloads, source, status, submitted_by, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    version_id, skill_id, "1.0.0", "", "Auto-migrated version", "[]",
+                    row.get("archive_path", ""), row.get("size_bytes", 0), row.get("downloads", 0),
+                    None, "APPROVED", owner_uuid, row["created_at"]
+                )
+            )
+        
+        cursor.execute("DROP TABLE community_skills_old")
+
     def setup_database(self) -> None:
         with self.db_cursor() as cursor:
+            self._migrate_to_v2_pre(cursor)
             schema = """
             CREATE TABLE IF NOT EXISTS users (
                 uuid TEXT PRIMARY KEY,
                 username TEXT NOT NULL,
                 email TEXT NOT NULL UNIQUE,
                 password_hash TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'user',
+                self_description TEXT,
+                major TEXT,
+                head_file TEXT,
                 created_at REAL NOT NULL
             );
             CREATE TABLE IF NOT EXISTS projects (
@@ -1436,22 +1890,147 @@ class DatabaseFacade:
             CREATE TABLE IF NOT EXISTS community_skills (
                 id TEXT PRIMARY KEY,
                 owner_uuid TEXT NOT NULL,
-                name TEXT NOT NULL,
+                name TEXT NOT NULL UNIQUE,
                 display_name TEXT,
                 description TEXT NOT NULL,
-                archive_path TEXT NOT NULL,
-                license TEXT,
-                compatibility TEXT,
-                size_bytes INTEGER NOT NULL,
+                admin_uuids TEXT NOT NULL DEFAULT '[]',
+                likes INTEGER NOT NULL DEFAULT 0,
                 downloads INTEGER NOT NULL DEFAULT 0,
+                latest_version TEXT,
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL,
                 FOREIGN KEY (owner_uuid) REFERENCES users(uuid) ON DELETE CASCADE
             );
+            CREATE TABLE IF NOT EXISTS community_skill_versions (
+                id TEXT PRIMARY KEY,
+                skill_id TEXT NOT NULL,
+                version TEXT NOT NULL,
+                readme_md TEXT DEFAULT '',
+                changelog TEXT DEFAULT '',
+                tags TEXT NOT NULL DEFAULT '[]',
+                archive_path TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                downloads INTEGER NOT NULL DEFAULT 0,
+                source TEXT,
+                status TEXT NOT NULL DEFAULT 'PENDING_ADMIN',
+                submitted_by TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                UNIQUE(skill_id, version),
+                FOREIGN KEY (skill_id) REFERENCES community_skills(id) ON DELETE CASCADE,
+                FOREIGN KEY (submitted_by) REFERENCES users(uuid) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS community_skill_likes (
+                skill_id TEXT NOT NULL,
+                user_uuid TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                PRIMARY KEY (skill_id, user_uuid),
+                FOREIGN KEY (skill_id) REFERENCES community_skills(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_uuid) REFERENCES users(uuid) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS community_skill_comments (
+                id TEXT PRIMARY KEY,
+                skill_id TEXT NOT NULL,
+                user_uuid TEXT NOT NULL,
+                content TEXT NOT NULL,
+                parent_id TEXT,
+                depth INTEGER NOT NULL DEFAULT 0,
+                reply_to_uuid TEXT,
+                likes INTEGER NOT NULL DEFAULT 0,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                FOREIGN KEY (skill_id) REFERENCES community_skills(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_uuid) REFERENCES users(uuid) ON DELETE CASCADE,
+                FOREIGN KEY (parent_id) REFERENCES community_skill_comments(id) ON DELETE CASCADE,
+                FOREIGN KEY (reply_to_uuid) REFERENCES users(uuid) ON DELETE SET NULL
+            );
+            CREATE TABLE IF NOT EXISTS community_comment_likes (
+                comment_id TEXT NOT NULL,
+                user_uuid TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                PRIMARY KEY (comment_id, user_uuid),
+                FOREIGN KEY (comment_id) REFERENCES community_skill_comments(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_uuid) REFERENCES users(uuid) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS community_comment_reports (
+                id TEXT PRIMARY KEY,
+                comment_id TEXT NOT NULL,
+                reporter_uuid TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                detail TEXT DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'PENDING',
+                resolved_by TEXT,
+                resolved_at REAL,
+                created_at REAL NOT NULL,
+                UNIQUE(comment_id, reporter_uuid),
+                FOREIGN KEY (comment_id) REFERENCES community_skill_comments(id) ON DELETE CASCADE,
+                FOREIGN KEY (reporter_uuid) REFERENCES users(uuid) ON DELETE CASCADE,
+                FOREIGN KEY (resolved_by) REFERENCES users(uuid) ON DELETE SET NULL
+            );
+            CREATE TABLE IF NOT EXISTS community_skill_contributors (
+                skill_id TEXT NOT NULL,
+                user_uuid TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'contributor',
+                created_at REAL NOT NULL,
+                PRIMARY KEY (skill_id, user_uuid),
+                FOREIGN KEY (skill_id) REFERENCES community_skills(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_uuid) REFERENCES users(uuid) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS community_skill_admins (
+                skill_id TEXT NOT NULL,
+                user_uuid TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                PRIMARY KEY (skill_id, user_uuid),
+                FOREIGN KEY (skill_id) REFERENCES community_skills(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_uuid) REFERENCES users(uuid) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS user_library_skills (
+                id TEXT PRIMARY KEY,
+                user_uuid TEXT NOT NULL,
+                name TEXT NOT NULL,
+                display_name TEXT,
+                description TEXT NOT NULL,
+                readme_md TEXT DEFAULT '',
+                tags TEXT NOT NULL DEFAULT '[]',
+                version TEXT NOT NULL,
+                changelog TEXT DEFAULT '',
+                source TEXT,
+                community_skill_id TEXT,
+                local_path TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL DEFAULT 0,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                FOREIGN KEY (user_uuid) REFERENCES users(uuid) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS skill_review_logs (
+                id TEXT PRIMARY KEY,
+                version_id TEXT NOT NULL,
+                reviewer_uuid TEXT NOT NULL,
+                action TEXT NOT NULL,
+                from_status TEXT NOT NULL,
+                to_status TEXT NOT NULL,
+                note TEXT DEFAULT '',
+                created_at REAL NOT NULL,
+                FOREIGN KEY (version_id) REFERENCES community_skill_versions(id) ON DELETE CASCADE,
+                FOREIGN KEY (reviewer_uuid) REFERENCES users(uuid) ON DELETE CASCADE
+            );
             CREATE INDEX IF NOT EXISTS idx_community_skills_created_at ON community_skills(created_at);
             CREATE INDEX IF NOT EXISTS idx_community_skills_downloads ON community_skills(downloads);
+            CREATE INDEX IF NOT EXISTS idx_community_skills_likes ON community_skills(likes);
             CREATE INDEX IF NOT EXISTS idx_community_skills_owner ON community_skills(owner_uuid);
             CREATE INDEX IF NOT EXISTS idx_community_skills_name ON community_skills(name);
+            CREATE INDEX IF NOT EXISTS idx_community_versions_skill ON community_skill_versions(skill_id);
+            CREATE INDEX IF NOT EXISTS idx_community_versions_status ON community_skill_versions(status);
+            CREATE INDEX IF NOT EXISTS idx_community_versions_submitted ON community_skill_versions(submitted_by);
+            CREATE INDEX IF NOT EXISTS idx_community_comments_skill ON community_skill_comments(skill_id);
+            CREATE INDEX IF NOT EXISTS idx_community_comments_parent ON community_skill_comments(parent_id);
+            CREATE INDEX IF NOT EXISTS idx_community_likes_skill ON community_skill_likes(skill_id);
+            CREATE INDEX IF NOT EXISTS idx_comment_likes_comment ON community_comment_likes(comment_id);
+            CREATE INDEX IF NOT EXISTS idx_comment_reports_comment ON community_comment_reports(comment_id);
+            CREATE INDEX IF NOT EXISTS idx_library_skills_user ON user_library_skills(user_uuid);
+            CREATE INDEX IF NOT EXISTS idx_library_skills_community ON user_library_skills(community_skill_id);
+            CREATE INDEX IF NOT EXISTS idx_review_logs_version ON skill_review_logs(version_id);
+            CREATE INDEX IF NOT EXISTS idx_review_logs_reviewer ON skill_review_logs(reviewer_uuid);
+            CREATE INDEX IF NOT EXISTS idx_skill_admins_user ON community_skill_admins(user_uuid);
             CREATE TABLE IF NOT EXISTS user_model_configs (
                 config_id TEXT PRIMARY KEY,
                 user_uuid TEXT NOT NULL,
@@ -1507,6 +2086,16 @@ class DatabaseFacade:
             );
             """
             cursor.executescript(schema)
+            self._migrate_to_v2_post(cursor)
+            # 幂等迁移：将现有 admin_uuids JSON 同步到 community_skill_admins 子表
+            cursor.execute(
+                """
+                INSERT OR IGNORE INTO community_skill_admins (skill_id, user_uuid, created_at)
+                SELECT cs.id, je.value, cs.created_at
+                FROM community_skills cs, json_each(cs.admin_uuids) je
+                WHERE je.value IS NOT NULL AND je.value != ''
+                """
+            )
 
             cursor.execute("PRAGMA table_info(user_model_configs)")
             user_model_configs_columns = {row["name"] for row in cursor.fetchall()}
@@ -1527,15 +2116,7 @@ class DatabaseFacade:
                     "ALTER TABLE attachments ADD COLUMN file_size INTEGER NOT NULL DEFAULT 0"
                 )
 
-            cursor.execute("PRAGMA table_info(community_skills)")
-            columns = {row["name"] for row in cursor.fetchall()}
-            if "archive_path" not in columns:
-                cursor.execute(
-                    "ALTER TABLE community_skills ADD COLUMN archive_path TEXT NOT NULL DEFAULT ''"
-                )
-            if "display_name" not in columns:
-                cursor.execute("ALTER TABLE community_skills ADD COLUMN display_name TEXT")
-            self._migrate_legacy_community_skill_bodies(cursor)
+            # Migrations for v1 (legacy bodies) are now handled and superseded by v2
 
             # Migrate user_model_configs: add columns if missing
             cursor.execute("PRAGMA table_info(user_model_configs)")

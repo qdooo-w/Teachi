@@ -49,6 +49,8 @@ def _client(tmp_path: Path, monkeypatch) -> tuple[TestClient, DatabaseFacade, st
     )
 
     monkeypatch.setattr(transfer_module, "BASE_DIR", tmp_path)
+    import backend.community as community_module
+    monkeypatch.setattr(community_module, "BASE_DIR", tmp_path)
     monkeypatch.setattr("backend.config.JWT_SECRET", "test-secret")
     monkeypatch.setattr("backend.auth.JWT_SECRET", "test-secret")
 
@@ -74,9 +76,8 @@ def test_upload_community_skill_zip_publishes_archive(tmp_path: Path, monkeypatc
     assert body["name"] == "zip-skill"
     assert body["display_name"] is None
     assert body["description"] == "Uploaded from zip"
-    assert body["size_bytes"] > 0
-    assert (tmp_path / "archived_skill" / body["id"] / "SKILL.md").is_file()
-    assert (tmp_path / "archived_skill" / body["id"] / "references" / "notes.md").is_file()
+    assert (tmp_path / "archived_skill" / body["id"] / "1.0.0" / "skill" / "SKILL.md").is_file()
+    assert (tmp_path / "archived_skill" / body["id"] / "1.0.0" / "skill" / "references" / "notes.md").is_file()
 
 
 def test_upload_community_skill_zip_accepts_reference_alias(tmp_path: Path, monkeypatch) -> None:
@@ -94,8 +95,8 @@ def test_upload_community_skill_zip_accepts_reference_alias(tmp_path: Path, monk
 
     assert response.status_code == 201
     body = response.json()
-    assert (tmp_path / "archived_skill" / body["id"] / "references" / "guide.md").is_file()
-    assert not (tmp_path / "archived_skill" / body["id"] / "reference").exists()
+    assert (tmp_path / "archived_skill" / body["id"] / "1.0.0" / "skill" / "references" / "guide.md").is_file()
+    assert not (tmp_path / "archived_skill" / body["id"] / "1.0.0" / "skill" / "reference").exists()
 
 
 def test_upload_community_skill_zip_uses_frontmatter_name_not_folder_name(
@@ -117,9 +118,9 @@ def test_upload_community_skill_zip_uses_frontmatter_name_not_folder_name(
     assert response.status_code == 201
     body = response.json()
     assert body["name"] == "canonical-skill"
-    assert (tmp_path / "archived_skill" / body["id"] / "SKILL.md").is_file()
-    assert (tmp_path / "archived_skill" / body["id"] / "references" / "guide.md").is_file()
-    assert not (tmp_path / "archived_skill" / body["id"] / "wrong-folder").exists()
+    assert (tmp_path / "archived_skill" / body["id"] / "1.0.0" / "skill" / "SKILL.md").is_file()
+    assert (tmp_path / "archived_skill" / body["id"] / "1.0.0" / "skill" / "references" / "guide.md").is_file()
+    assert not (tmp_path / "archived_skill" / body["id"] / "1.0.0" / "skill" / "wrong-folder").exists()
 
 
 def test_upload_community_skill_zip_preserves_display_name(tmp_path: Path, monkeypatch) -> None:
@@ -144,7 +145,7 @@ def test_upload_community_skill_zip_preserves_display_name(tmp_path: Path, monke
     body = response.json()
     assert body["name"] == "display-skill"
     assert body["display_name"] == "中文展示名"
-    assert db.community.get_by_id(body["id"])["display_name"] == "中文展示名"
+    assert db.community.get_skill(body["id"])["display_name"] == "中文展示名"
 
 
 def test_upload_community_skill_zip_requires_auth(tmp_path: Path, monkeypatch) -> None:
@@ -188,8 +189,8 @@ def test_upload_community_skill_zip_accepts_examples_and_templates(tmp_path: Pat
 
     assert response.status_code == 201
     body = response.json()
-    assert (tmp_path / "archived_skill" / body["id"] / "examples" / "test.txt").is_file()
-    assert (tmp_path / "archived_skill" / body["id"] / "templates" / "layout.json").is_file()
+    assert (tmp_path / "archived_skill" / body["id"] / "1.0.0" / "skill" / "examples" / "test.txt").is_file()
+    assert (tmp_path / "archived_skill" / body["id"] / "1.0.0" / "skill" / "templates" / "layout.json").is_file()
 
 
 def test_upload_community_skill_zip_accepts_singular_aliases(tmp_path: Path, monkeypatch) -> None:
@@ -208,8 +209,8 @@ def test_upload_community_skill_zip_accepts_singular_aliases(tmp_path: Path, mon
 
     assert response.status_code == 201
     body = response.json()
-    assert (tmp_path / "archived_skill" / body["id"] / "examples" / "test.txt").is_file()
-    assert (tmp_path / "archived_skill" / body["id"] / "templates" / "layout.json").is_file()
-    assert not (tmp_path / "archived_skill" / body["id"] / "example").exists()
-    assert not (tmp_path / "archived_skill" / body["id"] / "template").exists()
+    assert (tmp_path / "archived_skill" / body["id"] / "1.0.0" / "skill" / "examples" / "test.txt").is_file()
+    assert (tmp_path / "archived_skill" / body["id"] / "1.0.0" / "skill" / "templates" / "layout.json").is_file()
+    assert not (tmp_path / "archived_skill" / body["id"] / "1.0.0" / "skill" / "example").exists()
+    assert not (tmp_path / "archived_skill" / body["id"] / "1.0.0" / "skill" / "template").exists()
 

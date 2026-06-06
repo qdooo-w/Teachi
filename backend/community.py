@@ -1,20 +1,9 @@
-"""
-community.py - 社区技能广场路由
-
-5 个端点：
-- GET    /community/skills            列表（关键字搜索 + 分页 + 排序）
-- GET    /community/skills/{id}       详情（元信息）
-- POST   /community/skills            发布
-- POST   /community/skills/{id}/install   一键安装到我的私有 skills 目录
-- DELETE /community/skills/{id}       删除（仅作者）
-
-发布与安装走 nonce 防重放（与 loop.py 同语义）。
-"""
 from __future__ import annotations
 
 import logging
 import shutil
 import uuid
+import json
 from pathlib import Path
 from typing import Any, Literal
 
@@ -30,19 +19,11 @@ from backend.config import (
 )
 from backend.db import DatabaseFacade
 from backend.db_dep import get_db
-from backend.file import FileBase, FileError, ProjectFile, UserFile
-from backend.skill_parser import (
-    SkillParseError,
-    parse_skill_file,
-    validate_skill_name,
-)
-
+from backend.file import FileBase, FileError, ProjectFile, UserFile, LibraryFile
+from backend.skill_parser import validate_skill_name
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/community", tags=["community"])
-
-db: DatabaseFacade | None = None
-
 
 def _resolve_db(db_param: Any) -> DatabaseFacade:
     if isinstance(db_param, DatabaseFacade):
@@ -52,28 +33,19 @@ def _resolve_db(db_param: Any) -> DatabaseFacade:
         return global_db
     raise RuntimeError("DatabaseFacade not initialized in community module")
 
-
-# ── 响应/请求模型 ───────────────────────────────────────────────────────────────
-
 class CommunitySkillSummary(BaseModel):
-    """列表项：不含正文。"""
     id: str
     owner_uuid: str
     name: str
     display_name: str | None = None
     description: str
-    license: str | None = None
-    compatibility: str | None = None
-    size_bytes: int
+    likes: int
     downloads: int
     created_at: float
     updated_at: float
-
-
-class CommunitySkillDetail(CommunitySkillSummary):
-    """详情：技能内容本体在归档目录中，不通过 API 返回全文。"""
-    pass
-
+    version: str | None = None
+    tags: str | None = None
+    size_bytes: int | None = None
 
 class CommunitySkillListResponse(BaseModel):
     skills: list[CommunitySkillSummary]
@@ -82,55 +54,52 @@ class CommunitySkillListResponse(BaseModel):
     offset: int
     sort: Literal["popular", "newest"]
 
-
-class PublishSkillRequest(BaseModel):
-    """发布请求。后端从当前用户的 skills/<skill_name>/ 复制整个目录。"""
-    skill_name: str = Field(..., min_length=1, max_length=64)
-
-
 class InstallSkillRequest(BaseModel):
-    """安装目标。默认安装到当前用户的私有 skills 目录。"""
-    target: Literal["user", "project"] = "user"
+    target: Literal["user", "project", "library"] = "user"
     pid: str | None = None
-
+    version_id: str
 
 class InstallResponse(BaseModel):
     name: str
     skill_id: str
     downloads: int
 
+class CommentCreateRequest(BaseModel):
+    content: str = Field(..., min_length=1, max_length=1000)
+    parent_id: str | None = None
+    reply_to_uuid: str | None = None
 
-# ── 工具函数 ───────────────────────────────────────────────────────────────────
+class ReportCreateRequest(BaseModel):
+    reason: str = Field(..., min_length=1, max_length=100)
+    detail: str = ""
 
 def _to_summary(record: dict) -> CommunitySkillSummary:
+    """
+    将数据库中的技能记录字典转换为统一的社区技能摘要响应对象
+    
+    【数据流】
+    - 输入：包含数据库字段的字典
+    - 输出：结构化的 CommunitySkillSummary 实例
+    """
     return CommunitySkillSummary(
         id=record["id"],
         owner_uuid=record["owner_uuid"],
         name=record["name"],
         display_name=record.get("display_name"),
         description=record["description"],
-        license=record.get("license"),
-        compatibility=record.get("compatibility"),
-        size_bytes=int(record["size_bytes"]),
+        likes=int(record.get("likes", 0)),
         downloads=int(record["downloads"]),
         created_at=float(record["created_at"]),
         updated_at=float(record["updated_at"]),
+        version=record.get("version"),
+        tags=record.get("tags"),
+        size_bytes=record.get("size_bytes")
     )
-
-
-def _to_detail(record: dict) -> CommunitySkillDetail:
-    return CommunitySkillDetail(**_to_summary(record).model_dump())
-
 
 def _archive_root() -> Path:
     root = (BASE_DIR / "archived_skill").resolve()
     root.mkdir(parents=True, exist_ok=True)
     return root
-
-
-def _archive_rel_path(skill_id: str) -> str:
-    return f"archived_skill/{skill_id}"
-
 
 def _resolve_archive_path(archive_path: str) -> Path:
     root = _archive_root()
@@ -138,11 +107,6 @@ def _resolve_archive_path(archive_path: str) -> Path:
     if target != root and root not in target.parents:
         raise FileError("Archived skill path is outside archived_skill directory.")
     return target
-
-
-def _directory_size(path: Path) -> int:
-    return sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
-
 
 def _copy_skill_dir(src: Path, dst: Path) -> None:
     if not src.is_dir():
@@ -154,51 +118,49 @@ def _copy_skill_dir(src: Path, dst: Path) -> None:
     except Exception as e:
         raise FileError(str(e)) from e
 
-
 def _install_target_fs(
     payload: InstallSkillRequest,
     user_uuid: str,
-    db_facade: DatabaseFacade | None = None,
+    db_facade: DatabaseFacade,
+    library_id: str | None = None
 ) -> FileBase:
-    active_db = _resolve_db(db_facade)
+    """
+    根据安装目标类型获取对应的文件系统管理器句柄
+    
+    【调用链】
+    - 被 `install_community_skill` 接口调用，用于在执行文件复制前确认目标沙箱路径安全。
+    - 返回：ProjectFile, LibraryFile 或 UserFile 的具体实例。
+    """
     if payload.target == "project":
         if not payload.pid:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail={"code": "VALIDATION_ERROR", "message": "pid is required when target is project"},
-            )
+            raise HTTPException(status_code=422, detail={"code": "VALIDATION_ERROR", "message": "pid is required"})
         try:
-            return ProjectFile(pid=payload.pid, user_uuid=user_uuid, db_facade=active_db)
+            return ProjectFile(pid=payload.pid, user_uuid=user_uuid, db_facade=db_facade)
         except PermissionError:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={"code": "RESOURCE_NOT_FOUND", "message": "Project not found"},
-            )
-
-    try:
-        return UserFile(user_uuid=user_uuid, db_facade=active_db)
-    except PermissionError:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={"code": "FORBIDDEN", "message": "Access denied"},
-        )
-
-
-# ── 路由 ───────────────────────────────────────────────────────────────────────
+            raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "Project not found"})
+    elif payload.target == "library":
+        if not library_id:
+            raise HTTPException(status_code=500, detail={"code": "INTERNAL", "message": "library_id missing"})
+        return LibraryFile(library_id=library_id, user_uuid=user_uuid, db_facade=db_facade)
+    else:
+        try:
+            return UserFile(user_uuid=user_uuid, db_facade=db_facade)
+        except PermissionError:
+            raise HTTPException(status_code=403, detail={"code": "FORBIDDEN", "message": "Access denied"})
 
 @router.get("/skills", response_model=CommunitySkillListResponse)
 def list_community_skills(
     keyword: str | None = Query(None, max_length=200),
+    tag: str | None = Query(None, max_length=50),
     limit: int = Query(PAGE_DEFAULT_LIMIT, ge=1, le=PAGE_MAX_LIMIT),
     offset: int = Query(0, ge=0),
     sort: Literal["popular", "newest"] = Query(SORT_DEFAULT),
     _user: dict[str, Any] = Depends(get_current_user),
     db: DatabaseFacade = Depends(get_db),
-) -> CommunitySkillListResponse:
-    """社区列表。默认按 downloads 降序（并列时 created_at 兜底）。"""
+):
     db = _resolve_db(db)
-    skills = db.community.list(keyword=keyword, limit=limit, offset=offset, sort=sort)
-    total = db.community.count(keyword=keyword)
+    skills = db.community.list_skills(keyword=keyword, tag=tag, limit=limit, offset=offset, sort=sort)
+    total = db.community.count_skills(keyword=keyword, tag=tag)
     return CommunitySkillListResponse(
         skills=[_to_summary(s) for s in skills],
         total=total,
@@ -207,234 +169,248 @@ def list_community_skills(
         sort=sort,
     )
 
-
-@router.get("/skills/{skill_id}", response_model=CommunitySkillDetail)
+@router.get("/skills/{skill_id}")
 def get_community_skill(
+    skill_id: str,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
+):
+    db = _resolve_db(db)
+    record = db.community.get_skill(skill_id)
+    if not record:
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "Skill not found"})
+
+    latest_version = db.community.get_latest_approved_version(skill_id)
+    liked_by_me = db.community.is_liked_by_user(skill_id, current_user["uuid"])
+    contributors = db.community.get_contributors(skill_id)
+
+    res = _to_summary(record).model_dump()
+    res["liked_by_me"] = liked_by_me
+    res["contributors"] = contributors
+    res["latest_version"] = latest_version
+    return res
+
+@router.get("/skills/{skill_id}/versions")
+def list_skill_versions(
     skill_id: str,
     _user: dict[str, Any] = Depends(get_current_user),
     db: DatabaseFacade = Depends(get_db),
-) -> CommunitySkillDetail:
-    """详情。"""
+):
     db = _resolve_db(db)
-    record = db.community.get_by_id(skill_id)
-    if record is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "RESOURCE_NOT_FOUND", "message": "Community skill not found"},
-        )
-    return _to_detail(record)
+    return db.community.list_versions(skill_id)
 
-
-@router.post(
-    "/skills",
-    response_model=CommunitySkillDetail,
-    status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(verify_nonce)],
-)
-def publish_community_skill(
-    payload: PublishSkillRequest,
-    current_user: dict[str, Any] = Depends(get_current_user),
-    db: DatabaseFacade = Depends(get_db),
-) -> CommunitySkillDetail:
-    """发布 skill 到社区。
-
-    - 后端从当前用户 skills/<skill_name>/ 复制整个目录到 archived_skill/{id}/
-    - 后端**重新解析** SKILL.md frontmatter，不信任前端元信息
-    - 同一作者可重复发布同名 skill：每次都是独立条目
-    """
-    db = _resolve_db(db)
-    skill_name = payload.skill_name.strip()
-    if name_err := validate_skill_name(skill_name):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"code": "SKILL_PARSE_ERROR", "message": f"skill_name 不合法：{name_err}"},
-        )
-
-    try:
-        user_fs = UserFile(user_uuid=current_user["uuid"], db_facade=db)
-        skill_dir = user_fs._safe_path(f"skills/{skill_name}")
-    except PermissionError:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={"code": "FORBIDDEN", "message": "Access denied"},
-        )
-    except FileError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"code": "FILE_ERROR", "message": str(e)},
-        )
-
-    if not skill_dir.is_dir():
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "RESOURCE_NOT_FOUND", "message": "Skill folder not found"},
-        )
-
-    skill_md = skill_dir / "SKILL.md"
-    if not skill_md.is_file():
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"code": "SKILL_PARSE_ERROR", "message": "技能文件夹缺少 SKILL.md"},
-        )
-
-    try:
-        fields = parse_skill_file(skill_md.read_text(encoding="utf-8"))
-    except SkillParseError as e:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"code": "SKILL_PARSE_ERROR", "message": str(e)},
-        )
-    except UnicodeDecodeError as e:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"code": "SKILL_PARSE_ERROR", "message": f"SKILL.md 必须是 UTF-8 文本：{e}"},
-        )
-
-    if fields.name != skill_name:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={
-                "code": "SKILL_PARSE_ERROR",
-                "message": "SKILL.md frontmatter.name 必须与技能文件夹名一致",
-            },
-        )
-
-    owner_uuid = current_user["uuid"]
-    skill_id = str(uuid.uuid4())
-    archive_rel_path = _archive_rel_path(skill_id)
-    archive_dir = _resolve_archive_path(archive_rel_path)
-    try:
-        _copy_skill_dir(skill_dir, archive_dir)
-        record = db.community.create(
-            skill_id=skill_id,
-            owner_uuid=owner_uuid,
-            name=fields.name,
-            display_name=fields.display_name,
-            description=fields.description,
-            archive_path=archive_rel_path,
-            size_bytes=_directory_size(archive_dir),
-            license=fields.license,
-            compatibility=fields.compatibility,
-        )
-    except FileError as e:
-        if archive_dir.exists():
-            shutil.rmtree(archive_dir, ignore_errors=True)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"code": "FILE_ERROR", "message": str(e)},
-        ) from e
-    except Exception:
-        if archive_dir.exists():
-            shutil.rmtree(archive_dir, ignore_errors=True)
-        raise
-    logger.info("community_skill_published id=%s name=%s owner=%s", record["id"], fields.name, owner_uuid)
-    return _to_detail(record)
-
-
-@router.post(
-    "/skills/{skill_id}/install",
-    response_model=InstallResponse,
-    dependencies=[Depends(verify_nonce)],
-)
+@router.post("/skills/{skill_id}/install", response_model=InstallResponse, dependencies=[Depends(verify_nonce)])
 def install_community_skill(
     skill_id: str,
-    payload: InstallSkillRequest | None = None,
+    payload: InstallSkillRequest,
     current_user: dict[str, Any] = Depends(get_current_user),
     db: DatabaseFacade = Depends(get_db),
-) -> InstallResponse:
-    """把社区 skill 安装到用户级或项目级 skills/{name}/。
-
-    - 本地已存在同名目录（不论是否含 SKILL.md）→ 409，由用户改名后重试
-    - 安装成功后社区记录 downloads += 1
+):
+    """
+    安装社区技能：下载指定的已上架社区技能版本至本地或个人仓库
+    
+    【数据流】
+    - 输入：社区技能 ID (skill_id), 目标安装层级 ("user"/"project"/"library"), 目标版本 ID (version_id)
+    - 数据库流：如果是安装到仓库层 ("library")，在 user_library_skills 写入一条新记录同步。
+    - 文件流：读取社区归档目录 archived_skill/{skill_id}/{version}/skill/ -> 复制到指定的目标运行路径或仓库路径。
+    - 计数器流：更新 community_skills 及 community_skill_versions 中的下载量 (downloads + 1)。
+    
+    【调用链】
+    - 客户端请求 -> APIRouter -> install_community_skill()
+    - 获取社区技能记录 -> db.community.get_skill()
+    - 获取指定版本记录 -> db.community.get_version()
+    - 准备目标文件系统安全句柄 -> _install_target_fs() -> UserFile/ProjectFile/LibraryFile (file.py)
+    - 物理文件复制 -> _copy_skill_dir()
+    - 若目标为仓库，写入仓库记录 -> db.library.create() (db.py)
+    - 更新下载量统计 -> db.community.increment_downloads() (db.py)
     """
     db = _resolve_db(db)
-    payload = payload or InstallSkillRequest()
-    record = db.community.get_by_id(skill_id)
-    if record is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "RESOURCE_NOT_FOUND", "message": "Community skill not found"},
-        )
-
     user_uuid = current_user["uuid"]
-    name = record["name"]
+    
+    skill_record = db.community.get_skill(skill_id)
+    if not skill_record:
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "Skill not found"})
+        
+    version_record = db.community.get_version(payload.version_id)
+    if not version_record or version_record["skill_id"] != skill_id:
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "Version not found"})
 
-    # 信任但验证：DB 中的 name 应已通过 publish 层校验，但仍兜底防御历史脏数据
-    if validate_skill_name(name) is not None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"code": "INVALID_SKILL_NAME", "message": "Skill name in record is not safe"},
-        )
+    name = skill_record["name"]
+    library_id = str(uuid.uuid4()) if payload.target == "library" else None
+    
+    target_fs = _install_target_fs(payload, user_uuid, db, library_id)
 
-    target_fs = _install_target_fs(payload, user_uuid, db)
-
-    # 目录冲突检测：直接看 skills/{name} 目录是否已存在
-    try:
-        skill_dir = target_fs._safe_path(f"skills/{name}")
-    except FileError:
-        # name 含非法路径字符——理论上 publish 时已通过 validate_skill_name 拦截
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"code": "INVALID_SKILL_NAME", "message": "Skill name is not safe"},
-        )
-    if skill_dir.exists():
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "LOCAL_SKILL_EXISTS",
-                "message": f"本地已存在同名技能 {name!r}，请先重命名或删除后重试。",
-            },
-        )
+    if payload.target == "library":
+        skill_dir = target_fs.base_path / "skill"
+    else:
+        try:
+            skill_dir = target_fs._safe_path(f"skills/{name}")
+        except FileError:
+            raise HTTPException(status_code=400, detail={"code": "INVALID_NAME", "message": "Invalid skill name"})
+            
+        if skill_dir.exists():
+            raise HTTPException(status_code=409, detail={"code": "CONFLICT", "message": "Skill already exists locally"})
 
     try:
-        archive_dir = _resolve_archive_path(record["archive_path"])
+        archive_dir = _resolve_archive_path(version_record["archive_path"]) / "skill"
         if not archive_dir.is_dir():
-            raise FileError("Archived skill folder not found")
+            # Fallback to old format where content is directly in archive_path
+            archive_dir = _resolve_archive_path(version_record["archive_path"])
         _copy_skill_dir(archive_dir, skill_dir)
+        
+        if payload.target == "library":
+            # Extra library sync logic
+            readme_path = skill_dir / "README.md"
+            readme_content = readme_path.read_text(encoding="utf-8") if readme_path.is_file() else ""
+            db.library.create(
+                user_uuid=user_uuid,
+                name=name,
+                display_name=skill_record["display_name"],
+                description=skill_record["description"],
+                readme_md=readme_content,
+                tags=version_record["tags"],
+                version=version_record["version"],
+                changelog=version_record["changelog"],
+                source="community",
+                community_skill_id=skill_id,
+                local_path=f"data/{user_uuid}/library/{library_id}",
+                size_bytes=version_record["size_bytes"],
+                skill_id=library_id
+            )
+            
     except FileError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"code": "FILE_ERROR", "message": str(e)},
+        raise HTTPException(status_code=400, detail={"code": "FILE_ERROR", "message": str(e)})
+
+    db.community.increment_downloads(skill_id, version_id=payload.version_id)
+    refreshed = db.community.get_skill(skill_id)
+    return InstallResponse(name=name, skill_id=skill_id, downloads=int(refreshed["downloads"]))
+
+@router.post("/skills/{skill_id}/like")
+def toggle_skill_like(
+    skill_id: str,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
+):
+    db = _resolve_db(db)
+    liked = db.community.toggle_like(skill_id, current_user["uuid"])
+    return {"liked": liked}
+
+@router.get("/skills/{skill_id}/comments")
+def list_comments(
+    skill_id: str,
+    parent_id: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    _user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
+):
+    db = _resolve_db(db)
+    return db.community.list_comments(skill_id, parent_id, limit, offset)
+
+@router.post("/skills/{skill_id}/comments")
+def create_comment(
+    skill_id: str,
+    payload: CommentCreateRequest,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
+):
+    """
+    发表技能评论：支持一级评论和针对一级评论的回复（二级评论，即楼中楼）
+    
+    【数据流】
+    - 输入：社区技能 ID (skill_id), 评论内容 (content), 父评论 ID (parent_id) 可选, 被回复用户 UUID (reply_to_uuid) 可选。
+    - 验证：若是二级评论（parent_id 不为空），校验父评论是否存在且父评论层级本身必须是一级评论（最大层级嵌套为 2，即深度限制 <= 1）。
+    - 数据库流：在 community_skill_comments 插入一条新记录。
+    
+    【调用链】
+    - 客户端请求 -> APIRouter -> create_comment()
+    - 写入数据库记录与嵌套校验 -> db.community.create_comment() (db.py::CommunitySkillsFacade)
+    """
+    db = _resolve_db(db)
+    comment_id = str(uuid.uuid4())
+    try:
+        comment = db.community.create_comment(
+            comment_id=comment_id,
+            skill_id=skill_id,
+            user_uuid=current_user["uuid"],
+            content=payload.content,
+            parent_id=payload.parent_id,
+            reply_to_uuid=payload.reply_to_uuid
         )
+        return comment
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail={"code": "BAD_REQUEST", "message": str(e)})
 
-    db.community.increment_downloads(skill_id)
-    refreshed = db.community.get_by_id(skill_id)
-    downloads = int(refreshed["downloads"]) if refreshed else int(record["downloads"]) + 1
-    logger.info("community_skill_installed id=%s name=%s user=%s", skill_id, name, user_uuid)
-    return InstallResponse(name=name, skill_id=skill_id, downloads=downloads)
+@router.post("/comments/{comment_id}/like")
+def toggle_comment_like(
+    comment_id: str,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
+):
+    db = _resolve_db(db)
+    liked = db.community.toggle_comment_like(comment_id, current_user["uuid"])
+    return {"liked": liked}
 
+@router.post("/comments/{comment_id}/report")
+def report_comment(
+    comment_id: str,
+    payload: ReportCreateRequest,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
+):
+    db = _resolve_db(db)
+    report_id = str(uuid.uuid4())
+    report = db.community.create_report(
+        report_id=report_id,
+        comment_id=comment_id,
+        reporter_uuid=current_user["uuid"],
+        reason=payload.reason,
+        detail=payload.detail
+    )
+    return report
 
 @router.delete("/skills/{skill_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_community_skill(
     skill_id: str,
     current_user: dict[str, Any] = Depends(get_current_user),
     db: DatabaseFacade = Depends(get_db),
-) -> None:
-    """删除社区 skill，仅作者可调用。"""
+):
     db = _resolve_db(db)
-    record = db.community.get_by_id(skill_id)
-    if record is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "RESOURCE_NOT_FOUND", "message": "Community skill not found"},
-        )
+    record = db.community.get_skill(skill_id)
+    if not record:
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "Skill not found"})
     if record["owner_uuid"] != current_user["uuid"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={"code": "FORBIDDEN", "message": "Only the author can delete this skill"},
-        )
+        raise HTTPException(status_code=403, detail={"code": "FORBIDDEN", "message": "Only owner can delete"})
+        
+    db.community.delete_skill(skill_id)
     try:
-        archive_dir = _resolve_archive_path(record["archive_path"])
+        archive_dir = _resolve_archive_path(f"archived_skill/{skill_id}")
         if archive_dir.exists():
-            shutil.rmtree(archive_dir)
-    except FileError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"code": "FILE_ERROR", "message": str(e)},
-        )
-    if not db.community.delete_for_owner(skill_id, current_user["uuid"]):
-        # 极端竞态：刚才存在，DELETE 之间被别人删了；按 404 处理更直观
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "RESOURCE_NOT_FOUND", "message": "Community skill not found"},
-        )
+            shutil.rmtree(archive_dir, ignore_errors=True)
+    except FileError:
+        pass
+
+@router.delete("/skills/{skill_id}/comments/{comment_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_comment_endpoint(
+    skill_id: str,
+    comment_id: str,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
+):
+    """
+    删除评论：支持评论作者自行删除，以及全局系统管理员 (role == 'admin') 强行删除
+    
+    【数据流】
+    - 输入：技能 ID (skill_id), 评论 ID (comment_id)
+    - 权限判断：校验当前用户的 role 是否为 'admin' 以决定是否开启全局删除权限。
+    - 数据库流：在 community_skill_comments 删除指定记录。
+    
+    【调用链】
+    - 客户端请求 -> APIRouter -> delete_comment_endpoint()
+    - 执行带权限控制的数据库删除 -> db.community.delete_comment() (db.py::CommunitySkillsFacade)
+    """
+    db = _resolve_db(db)
+    is_admin = current_user.get("role") == "admin"
+    deleted = db.community.delete_comment(comment_id, current_user["uuid"], is_admin=is_admin)
+    if not deleted:
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "Comment not found or not authorized"})

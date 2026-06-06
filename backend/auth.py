@@ -6,10 +6,11 @@ import time
 import random
 # 认证相关逻辑，包括注册、登录、刷新 token，以及获取当前用户等功能。
 from datetime import datetime, timedelta, timezone
-from typing import Literal, TypedDict, cast
+from typing import Literal, TypedDict, cast, Optional
 # 这里使用 PyJWT 来处理 JWT 生成和验证，使用 PBKDF2-HMAC 来做密码哈希，避免引入额外的依赖库。
 import jwt
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, Header, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, Header, status, Query, UploadFile, File
+from fastapi.responses import RedirectResponse, FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
@@ -27,7 +28,15 @@ from backend.config import (
 )
 from backend.db import DatabaseFacade
 from backend.db_dep import get_db
+import os
+import logging
+from backend.registration_service import get_registration_service
 
+logger = logging.getLogger(__name__)
+
+# ==================== 配置 ====================
+FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL", "http://localhost:5173")
+TEMP_TOKEN_EXPIRE_MINUTES = int(os.getenv("TEMP_TOKEN_EXPIRE_MINUTES", "5"))
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 security = HTTPBearer(auto_error=False)
@@ -43,6 +52,10 @@ class UserRecord(TypedDict):
     username: str
     email: str
     password_hash: str
+    role: str
+    self_description: Optional[str]
+    major: Optional[str]
+    head_file: Optional[str]
     created_at: float
 
 
@@ -52,6 +65,10 @@ class SafeUser(TypedDict):
     uuid: str
     username: str
     email: str
+    role: str
+    self_description: Optional[str]
+    major: Optional[str]
+    head_file: Optional[str]
     created_at: float
 
 class TokenPayload(TypedDict):
@@ -67,6 +84,16 @@ class RegisterRequest(BaseModel):
     username: str = Field(min_length=1, max_length=50)
     email: str = Field(min_length=3, max_length=255)
     password: str = Field(min_length=6, max_length=128)
+
+
+class SetPasswordRequest(BaseModel):
+    temp_token: str
+    username: Optional[str] = Field(default=None, min_length=1, max_length=50)
+    password: str = Field(min_length=8, max_length=128)
+
+
+class RegisterEmailRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=255)
 
 
 class LoginRequest(BaseModel):
@@ -85,6 +112,10 @@ class UserOut(BaseModel):
     uuid: str
     username: str
     email: str
+    role: str
+    self_description: Optional[str] = None
+    major: Optional[str] = None
+    head_file: Optional[str] = None
     created_at: float
 
 
@@ -267,24 +298,36 @@ def _clear_refresh_cookie(response: Response) -> None:
     )
 
 
-@router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
-def register_user(payload: RegisterRequest, db: DatabaseFacade = Depends(get_db)) -> UserOut:
-    existing = db.users.get_by_email(payload.email)
-    if existing:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already exists")
+@router.post("/register", status_code=status.HTTP_200_OK)
+async def request_registration(
+    payload: RegisterEmailRequest,
+    db: DatabaseFacade = Depends(get_db)
+):
+    email = payload.email.strip()
 
-    created = db.users.create(
-        username=payload.username,
-        email=payload.email,
-        password_hash=hash_password(payload.password),
-    )
-    created_user = cast(UserRecord, created)
-    return UserOut(
-        uuid=created_user["uuid"],
-        username=created_user["username"],
-        email=created_user["email"],
-        created_at=float(created_user["created_at"]),
-    )
+    # 1. 校验邮箱域名后缀是否允许
+    service = get_registration_service()
+    allowed_domains_str = os.getenv("ALLOWED_EMAIL_DOMAINS", "").strip()
+    if allowed_domains_str:
+        allowed_domains = [d.strip() for d in allowed_domains_str.split(",") if d.strip()]
+        if not any(email.endswith(f"@{domain}") for domain in allowed_domains):
+            raise HTTPException(status_code=400, detail="该邮箱后缀不在允许的注册白名单中")
+
+    # 2. 检查本地数据库是否已经存在该邮箱
+    existing = db.users.get_by_email(email)
+    if existing:
+        raise HTTPException(status_code=409, detail="该邮箱已被注册")
+
+    # 3. 将邮箱写入 SeaTable 触发自动化
+    try:
+        success = await service.create_registration_request(email)
+        if not success:
+            raise HTTPException(status_code=500, detail="触发注册验证邮件失败，请稍后重试")
+    except Exception as e:
+        logger.error(f"发送注册请求失败: {e}")
+        raise HTTPException(status_code=503, detail="服务暂时不可用，请稍后再试")
+
+    return {"message": "验证邮件已发送，请检查邮箱完成注册"}
 
 
 @router.post("/login", response_model=AccessTokenOut)
@@ -335,14 +378,305 @@ def get_current_user(user_uuid: str = Depends(get_current_user_uuid), db: Databa
     user = db.users.get_by_uuid(user_uuid)
     user = _ensure_user_record(user)
 
-    return SafeUser(uuid=user["uuid"], username=user["username"], email=user["email"], created_at=user["created_at"])
+    return SafeUser(
+        uuid=user["uuid"],
+        username=user["username"],
+        email=user["email"],
+        role=user["role"],
+        self_description=user.get("self_description"),
+        major=user.get("major"),
+        head_file=user.get("head_file"),
+        created_at=user["created_at"],
+    )
 
 @router.get("/me", response_model=UserOut)
-def read_current_user(current_user: UserRecord = Depends(get_current_user)) -> UserOut:
+def read_current_user(current_user: SafeUser = Depends(get_current_user)) -> UserOut:
     """返回当前已登录用户的基础信息（用于前端展示用户名等）。"""
     return UserOut(
         uuid=current_user["uuid"],
         username=current_user["username"],
         email=current_user["email"],
+        role=current_user["role"],
+        self_description=current_user.get("self_description"),
+        major=current_user.get("major"),
+        head_file=current_user.get("head_file"),
         created_at=float(current_user["created_at"]),
     )
+
+
+# ==================== 新增端点：邮箱验证 ====================
+@router.get("/verify")
+async def verify_email(
+    code: str = Query(...),
+    db: DatabaseFacade = Depends(get_db),
+):
+    service = get_registration_service()
+    try:
+        result = await service.verify_code(code)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+    if not result:
+        raise HTTPException(status_code=404, detail="Invalid verification code")
+
+    if result["expires_at"] < datetime.now(timezone.utc):
+        await service.mark_expired(result["identifier"])
+        raise HTTPException(status_code=400, detail="Verification link expired")
+
+    # 检查本地是否已存在该邮箱用户
+    existing = db.users.get_by_email(result["email"])
+    is_reset = "true" if existing is not None else "false"
+
+    # 生成临时 JWT（5分钟有效）
+    exp_dt = datetime.now(timezone.utc) + timedelta(minutes=TEMP_TOKEN_EXPIRE_MINUTES)
+    temp_token = jwt.encode(
+        {
+            "email": result["email"],
+            "row_id": result["identifier"],
+            "is_reset": existing is not None,
+            "exp": int(exp_dt.timestamp()),
+        },
+        JWT_SECRET,
+        algorithm=JWT_ALGORITHM,
+    )
+
+    redirect_url = f"{FRONTEND_BASE_URL}/set-password?temp_token={temp_token}&is_reset={is_reset}"
+    return RedirectResponse(url=redirect_url, status_code=302)
+
+
+# ==================== 新增端点：设置密码 ====================
+@router.post("/set-password", response_model=AccessTokenOut)
+async def set_password(
+    req: SetPasswordRequest,
+    response: Response,
+    db: DatabaseFacade = Depends(get_db),
+):
+    # 1. 解码临时 token
+    try:
+        payload = jwt.decode(req.temp_token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        email = payload.get("email")
+        identifier = payload.get("row_id")
+        if not email or not identifier:
+            raise HTTPException(status_code=400, detail="Invalid token payload")
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=400, detail="Temporary token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=400, detail="Invalid token")
+
+    # 2. 检查邮箱是否已注册，决定是重置密码还是注册新用户
+    existing_user = db.users.get_by_email(email)
+    
+    if existing_user:
+        # 重置密码
+        password_hash = hash_password(req.password)
+        db.users.update_password(existing_user["uuid"], password_hash)
+        user_uuid = existing_user["uuid"]
+    else:
+        # 新注册
+        if not req.username or not req.username.strip():
+            raise HTTPException(status_code=400, detail="Username is required for registration")
+        password_hash = hash_password(req.password)
+        try:
+            new_user = db.users.create(
+                username=req.username.strip(),
+                email=email,
+                password_hash=password_hash,
+            )
+            user_uuid = new_user["uuid"]
+        except Exception as e:
+            logger.error(f"创建用户失败: {e}")
+            raise HTTPException(status_code=409, detail="User already exists")
+
+    # 3. 更新验证码对应的注册状态为已完成
+    service = get_registration_service()
+    await service.mark_registered(identifier)
+
+    # 4. 生成正式 token
+    access_token = create_access_token(user_uuid)
+    refresh_token = create_refresh_token(user_uuid)
+    _set_refresh_cookie(response, refresh_token)
+
+    return AccessTokenOut(access_token=access_token)
+
+
+# ==================== 新增端点：请求重置密码 ====================
+@router.post("/password-reset/request", status_code=status.HTTP_200_OK)
+async def request_password_reset(
+    payload: RegisterEmailRequest,
+    db: DatabaseFacade = Depends(get_db)
+):
+    email = payload.email.strip()
+
+    # 1. 校验邮箱域名后缀是否允许
+    service = get_registration_service()
+    allowed_domains_str = os.getenv("ALLOWED_EMAIL_DOMAINS", "").strip()
+    if allowed_domains_str:
+        allowed_domains = [d.strip() for d in allowed_domains_str.split(",") if d.strip()]
+        if not any(email.endswith(f"@{domain}") for domain in allowed_domains):
+            raise HTTPException(status_code=400, detail="该邮箱后缀不在允许的白名单中")
+
+    # 2. 检查本地数据库是否已经存在该邮箱
+    existing = db.users.get_by_email(email)
+    if not existing:
+        raise HTTPException(status_code=404, detail="该邮箱尚未注册")
+
+    # 3. 将邮箱写入 SeaTable 触发自动化
+    try:
+        success = await service.create_registration_request(email)
+        if not success:
+            raise HTTPException(status_code=500, detail="触发重置密码邮件失败，请稍后重试")
+    except Exception as e:
+        logger.error(f"发送重置密码请求失败: {e}")
+        raise HTTPException(status_code=503, detail="服务暂时不可用，请稍后再试")
+
+    return {"message": "验证邮件已发送，请检查邮箱完成密码重置"}
+
+
+# ==================== 新增端点：修改个人资料 ====================
+class UpdateProfileRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=50)
+    self_description: Optional[str] = Field(default=None, max_length=1000)
+    major: Optional[str] = Field(default=None, max_length=100)
+
+
+@router.put("/profile", response_model=UserOut)
+def update_profile(
+    req: UpdateProfileRequest,
+    current_user: SafeUser = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
+):
+    updated = db.users.update_profile(
+        user_uuid=current_user["uuid"],
+        username=req.username.strip(),
+        self_description=req.self_description,
+        major=req.major,
+        head_file=current_user.get("head_file"),
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="User not found")
+    return UserOut(
+        uuid=updated["uuid"],
+        username=updated["username"],
+        email=updated["email"],
+        role=updated["role"],
+        self_description=updated.get("self_description"),
+        major=updated.get("major"),
+        head_file=updated.get("head_file"),
+        created_at=float(updated["created_at"]),
+    )
+
+
+# ==================== 新增端点：上传头像 ====================
+@router.post("/avatar", response_model=UserOut)
+async def upload_avatar(
+    file: UploadFile = File(...),
+    current_user: SafeUser = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
+):
+    # 限制文件类型
+    filename = file.filename or ""
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in [".jpg", ".jpeg", ".png", ".gif", ".webp"]:
+        raise HTTPException(status_code=400, detail="不支持的图片格式，仅支持 jpg, jpeg, png, gif, webp")
+
+    # 确定保存目录
+    user_uuid = current_user["uuid"]
+    user_dir = os.path.join("data", user_uuid, "image")
+    os.makedirs(user_dir, exist_ok=True)
+
+    # 写入前先清理该目录下的旧头像文件
+    for old_file in os.listdir(user_dir):
+        old_path = os.path.join(user_dir, old_file)
+        if os.path.isfile(old_path):
+            try:
+                os.remove(old_path)
+            except Exception as e:
+                logger.warning(f"无法删除旧头像文件 {old_path}: {e}")
+
+    # 新头像文件名
+    avatar_filename = f"avatar{ext}"
+    avatar_path = os.path.join(user_dir, avatar_filename)
+
+    # 写入文件
+    try:
+        contents = await file.read()
+        with open(avatar_path, "wb") as f:
+            f.write(contents)
+    except Exception as e:
+        logger.error(f"写入头像文件失败: {e}")
+        raise HTTPException(status_code=500, detail="头像上传失败")
+
+    # 更新数据库中的头像路径
+    head_file_val = f"data/{user_uuid}/image/{avatar_filename}"
+    updated = db.users.update_profile(
+        user_uuid=user_uuid,
+        username=current_user["username"],
+        self_description=current_user.get("self_description"),
+        major=current_user.get("major"),
+        head_file=head_file_val,
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return UserOut(
+        uuid=updated["uuid"],
+        username=updated["username"],
+        email=updated["email"],
+        role=updated["role"],
+        self_description=updated.get("self_description"),
+        major=updated.get("major"),
+        head_file=updated.get("head_file"),
+        created_at=float(updated["created_at"]),
+    )
+
+
+# ==================== 新增端点：获取头像 ====================
+@router.get("/avatar/{user_uuid}")
+def get_avatar(
+    user_uuid: str,
+    db: DatabaseFacade = Depends(get_db),
+):
+    user = db.users.get_by_uuid(user_uuid)
+    if user and user.get("head_file"):
+        file_path = user["head_file"]
+        if os.path.exists(file_path) and os.path.isfile(file_path):
+            return FileResponse(file_path)
+
+    # 默认头像：根据用户名生成一个带首字母的 SVG 作为 Response 返回
+    username = user["username"] if user else "?"
+    initial = username[0].upper() if username else "?"
+    
+    colors = [
+        ("#8A2387", "#E94057", "#F27121"),
+        ("#11998e", "#38ef7d", "#38ef7d"),
+        ("#3a7bd5", "#3a6073", "#3a6073"),
+        ("#00c6ff", "#0072ff", "#0072ff"),
+        ("#f12711", "#f5af19", "#f5af19"),
+        ("#FBD3E9", "#BB377D", "#BB377D"),
+    ]
+    # 使用 user_uuid 的哈希值来选择渐变配色
+    color_idx = 0
+    if user_uuid:
+        try:
+            # 简单的非密码学哈希值计算，作为配色选择的索引
+            color_idx = sum(ord(char) for char in user_uuid) % len(colors)
+        except Exception:
+            color_idx = 0
+
+    c1, c2, c3 = colors[color_idx]
+
+    svg_content = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+  <defs>
+    <linearGradient id="grad_{user_uuid}" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:{c1};stop-opacity:1" />
+      <stop offset="50%" style="stop-color:{c2};stop-opacity:1" />
+      <stop offset="100%" style="stop-color:{c3};stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  <circle cx="50" cy="50" r="50" fill="url(#grad_{user_uuid})" />
+  <text x="50%" y="54%" dominant-baseline="middle" text-anchor="middle" fill="#ffffff" font-family="sans-serif" font-size="40" font-weight="bold">{initial}</text>
+</svg>"""
+
+    return Response(content=svg_content, media_type="image/svg+xml")
