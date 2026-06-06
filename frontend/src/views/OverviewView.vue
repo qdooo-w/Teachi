@@ -10,6 +10,7 @@ import {
   getCurrentUserId,
   getErrorMessage,
   renameProject,
+  listSessions,
   type ProjectItem,
 } from '../api'
 import { useProjects } from '../composables/useProjects'
@@ -141,7 +142,7 @@ watch(errorMessage, (newVal) => {
   }
 })
 
-const DESC_MAX = 100
+const DESC_MAX = 300
 // 描述输入框自动增高的最大高度（像素），超出后出现滚动条
 const DESC_TEXTAREA_MAX_HEIGHT = 180
 
@@ -149,6 +150,11 @@ const DESC_TEXTAREA_MAX_HEIGHT = 180
 function autosizeDesc(): void {
   const el = descTextarea.value
   if (!el) return
+  if (showCreatePanel.value) {
+    el.style.height = ''
+    el.style.overflowY = 'auto'
+    return
+  }
   el.style.height = 'auto'
   const next = Math.min(el.scrollHeight, DESC_TEXTAREA_MAX_HEIGHT)
   el.style.height = `${next}px`
@@ -276,6 +282,72 @@ async function performDelete(): Promise<void> {
   }
 }
 
+interface QuickAccessSession {
+  sid: string
+  sessionname: string
+  timestamp: number
+  created_at: number
+  pid: string
+  projectName: string
+}
+
+const recentSessions = ref<QuickAccessSession[]>([])
+const loadingRecent = ref(false)
+
+async function loadRecentSessions(): Promise<void> {
+  if (projects.value.length === 0) {
+    recentSessions.value = []
+    return
+  }
+  loadingRecent.value = true
+  try {
+    const promises = projects.value.map(async (p) => {
+      try {
+        const list = await listSessions(p.pid)
+        return list.map((s) => ({
+          ...s,
+          pid: p.pid,
+          projectName: p.projectname,
+        }))
+      } catch (err) {
+        console.error(`加载科目 ${p.projectname} 的会话失败:`, err)
+        return []
+      }
+    })
+    const allLists = await Promise.all(promises)
+    const combined = allLists.flat()
+    // 按时间戳降序排序
+    combined.sort((a, b) => b.timestamp - a.timestamp)
+    // 取前 6 个
+    recentSessions.value = combined.slice(0, 6)
+  } catch (err) {
+    console.error('加载最近会话失败:', err)
+  } finally {
+    loadingRecent.value = false
+  }
+}
+
+async function goToSession(session: QuickAccessSession): Promise<void> {
+  closeSidebarOnMobile()
+  await router.push({ name: 'chat', params: { pid: session.pid, sid: session.sid } })
+}
+
+function formatDateTime(ts: number): string {
+  return new Date(ts * 1000).toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+watch(
+  () => projects.value.map((p) => p.pid).join(','),
+  () => {
+    void loadRecentSessions()
+  }
+)
+
 function scrollToMiddleCard(): void {
   if (!cardScroller.value || projects.value.length === 0) return
   const cards = cardScroller.value.children
@@ -292,6 +364,7 @@ onMounted(async () => {
     recalcPadding()
     scrollToMiddleCard()
   })
+  void loadRecentSessions()
 })
 </script>
 
@@ -341,7 +414,7 @@ onMounted(async () => {
                 >
                   <div
                     v-if="renamingKey === cardKey(project.pid)"
-                    class="flex h-full flex-col justify-center rounded-2xl bg-white p-4 shadow-sm"
+                    class="flex h-full flex-col justify-center rounded-lg bg-white p-4 shadow-sm"
                   >
                     <div class="mb-3 text-xs text-[#6b7280]">重命名科目</div>
                     <RenameInline
@@ -355,7 +428,7 @@ onMounted(async () => {
                   </div>
                   <button
                     v-else
-                    class="flex h-full w-full flex-col justify-between rounded-2xl bg-white p-4 text-left shadow-sm transition-colors hover:bg-[#f9fafb]"
+                    class="flex h-full w-full flex-col justify-between rounded-lg bg-white p-4 text-left shadow-sm transition-colors hover:bg-[#f9fafb]"
                     type="button"
                     @click="goToProject(project)"
                   >
@@ -382,7 +455,7 @@ onMounted(async () => {
                   </div>
                 </div>
               </div>
-              <div v-else class="rounded-2xl bg-white px-6 py-10 text-center text-sm text-[#6b7280] shadow-sm">
+              <div v-else class="rounded-lg bg-white px-6 py-10 text-center text-sm text-[#6b7280] shadow-sm">
                 还没有科目，在下方输入以新建。
               </div>
             </div>
@@ -394,7 +467,7 @@ onMounted(async () => {
                   <div v-for="(project, i) in projects" :key="project.pid" :style="{ '--i': i }">
                     <div
                       v-if="renamingKey === cardKey(project.pid)"
-                      class="rounded-2xl bg-white p-4 shadow-sm"
+                      class="rounded-lg bg-white p-4 shadow-sm"
                     >
                       <div class="mb-2 text-xs text-[#6b7280]">重命名科目</div>
                       <RenameInline
@@ -410,7 +483,7 @@ onMounted(async () => {
                       v-else
                       role="button"
                       tabindex="0"
-                      class="group flex w-full cursor-pointer items-center justify-between rounded-2xl bg-white p-4 text-left shadow-sm transition-colors hover:bg-[#f9fafb]"
+                      class="group flex w-full cursor-pointer items-center justify-between rounded-lg bg-white p-4 text-left shadow-sm transition-colors hover:bg-[#f9fafb]"
                       @click="goToProject(project)"
                       @keydown.enter.prevent="goToProject(project)"
                     >
@@ -435,7 +508,7 @@ onMounted(async () => {
 
         <!-- 箭头：独立 Transition，向下冲出页面，与列表进场同时发生 -->
         <Transition name="ov-arrow">
-          <div v-if="!expanded && projects.length > 0" class="mt-5 flex flex-col items-center gap-1.5">
+          <div v-if="!expanded && projects.length > 0" class="mt-5 flex flex-col items-center gap-1.5 w-full">
             <span class="text-xs text-[#9ca3af]">点击查看所有科目</span>
             <button
               type="button"
@@ -446,6 +519,33 @@ onMounted(async () => {
                 <path stroke-linecap="round" stroke-linejoin="round" d="M4 4l28 12L60 4" />
               </svg>
             </button>
+
+            <!-- 最近会话 -->
+            <div v-if="recentSessions.length > 0" class="w-full mt-6 text-left">
+              <!-- 分割线 -->
+              <div class="mb-6 border-t border-[#e5e7eb] w-full" />
+              <div class="mb-4 text-sm font-medium text-[#6b7280]">最近会话</div>
+              <div class="space-y-3">
+                <div
+                  v-for="session in recentSessions"
+                  :key="session.sid"
+                  role="button"
+                  tabindex="0"
+                  class="group flex w-full cursor-pointer items-center justify-between rounded-lg bg-white p-4 text-left shadow-sm transition-colors hover:bg-[#f9fafb] active:scale-[0.99] duration-150"
+                  @click="goToSession(session)"
+                  @keydown.enter.prevent="goToSession(session)"
+                >
+                  <div class="min-w-0 flex-1 pr-4">
+                    <div class="font-hans truncate font-medium text-[#1f2937]">
+                      {{ session.projectName }} / {{ session.sessionname }}
+                    </div>
+                    <div class="font-hans mt-1 truncate text-xs text-[#9ca3af]">
+                      更新于 {{ formatDateTime(session.timestamp) }}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </Transition>
       </div>
@@ -454,61 +554,82 @@ onMounted(async () => {
     <!-- 底部面板：绝对定位，不影响上方内容布局 -->
     <div class="absolute bottom-0 left-0 right-0 px-4 pb-4 md:px-6">
       <div class="mx-auto w-full max-w-3xl">
-        <!-- 创建面板：同一元素的展开/收起变换 -->
         <div
-          class="create-panel"
-          :class="{ expanded: showCreatePanel }"
-          @click="!showCreatePanel && openCreatePanel()"
+          class="create-panel-wrapper font-hans"
+          :class="{ 'expanded-wrapper': showCreatePanel }"
         >
-          <span class="create-placeholder">新建科目...</span>
-
-          <div class="create-fields">
-            <div class="create-fields-inner">
+          <!-- 科目名称悬浮条 -->
+          <Transition name="dialog-fade">
+            <div
+              v-if="showCreatePanel"
+              class="mb-2 flex items-center gap-2 rounded-xl border border-neutral-200 bg-white px-3 py-1.5 shadow-sm"
+              @click.stop
+            >
+              <span class="text-xs font-medium text-[#4b5563] shrink-0 select-none">Title:</span>
               <input
                 ref="nameInput"
                 v-model="newProjectName"
                 type="text"
-                class="w-full border-none bg-transparent py-2 text-base font-medium text-[#1f2937] outline-none placeholder:text-[#9ca3af]"
-                placeholder="科目名称"
+                class="w-full border-none bg-transparent py-0.5 text-xs font-medium text-[#1f2937] outline-none placeholder:text-[#9ca3af] font-hans"
+                placeholder="为新科目命名..."
                 :maxlength="13"
                 :disabled="creatingProject"
-                @keydown.enter.prevent="handleCreateProject"
+                @keydown.enter.prevent="descTextarea?.focus()"
                 @keydown.esc.prevent="closeCreatePanel"
-                @click.stop
               />
-              <div class="mx-2 border-t border-[#f3f4f6]" />
-              <div class="relative">
-                <textarea
-                  ref="descTextarea"
-                  v-model="newProjectDesc"
-                  class="w-full resize-none overflow-hidden border-none bg-transparent py-2 text-sm leading-relaxed text-[#374151] outline-none placeholder:text-[#9ca3af]"
-                  :placeholder="`一句话描述这个科目（可选，${DESC_MAX} 字以内）`"
-                  rows="2"
-                  :maxlength="DESC_MAX"
-                  :disabled="creatingProject"
-                  @input="autosizeDesc"
-                  @keydown.esc.prevent="closeCreatePanel"
-                  @click.stop
-                />
-                <span class="absolute bottom-2 right-0 text-xs text-[#d1d5db]">{{ newProjectDesc.length }} / {{ DESC_MAX }}</span>
-              </div>
-              <div class="flex items-center justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  class="rounded-2xl px-4 py-2 text-sm text-[#6b7280] transition hover:bg-[#f3f4f6]"
-                  :disabled="creatingProject"
-                  @click.stop="closeCreatePanel"
-                >
-                  取消
-                </button>
-                <button
-                  type="button"
-                  class="flex h-9 items-center justify-center gap-1 rounded-2xl border border-transparent bg-[#1f2937] px-5 text-sm text-white transition hover:bg-[#111827] disabled:cursor-not-allowed disabled:border-[#d1d5db] disabled:bg-white disabled:text-[#9ca3af]"
-                  :disabled="!newProjectName.trim() || creatingProject"
-                  @click.stop="handleCreateProject"
-                >
-                  创建科目
-                </button>
+            </div>
+          </Transition>
+
+          <!-- 创建面板：同一元素的展开/收起变换 -->
+          <div
+            class="create-panel border border-neutral-200 bg-white"
+            :class="showCreatePanel ? 'expanded composer-shell' : 'shadow-sm'"
+            @click="!showCreatePanel && openCreatePanel()"
+          >
+            <span class="create-placeholder font-hans">新建科目...</span>
+
+            <div class="create-fields">
+              <div class="create-fields-inner flex flex-col h-full">
+                <div class="relative flex-1 min-h-0 flex flex-col">
+                  <textarea
+                    ref="descTextarea"
+                    v-model="newProjectDesc"
+                    class="w-full flex-1 min-h-0 resize-none overflow-y-auto border-none bg-transparent pt-1 pb-2 text-sm leading-relaxed text-[#4b5563] outline-none placeholder:text-[#9ca3af] font-hans"
+                    :placeholder="`一句话描述这个科目（可选，${DESC_MAX} 字以内）`"
+                    :maxlength="DESC_MAX"
+                    :disabled="creatingProject"
+                    @input="autosizeDesc"
+                    @keydown.esc.prevent="closeCreatePanel"
+                    @click.stop
+                  />
+                </div>
+                <div class="flex items-center justify-between pt-2">
+                  <span class="text-xs text-[#9ca3af]">{{ newProjectDesc.length }} / {{ DESC_MAX }}</span>
+                  <div class="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      class="flex h-7.5 w-7.5 items-center justify-center rounded-xl border border-[#d1d5db] bg-transparent text-[#6b7280] transition hover:bg-[#f3f4f6] hover:text-[#1f2937] active:scale-95 duration-200 disabled:cursor-not-allowed disabled:opacity-50"
+                      :disabled="creatingProject"
+                      title="取消"
+                      @click.stop="closeCreatePanel"
+                    >
+                      <svg class="h-4.5 w-4.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      class="flex h-7.5 w-7.5 items-center justify-center rounded-xl border border-[#d1d5db] bg-transparent text-[#1f2937] transition hover:bg-[#f3f4f6] hover:text-[#111827] active:scale-95 duration-200 disabled:cursor-not-allowed disabled:text-[#9ca3af]"
+                      :disabled="!newProjectName.trim() || creatingProject"
+                      title="创建科目"
+                      @click.stop="handleCreateProject"
+                    >
+                      <svg class="h-4.5 w-4.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14m0 0-6-6m6 6-6 6" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -588,6 +709,17 @@ onMounted(async () => {
 }
 
 /* ── 创建面板：同一元素的展开/收起变换 ── */
+.create-panel-wrapper {
+  transition:
+    transform 0.24s cubic-bezier(0.2, 0.8, 0.2, 1),
+    margin-bottom 0.24s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.create-panel-wrapper.expanded-wrapper {
+  transform: translateY(-12px);
+  margin-bottom: -12px;
+}
+
 .create-panel {
   position: relative;
   cursor: pointer;
@@ -596,17 +728,21 @@ onMounted(async () => {
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
   padding: 1rem;
   overflow: hidden;
+  height: 56px;
+  box-sizing: border-box;
   transition:
-    transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1),
-    margin-bottom 0.4s cubic-bezier(0.2, 0.8, 0.2, 1),
-    box-shadow 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+    box-shadow 0.24s cubic-bezier(0.2, 0.8, 0.2, 1),
+    height 0.24s cubic-bezier(0.2, 0.8, 0.2, 1),
+    padding 0.24s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .create-panel.expanded {
   cursor: default;
-  transform: translateY(-12px);
-  margin-bottom: -12px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  height: 40vh;
+  min-height: 280px;
+  max-height: 480px;
+  padding: 0.5rem 1rem 0.5rem 1rem;
 }
 
 .create-placeholder {
@@ -625,15 +761,20 @@ onMounted(async () => {
 }
 
 .create-fields {
-  display: grid;
-  grid-template-rows: 0fr;
-  transition: grid-template-rows 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
   position: relative;
   z-index: 1;
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
+  overflow: hidden;
+  transition: opacity 0.2s ease;
 }
 
 .create-panel.expanded .create-fields {
-  grid-template-rows: 1fr;
+  height: 100%;
+  opacity: 1;
+  pointer-events: auto;
+  transition: opacity 0.2s ease 0.08s;
 }
 
 .create-fields-inner {
@@ -641,17 +782,9 @@ onMounted(async () => {
   min-height: 0;
 }
 
-.create-panel.expanded .create-fields-inner input,
 .create-panel.expanded .create-fields-inner textarea {
   animation: create-field-in 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
-}
-
-.create-panel.expanded .create-fields-inner input {
   animation-delay: 0.08s;
-}
-
-.create-panel.expanded .create-fields-inner textarea {
-  animation-delay: 0.14s;
 }
 
 .create-panel.expanded .create-fields-inner .pt-2 {

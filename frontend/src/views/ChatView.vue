@@ -1367,8 +1367,8 @@ watch(
   <div class="absolute inset-0">
     <!-- 消息滚动区铺满整个区域，消息可滚动到浮动 composer 之下（composer 叠在其上层） -->
     <div ref="chatContainer" class="absolute inset-0 overflow-y-auto px-4 py-5 md:px-6" @scroll.passive="handleChatScroll" @load.capture="handleImageLoad">
-      <!-- pb-40 预留空间，使最后一条消息可滚动至浮动 composer 上方而不被永久遮挡 -->
-      <div class="mx-auto flex max-w-3xl flex-col gap-5 pb-40">
+      <!-- pb-52 预留空间，使最后一条消息可滚动至浮动 composer 上方而不被永久遮挡 -->
+      <div class="mx-auto flex max-w-3xl flex-col gap-5 pb-52">
         <div v-for="message in messages" :key="message.id" class="flex w-full flex-col">
           <div v-if="message.role === 'user'" class="group flex justify-end">
             <div class="flex max-w-[85%] flex-col items-end gap-1.5">
@@ -1511,15 +1511,9 @@ watch(
       </div>
     </div>
 
-    <!-- 底部整宽渐变：叠在消息层之上、composer 之下（z-10），让消息在界面最下方淡出到页面底色 -->
-    <div
-      class="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-40"
-      style="background: linear-gradient(to bottom, transparent, #f3f4f6 78%);"
-      aria-hidden="true"
-    />
     <!-- 浮动 composer：绝对贴底并叠在消息层最上方（z-20）；外层透明且不拦截事件，
          消息可在其下方/周围透出，仅内部 composer 区域接收点击 -->
-    <footer class="pointer-events-none absolute inset-x-0 bottom-0 z-20 px-4 pb-4 pt-2 md:px-6">
+    <footer class="pointer-events-none absolute inset-x-0 bottom-0 z-20 px-4 pb-4 pt-2 md:px-6 font-hans">
       <div class="pointer-events-auto mx-auto max-w-3xl">
         <p v-if="toolStatus" class="mb-2 text-xs text-[#4b5563]">{{ toolStatus }}</p>
 
@@ -1596,7 +1590,7 @@ watch(
           <textarea
             ref="composerTextarea"
             v-model="draft"
-            class="composer-textarea w-full resize-none bg-transparent text-xs leading-relaxed outline-none placeholder:text-[#9ca3af]"
+            class="composer-textarea w-full resize-none bg-transparent text-sm leading-relaxed outline-none placeholder:text-[#9ca3af] font-hans"
             :disabled="streaming || preparing"
             :placeholder="resolvedPlaceholder"
             rows="2"

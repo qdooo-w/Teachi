@@ -250,10 +250,27 @@ async function renderContent(): Promise<void> {
         output: 'html'
       })
       
-      // Auto-fit window size for math formula
+      // Auto-fit window size based on formula size
       if (props.initialWidth === undefined || props.initialHeight === undefined) {
-        windowWidth.value = Math.min(650, Math.max(450, Math.round(window.innerWidth * 0.5)))
-        windowHeight.value = 240
+        const katexElement = container.querySelector('.katex') as HTMLElement | null
+        if (katexElement) {
+          const rect = katexElement.getBoundingClientRect()
+          const contentW = rect.width
+          const contentH = rect.height
+          
+          const maxW = Math.min(850, window.innerWidth * 0.85)
+          const maxH = Math.min(650, window.innerHeight * 0.75)
+          
+          const targetW = contentW + 36 // Add padding (horizontal spacing)
+          const targetH = contentH + 24 + 36 // Add padding (vertical spacing) + title bar
+          
+          windowWidth.value = Math.max(220, Math.min(maxW, Math.round(targetW)))
+          windowHeight.value = Math.max(80, Math.min(maxH, Math.round(targetH)))
+        } else {
+          // Fallback if elements are not found
+          windowWidth.value = Math.min(650, Math.max(450, Math.round(window.innerWidth * 0.5)))
+          windowHeight.value = 240
+        }
         
         // Center the window strictly inside bounds
         const baseLeft = (window.innerWidth - windowWidth.value) / 2
@@ -546,9 +563,9 @@ function handleResizeMove(e: MouseEvent | TouchEvent): void {
   const dx = clientX - resizeDragStartX
   const dy = clientY - resizeDragStartY
 
-  // Limit window size (min 380x300 or 250x120 for math, max fit screen boundaries)
-  const minW = props.type === 'math' ? 250 : 380
-  const minH = props.type === 'math' ? 120 : 300
+  // Limit window size (min 380x300 or 220x80 for math, max fit screen boundaries)
+  const minW = props.type === 'math' ? 220 : 380
+  const minH = props.type === 'math' ? 80 : 300
   windowWidth.value = Math.max(minW, Math.min(window.innerWidth - windowX.value - 10, resizeStartWidth + dx))
   windowHeight.value = Math.max(minH, Math.min(window.innerHeight - windowY.value - 10, resizeStartHeight + dy))
 }
@@ -600,15 +617,19 @@ function restorePosition(): void {
   if (props.initialWidth !== undefined) {
     windowWidth.value = Math.min(props.initialWidth, window.innerWidth)
   } else {
-    const isMobile = window.innerWidth < 768
-    windowWidth.value = isMobile ? Math.round(window.innerWidth * 0.9) : 600
+    if (props.type !== 'math' && props.type !== 'mermaid') {
+      const isMobile = window.innerWidth < 768
+      windowWidth.value = isMobile ? Math.round(window.innerWidth * 0.9) : 600
+    }
   }
 
   if (props.initialHeight !== undefined) {
     windowHeight.value = Math.min(props.initialHeight, window.innerHeight)
   } else {
-    const isMobile = window.innerWidth < 768
-    windowHeight.value = isMobile ? Math.round(window.innerHeight * 0.7) : 650
+    if (props.type !== 'math' && props.type !== 'mermaid') {
+      const isMobile = window.innerWidth < 768
+      windowHeight.value = isMobile ? Math.round(window.innerHeight * 0.7) : 650
+    }
   }
 
   if (currentDockLeft.value) {
@@ -908,7 +929,7 @@ onBeforeUnmount(() => {
         <!-- Render Math -->
         <div
           v-else-if="type === 'math'"
-          class="relative bg-white rounded-xl shadow-sm overflow-auto w-full h-full flex items-center justify-center p-6"
+          class="relative bg-white rounded-xl shadow-sm overflow-auto w-full h-full flex items-center justify-center p-3"
         >
           <!-- 简洁加载动画 -->
           <div
@@ -980,5 +1001,8 @@ onBeforeUnmount(() => {
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+}
+:deep(.katex-display) {
+  margin: 0 !important;
 }
 </style>

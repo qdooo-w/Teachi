@@ -385,6 +385,64 @@ onBeforeUnmount(() => {
     window.visualViewport.removeEventListener('scroll', updateKeyboardOffset)
   }
 })
+
+interface QuickAccessSession {
+  sid: string
+  sessionname: string
+  timestamp: number
+  created_at: number
+  pid: string
+  projectName: string
+}
+
+const recentSessions = ref<QuickAccessSession[]>([])
+const loadingRecent = ref(false)
+
+async function loadRecentSessions(): Promise<void> {
+  if (projects.value.length === 0) {
+    recentSessions.value = []
+    return
+  }
+  loadingRecent.value = true
+  try {
+    const promises = projects.value.map(async (p) => {
+      try {
+        const list = await listSessions(p.pid)
+        return list.map((s) => ({
+          ...s,
+          pid: p.pid,
+          projectName: p.projectname,
+        }))
+      } catch (err) {
+        console.error(`App.vue 加载科目 ${p.projectname} 的会话失败:`, err)
+        return []
+      }
+    })
+    const allLists = await Promise.all(promises)
+    const combined = allLists.flat()
+    combined.sort((a, b) => b.timestamp - a.timestamp)
+    recentSessions.value = combined.slice(0, 6)
+  } catch (err) {
+    console.error('App.vue 加载最近会话失败:', err)
+  } finally {
+    loadingRecent.value = false
+  }
+}
+
+watch(
+  () => projects.value.map((p) => p.pid).join(','),
+  () => {
+    void loadRecentSessions()
+  },
+  { immediate: true }
+)
+
+watch(
+  () => route.path,
+  () => {
+    void loadRecentSessions()
+  }
+)
 </script>
 
 <template>
@@ -619,6 +677,30 @@ onBeforeUnmount(() => {
               >
                 <span class="text-xs whitespace-nowrap">查看全部科目</span>
               </button>
+
+              <!-- 最近会话列表 -->
+              <template v-if="recentSessions.length > 0">
+                <div class="mx-4 my-2 border-t border-[#e5e7eb]/60" />
+                <div class="mb-2 pl-4 text-xs font-medium text-[#6b7280]">最近会话</div>
+                <div class="flex flex-col gap-1">
+                  <div
+                    v-for="session in recentSessions"
+                    :key="session.sid"
+                    role="button"
+                    tabindex="0"
+                    :class="[
+                      'flex h-8 w-auto mx-1 cursor-pointer items-center justify-start gap-2 rounded-xl pl-4 pr-2 text-left text-[13px] transition-colors',
+                      ($route.params.sid as string | undefined) === session.sid
+                        ? 'bg-[#e5e7eb] font-medium'
+                        : 'hover:bg-[#e5e7eb]',
+                    ]"
+                    @click="closeSidebarOnMobile(); router.push({ name: 'chat', params: { pid: session.pid, sid: session.sid } })"
+                    @keydown.enter.prevent="closeSidebarOnMobile(); router.push({ name: 'chat', params: { pid: session.pid, sid: session.sid } })"
+                  >
+                    <span class="font-hans flex-1 truncate text-[13px]">{{ session.projectName }} / {{ session.sessionname }}</span>
+                  </div>
+                </div>
+              </template>
             </div>
           </div>
 

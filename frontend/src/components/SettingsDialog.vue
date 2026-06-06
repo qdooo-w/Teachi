@@ -349,7 +349,7 @@ onMounted(() => { loadConfigs(); loadAccountInfo(); loadPreferences() })
 
 <template>
   <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-    <div class="modal-card relative flex h-[560px] w-[640px] flex-col rounded-2xl bg-white overflow-hidden">
+    <div class="modal-card relative flex h-[560px] w-[640px] flex-col rounded-2xl bg-white overflow-hidden font-hans">
       <!-- Tab 栏（顶部标题栏：浅灰底 + 底部细分隔线，与卡片圆角衔接） -->
       <div class="flex px-5 pt-3 relative rounded-t-2xl bg-[#f9fafb] border-b border-[#eef0f2]">
         <button

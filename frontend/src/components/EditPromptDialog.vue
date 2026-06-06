@@ -76,7 +76,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
       class="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-sm px-4"
       @click="close"
     >
-      <div class="modal-card relative w-full max-w-[560px] rounded-2xl bg-white p-5 shadow-xl" @click.stop>
+      <div class="modal-card relative w-full max-w-[560px] rounded-2xl bg-white p-5 shadow-xl font-hans" @click.stop>
         <button
           type="button"
           class="absolute top-4 right-4 text-[#9ca3af] hover:text-[#6b7280] transition-colors"
