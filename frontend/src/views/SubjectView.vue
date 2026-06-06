@@ -28,7 +28,9 @@ import {
   CHAT_DRAWER_ENTER_OPACITY_MS,
   CHAT_DRAWER_LEAVE_MAX_HEIGHT_MS,
   CHAT_DRAWER_LEAVE_OPACITY_MS,
+  PLACEHOLDERS,
 } from '../config'
+import { usePreferences } from '../composables/usePreferences'
 
 const route = useRoute()
 const router = useRouter()
@@ -43,11 +45,32 @@ const currentProject = computed<ProjectItem | null>(() =>
 const sessions = ref<SessionItem[]>([])
 const newSessionDraft = ref('')
 const newSessionName = ref('')
+const chosenPlaceholder = ref('给 Learnova 发送消息...')
+const { enterMode: sendKeyPref } = usePreferences()
+
+const resolvedPlaceholder = computed(() => {
+  const base = chosenPlaceholder.value
+  if (base === '__SHORTCUT_HINT__') {
+    return sendKeyPref.value === 'ctrl_enter'
+      ? '给 Learnova 发送消息... (Enter 换行，Ctrl/⌘ + Enter 发送)'
+      : '给 Learnova 发送消息... (Enter 发送，Shift + Enter 换行)'
+  }
+  return base
+})
 const showCreatePanel = ref(false)
 const sessionNameInput = ref<HTMLInputElement | null>(null)
 const messageInput = ref<HTMLTextAreaElement | null>(null)
 const creatingSession = ref(false)
+import { useNotification } from '../composables/useNotification'
 const errorMessage = ref('')
+const { showError } = useNotification()
+
+watch(errorMessage, (newVal) => {
+  if (newVal) {
+    showError(newVal)
+    errorMessage.value = ''
+  }
+})
 
 // Store the created session ID so if uploads fail, retrying uses the same session
 const createdSessionId = ref<string | null>(null)
@@ -475,6 +498,10 @@ onMounted(async () => {
     loadProjectDesc(pid.value),
     loadUserSkills(),
   ])
+  if (PLACEHOLDERS && PLACEHOLDERS.length > 0) {
+    const randomIndex = Math.floor(Math.random() * PLACEHOLDERS.length)
+    chosenPlaceholder.value = PLACEHOLDERS[randomIndex]
+  }
 })
 
 watch(
@@ -539,7 +566,7 @@ watch(
         <div v-for="session in sessions" :key="session.sid">
           <div
             v-if="renamingKey === sessionKey(session.sid)"
-            class="rounded-2xl bg-white p-4 shadow-sm"
+            class="rounded-lg bg-white p-4 shadow-sm"
           >
             <div class="mb-2 text-xs text-[#6b7280]">重命名会话</div>
             <RenameInline
@@ -554,7 +581,7 @@ watch(
             v-else
             role="button"
             tabindex="0"
-            class="group flex w-full cursor-pointer items-center justify-between rounded-2xl bg-white p-4 text-left shadow-sm transition-colors hover:bg-[#f9fafb]"
+            class="group flex w-full cursor-pointer items-center justify-between rounded-lg bg-white p-4 text-left shadow-sm transition-colors hover:bg-[#f9fafb]"
             @click="goToSession(session)"
             @keydown.enter.prevent="goToSession(session)"
           >
@@ -571,172 +598,194 @@ watch(
             />
           </div>
         </div>
-        <div v-if="sessions.length === 0" class="rounded-2xl bg-white py-10 text-center text-[#9ca3af] shadow-sm">
+        <div v-if="sessions.length === 0" class="rounded-lg bg-white py-10 text-center text-[#9ca3af] shadow-sm">
           暂无会话，在下方输入以开始。
         </div>
       </div>
 
       <div class="mt-auto w-full pb-4">
-        <p v-if="errorMessage" class="mb-2 rounded-md border border-[#efb3a7] bg-[#fff7ed] px-3 py-2 text-sm text-[#9a3412]">
-          {{ errorMessage }}
-        </p>
-
-        <!-- 创建面板：同一元素的展开/收起变换 -->
         <div
-          class="create-panel"
-          :class="{ expanded: showCreatePanel }"
-          @click="!showCreatePanel && openCreatePanel()"
+          class="create-panel-wrapper font-hans"
+          :class="{ 'expanded-wrapper': showCreatePanel }"
         >
-          <!-- 收起态占位文字 -->
-          <span class="create-placeholder">在这个科目中新建会话...</span>
-
-          <!-- 展开态表单内容 -->
-          <div class="create-fields">
-            <div class="create-fields-inner flex flex-col">
+          <!-- 会话名称悬浮条 -->
+          <Transition name="dialog-fade">
+            <div
+              v-if="showCreatePanel"
+              class="mb-2 flex items-center gap-2 rounded-xl border border-neutral-200 bg-white px-3 py-1.5 shadow-sm"
+              @click.stop
+            >
+              <span class="text-xs font-medium text-[#4b5563] shrink-0 select-none">Title:</span>
               <input
                 ref="sessionNameInput"
                 v-model="newSessionName"
                 type="text"
-                class="w-full border-none bg-transparent py-2 text-base font-medium text-[#1f2937] outline-none placeholder:text-[#9ca3af]"
-                placeholder="会话名称"
+                class="w-full border-none bg-transparent py-0.5 text-xs font-medium text-[#1f2937] outline-none placeholder:text-[#9ca3af]"
+                placeholder="为新会话命名..."
                 :disabled="creatingSession"
                 @keydown.enter.prevent="messageInput?.focus()"
                 @keydown.esc.prevent="closeCreatePanel"
-                @click.stop
               />
-              <div class="mx-2 border-t border-[#f3f4f6]" />
+            </div>
+          </Transition>
 
-              <!-- Skill Chips -->
-              <SkillChips
-                v-if="selectedSkills.length > 0"
-                :skills="selectedSkills"
-                class="mt-1"
-                @remove="removeSkill"
-                @click.stop
-              />
+          <!-- Skill Chips (显示在对话框上方) -->
+          <Transition name="dialog-fade">
+            <SkillChips
+              v-if="showCreatePanel && selectedSkills.length > 0"
+              :skills="selectedSkills"
+              class="mb-2"
+              @remove="removeSkill"
+              @click.stop
+            />
+          </Transition>
 
-              <!-- Pending Attachments Previews -->
-              <div v-if="pendingAttachments.length > 0" class="mb-2 mt-1 flex flex-wrap gap-2 px-1" @click.stop>
-                <div
-                  v-for="att in pendingAttachments"
-                  :key="att.temp_id"
-                  class="relative flex items-center gap-1.5 rounded-lg border border-[#e5e7eb] bg-[#f9fafb] px-2 py-1 text-xs text-[#374151]"
-                >
-                  <img
-                    v-if="att.preview_url"
-                    :src="att.preview_url"
-                    class="h-6 w-6 rounded object-cover flex-shrink-0"
-                    alt="Image preview"
-                  />
-                  <svg v-else class="h-3.5 w-3.5 text-[#6b7280]" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                  </svg>
-                  <span class="max-w-[120px] truncate" :title="att.original_filename">{{ att.original_filename }}</span>
-                  <span v-if="att.uploading" class="text-[10px] text-[#9ca3af] animate-pulse">上传中...</span>
-                  <button
-                    v-else
-                    type="button"
-                    class="flex h-4 w-4 items-center justify-center rounded-full text-[#9ca3af] hover:bg-[#e5e7eb] hover:text-[#1f2937]"
-                    @click.stop="removePendingAttachment(att)"
+          <!-- Skill Picker Drawer -->
+          <Transition
+            name="skill-drawer"
+            @before-enter="onDrawerBeforeEnter"
+            @enter="onDrawerEnter"
+            @after-enter="onDrawerAfterEnter"
+            @before-leave="onDrawerBeforeLeave"
+            @leave="onDrawerLeave"
+          >
+            <SkillPicker
+              v-if="showSkillPicker"
+              :skills="allSkills"
+              :selected="selectedSkills.map((s) => s.name)"
+              @toggle="handlePickerToggle"
+              @close="showSkillPicker = false"
+              @click.stop
+            />
+          </Transition>
+
+          <!-- 创建面板：同一元素的展开/收起变换 -->
+          <div
+            class="create-panel border border-neutral-200 bg-white"
+            :class="[
+              showCreatePanel
+                ? 'expanded composer-shell'
+                : 'shadow-sm p-4',
+              showSkillPicker ? 'drawer-open' : ''
+            ]"
+            @click="!showCreatePanel && openCreatePanel()"
+          >
+            <!-- 收起态占位文字 -->
+            <span class="create-placeholder">在这个科目中新建会话...</span>
+
+            <!-- 展开态表单内容 -->
+            <div class="create-fields">
+              <div class="create-fields-inner flex flex-col">
+                <!-- Pending Attachments Previews -->
+                <div v-if="pendingAttachments.length > 0" class="mb-3 flex flex-wrap gap-2" @click.stop>
+                  <div
+                    v-for="att in pendingAttachments"
+                    :key="att.temp_id"
+                    class="relative flex items-center gap-1.5 rounded-lg border border-[#e5e7eb] bg-[#f9fafb] px-2 py-1 text-xs text-[#374151]"
                   >
-                    <svg class="h-3 w-3" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                    <img
+                      v-if="att.preview_url"
+                      :src="att.preview_url"
+                      class="h-6 w-6 rounded object-cover flex-shrink-0"
+                      alt="Image preview"
+                    />
+                    <svg v-else class="h-3.5 w-3.5 text-[#6b7280]" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
                     </svg>
-                  </button>
+                    <span class="max-w-[120px] truncate" :title="att.original_filename">{{ att.original_filename }}</span>
+                    <span v-if="att.uploading" class="text-[10px] text-[#9ca3af] animate-pulse">上传中...</span>
+                    <button
+                      v-else
+                      type="button"
+                      class="flex h-4 w-4 items-center justify-center rounded-full text-[#9ca3af] hover:bg-[#e5e7eb] hover:text-[#1f2937]"
+                      @click.stop="removePendingAttachment(att)"
+                    >
+                      <svg class="h-3 w-3" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
                 </div>
-              </div>
 
-              <textarea
-                ref="messageInput"
-                v-model="newSessionDraft"
-                class="max-h-32 w-full resize-none border-none bg-transparent py-2 text-sm leading-normal text-[#1f2937] outline-none placeholder:text-[#9ca3af]"
-                placeholder="输入第一条消息... (支持拖拽/粘贴文件，输入 @ 调用技能)"
-                rows="2"
-                :disabled="creatingSession"
-                @keydown="handleComposerKeydown"
-                @input="handleComposerInput"
-                @click="checkAtTrigger"
-                @paste="handleComposerPaste"
-                @dragover.prevent
-                @drop.prevent="handleComposerDrop"
-                @click.stop
-              />
-
-              <!-- Skill Picker Drawer -->
-              <Transition
-                name="skill-drawer"
-                @before-enter="onDrawerBeforeEnter"
-                @enter="onDrawerEnter"
-                @after-enter="onDrawerAfterEnter"
-                @before-leave="onDrawerBeforeLeave"
-                @leave="onDrawerLeave"
-              >
-                <SkillPicker
-                  v-if="showSkillPicker"
-                  :skills="allSkills"
-                  :selected="selectedSkills.map((s) => s.name)"
-                  class="my-2"
-                  @toggle="handlePickerToggle"
-                  @close="showSkillPicker = false"
+                <textarea
+                  ref="messageInput"
+                  v-model="newSessionDraft"
+                  class="composer-textarea w-full resize-none bg-transparent text-sm leading-relaxed outline-none placeholder:text-[#9ca3af] font-hans"
+                  :placeholder="resolvedPlaceholder"
+                  rows="2"
+                  :disabled="creatingSession"
+                  @keydown="handleComposerKeydown"
+                  @input="handleComposerInput"
+                  @click="checkAtTrigger"
+                  @paste="handleComposerPaste"
+                  @dragover.prevent
+                  @drop.prevent="handleComposerDrop"
                   @click.stop
                 />
-              </Transition>
 
-              <div class="flex items-center justify-between pt-2">
-                <div class="flex items-center gap-1">
-                  <!-- 上传附件按钮 (Plus 符号) -->
-                  <button
-                    class="flex h-8 w-8 items-center justify-center rounded-full text-[#6b7280] transition hover:bg-[#f3f4f6] hover:text-[#1f2937] disabled:cursor-not-allowed disabled:opacity-50"
-                    :disabled="creatingSession"
-                    title="上传附件"
-                    type="button"
-                    @click.stop="triggerFileSelect"
-                  >
-                    <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v14m7-7H5" />
-                    </svg>
-                  </button>
+                <div class="mt-1 flex items-center justify-between">
+                  <div class="flex items-center gap-1">
+                    <!-- 上传附件按钮 -->
+                    <button
+                      class="flex h-7 w-7 items-center justify-center rounded-full text-[#6b7280] transition hover:bg-[#f3f4f6] hover:text-[#1f2937] disabled:cursor-not-allowed disabled:opacity-50"
+                      :disabled="creatingSession"
+                      title="上传附件（图片/文本/PDF，支持多选）"
+                      type="button"
+                      @click.stop="triggerFileSelect"
+                    >
+                      <svg class="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v14m7-7H5" />
+                      </svg>
+                    </button>
 
-                  <input
-                    ref="fileInputRef"
-                    type="file"
-                    class="hidden"
-                    multiple
-                    accept="image/jpeg,image/png,image/webp,image/gif,text/plain,text/markdown,text/csv,application/json,application/pdf"
-                    @change="handleFileChange"
-                  />
+                    <input
+                      ref="fileInputRef"
+                      type="file"
+                      class="hidden"
+                      multiple
+                      accept="image/jpeg,image/png,image/webp,image/gif,text/plain,text/markdown,text/csv,application/json,application/pdf"
+                      @change="handleFileChange"
+                    />
 
-                  <!-- 添加技能按钮 (Paperclip 符号) -->
-                  <button
-                    class="flex h-8 w-8 items-center justify-center rounded-full text-[#6b7280] transition hover:bg-[#f3f4f6] hover:text-[#1f2937] disabled:cursor-not-allowed disabled:opacity-50"
-                    :disabled="creatingSession"
-                    title="添加技能"
-                    type="button"
-                    @click.stop="showSkillPicker = !showSkillPicker"
-                  >
-                    <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
-                    </svg>
-                  </button>
-                </div>
+                    <!-- 添加技能按钮 -->
+                    <button
+                      class="flex h-7 w-7 items-center justify-center rounded-full text-[#6b7280] transition hover:bg-[#f3f4f6] hover:text-[#1f2937] disabled:cursor-not-allowed disabled:opacity-50"
+                      :class="{ 'bg-neutral-100 text-[#1f2937]': showSkillPicker }"
+                      :disabled="creatingSession"
+                      title="添加技能"
+                      type="button"
+                      @click.stop="showSkillPicker = !showSkillPicker"
+                    >
+                      <svg class="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                      </svg>
+                    </button>
+                  </div>
 
-                <div class="flex items-center gap-2">
-                  <button
-                    type="button"
-                    class="rounded-2xl px-4 py-2 text-sm text-[#6b7280] transition hover:bg-[#f3f4f6]"
-                    :disabled="creatingSession"
-                    @click.stop="closeCreatePanel"
-                  >
-                    取消
-                  </button>
-                  <button
-                    type="button"
-                    class="flex h-9 items-center justify-center gap-1 rounded-2xl border border-transparent bg-[#1f2937] px-5 text-sm text-white transition hover:bg-[#111827] disabled:cursor-not-allowed disabled:border-[#d1d5db] disabled:bg-white disabled:text-[#9ca3af]"
-                    :disabled="!newSessionName.trim() || !newSessionDraft.trim() || creatingSession"
-                    @click.stop="handleStartNewSessionFromSubject"
-                  >
-                    发送
-                  </button>
+                  <div class="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      class="flex h-7.5 w-7.5 items-center justify-center rounded-xl border border-[#d1d5db] bg-transparent text-[#6b7280] transition hover:bg-[#f3f4f6] hover:text-[#1f2937] disabled:cursor-not-allowed disabled:opacity-50"
+                      :disabled="creatingSession"
+                      title="取消"
+                      @click.stop="closeCreatePanel"
+                    >
+                      <svg class="h-4.5 w-4.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      class="flex h-7.5 w-7.5 items-center justify-center rounded-xl border border-[#d1d5db] bg-transparent text-[#1f2937] transition hover:bg-[#f3f4f6] hover:text-[#111827] disabled:cursor-not-allowed disabled:text-[#9ca3af]"
+                      :disabled="!newSessionName.trim() || !newSessionDraft.trim() || creatingSession"
+                      title="发送"
+                      @click.stop="handleStartNewSessionFromSubject"
+                    >
+                      <svg class="h-4.5 w-4.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14m0 0-6-6m6 6-6 6" />
+                      </svg>
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -761,6 +810,17 @@ watch(
 
 <style scoped>
 /* ── 创建面板：同一元素的展开/收起变换 ── */
+.create-panel-wrapper {
+  transition:
+    transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1),
+    margin-bottom 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.create-panel-wrapper.expanded-wrapper {
+  transform: translateY(-12px);
+  margin-bottom: -12px;
+}
+
 .create-panel {
   position: relative;
   cursor: pointer;
@@ -769,19 +829,21 @@ watch(
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
   padding: 1rem;
   overflow: hidden;
-  /* transform 上移 + margin 补偿保持底部锚定 */
   transition:
-    transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1),
-    margin-bottom 0.4s cubic-bezier(0.2, 0.8, 0.2, 1),
-    box-shadow 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+    box-shadow 0.4s cubic-bezier(0.2, 0.8, 0.2, 1),
+    padding 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
-/* 展开：上边框向上移动，底部锚定 */
+/* 展开：底部锚定 */
 .create-panel.expanded {
   cursor: default;
-  transform: translateY(-12px);
-  margin-bottom: -12px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  padding: 0.875rem 1rem 0.5rem 1rem; /* pt-3.5 px-4 pb-2 */
+}
+
+.create-panel.drawer-open {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
 }
 
 /* 占位文字：收起时可见，展开时淡出并收起高度 */
@@ -819,21 +881,13 @@ watch(
 }
 
 /* 字段元素错开入场 */
-.create-panel.expanded .create-fields-inner input,
 .create-panel.expanded .create-fields-inner textarea {
   animation: create-field-in 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
-}
-
-.create-panel.expanded .create-fields-inner input {
   animation-delay: 0.08s;
 }
 
-.create-panel.expanded .create-fields-inner textarea {
-  animation-delay: 0.14s;
-}
-
-.create-panel.expanded .create-fields-inner .pt-2 {
-  animation: create-field-in 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) 0.2s backwards;
+.create-panel.expanded .create-fields-inner .mt-1 {
+  animation: create-field-in 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) 0.14s backwards;
 }
 
 @keyframes create-field-in {

@@ -1,1 +1,1 @@
-export const PREVIEW_PROJECT_LIMIT = 10
+export const PREVIEW_PROJECT_LIMIT = 6

@@ -76,15 +76,15 @@ function pickDelete(): void {
 
     <div
       v-if="open"
-      class="absolute right-0 top-full z-30 mt-1 min-w-[140px] overflow-hidden rounded-lg border border-[#d1d5db] bg-white py-1 shadow-lg"
+      class="absolute right-0 top-full z-30 mt-1 min-w-[100px] overflow-hidden rounded-lg border border-[#d1d5db] bg-white py-1 shadow-lg font-hans"
       @click.stop
     >
       <button
         type="button"
-        class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-[#1f2937] transition-colors hover:bg-[#f3f4f6]"
+        class="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-xs text-[#1f2937] transition-colors hover:bg-[#f3f4f6]"
         @click="pickRename"
       >
-        <svg class="h-4 w-4 text-[#6b7280]" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg class="h-3.5 w-3.5 text-[#6b7280]" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
         </svg>
         重命名
@@ -92,7 +92,7 @@ function pickDelete(): void {
       <button
         type="button"
         :class="[
-          'flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors',
+          'flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-xs transition-colors',
           disableDelete
             ? 'cursor-not-allowed text-[#9ca3af]'
             : 'text-[#b91c1c] hover:bg-[#fef2f2]',
@@ -101,7 +101,7 @@ function pickDelete(): void {
         :disabled="disableDelete"
         @click="pickDelete"
       >
-        <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg class="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M1 7h22M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3" />
         </svg>
         删除

@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute, useRouter, onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router'
 import MessageContent from '../components/MessageContent.vue'
 import SkillPicker from '../components/SkillPicker.vue'
 import SkillChips from '../components/SkillChips.vue'
 import EditPromptDialog from '../components/EditPromptDialog.vue'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
 import MediaPreviewDialog from '../components/MediaPreviewDialog.vue'
+import WindowManager from '../components/WindowManager.vue'
 import {
   deleteTurn,
   getErrorMessage,
@@ -43,6 +44,7 @@ import {
   CHAT_DRAWER_LEAVE_MAX_HEIGHT_MS,
   CHAT_DRAWER_LEAVE_OPACITY_MS,
   CHAT_SCROLL_BOTTOM_THRESHOLD,
+  PLACEHOLDERS,
 } from '../config'
 
 const route = useRoute()
@@ -50,7 +52,17 @@ const router = useRouter()
 const { projects, loadProjects } = useProjects()
 const { preparing } = useAuth()
 
+import { useNotification } from '../composables/useNotification'
 const errorMessage = ref('')
+const { showError } = useNotification()
+
+watch(errorMessage, (newVal) => {
+  if (newVal) {
+    showError(newVal)
+    // Clear local error message immediately so that it is only displayed in the global toast
+    errorMessage.value = ''
+  }
+})
 
 const pid = computed(() => route.params.pid as string)
 const sid = computed(() => route.params.sid as string)
@@ -96,18 +108,108 @@ const deleteDialogAnchor = ref<string | null>(null)
 const deleteSubmitting = ref(false)
 const deleteDialogError = ref('')
 
-// 媒体预览弹窗
-const previewOpen = ref(false)
-const previewType = ref<'image' | 'mermaid'>('image')
-const previewSource = ref('')
+// 媒体多开预览（最多 8 个）
+interface PreviewItem {
+  id: string
+  type: 'image' | 'mermaid' | 'math' | 'table'
+  source: string
+  index: number
+  windowX?: number
+  windowY?: number
+  windowWidth?: number
+  windowHeight?: number
+  dockLeft?: boolean
+  dockRight?: boolean
+  dockTop?: boolean
+  dockBottom?: boolean
+  relX?: number
+  relY?: number
+  minimized?: boolean
+}
+const activePreviews = ref<PreviewItem[]>([])
+const messagesLoaded = ref(false)
+const highlightedPreviewId = ref<string | null>(null)
+let highlightTimeout: number | null = null
 
-function closePreview(): void {
-  previewOpen.value = false
-  previewSource.value = ''
+function closePreview(id: string): void {
+  activePreviews.value = activePreviews.value.filter((p) => p.id !== id)
 }
 
+function focusPreview(id: string): void {
+  const existingIdx = activePreviews.value.findIndex((p) => p.id === id)
+  if (existingIdx !== -1) {
+    if (activePreviews.value[existingIdx].minimized) {
+      activePreviews.value[existingIdx].minimized = false
+    }
+
+    if (existingIdx !== activePreviews.value.length - 1) {
+      const [item] = activePreviews.value.splice(existingIdx, 1)
+      activePreviews.value.push(item)
+    }
+
+    // Trigger highlight for 1 second
+    highlightedPreviewId.value = id
+    if (highlightTimeout) {
+      clearTimeout(highlightTimeout)
+    }
+    highlightTimeout = window.setTimeout(() => {
+      highlightedPreviewId.value = null
+      highlightTimeout = null
+    }, 1000)
+  }
+}
+
+function toggleMinimizePreview(id: string): void {
+  const preview = activePreviews.value.find((p) => p.id === id)
+  if (preview) {
+    preview.minimized = !preview.minimized
+  }
+}
+
+function updatePreviewRect(id: string, rect: {
+  x: number
+  y: number
+  width: number
+  height: number
+  dockLeft?: boolean
+  dockRight?: boolean
+  dockTop?: boolean
+  dockBottom?: boolean
+  relX?: number
+  relY?: number
+}): void {
+  const preview = activePreviews.value.find((p) => p.id === id)
+  if (preview) {
+    preview.windowX = rect.x
+    preview.windowY = rect.y
+    preview.windowWidth = rect.width
+    preview.windowHeight = rect.height
+    preview.dockLeft = rect.dockLeft
+    preview.dockRight = rect.dockRight
+    preview.dockTop = rect.dockTop
+    preview.dockBottom = rect.dockBottom
+    preview.relX = rect.relX
+    preview.relY = rect.relY
+  }
+}
+
+// Watch activePreviews deeply to persist to localStorage for the current session
+watch(
+  () => activePreviews.value,
+  () => {
+    const sidVal = currentSession.value?.sid
+    if (sidVal) {
+      localStorage.setItem(`preview_windows_${sidVal}`, JSON.stringify(activePreviews.value))
+    }
+  },
+  { deep: true }
+)
+
 async function openImagePreview(url: string): Promise<void> {
-  previewType.value = 'image'
+  if (!messagesLoaded.value) return
+  let type: 'image' | 'mermaid' = 'image'
+  let source = url
+
   if (
     url &&
     !url.startsWith('blob:') &&
@@ -120,22 +222,108 @@ async function openImagePreview(url: string): Promise<void> {
     try {
       // 读取 mermaid 文本内容
       const fileData = await readFile({ kind: 'project', pid: pid.value }, url)
-      previewType.value = 'mermaid'
-      previewSource.value = fileData.content
+      type = 'mermaid'
+      source = fileData.content
     } catch (err) {
       console.error('Failed to load project file for preview:', err)
-      previewSource.value = url
+      source = url
     }
   } else {
-    previewSource.value = url
+    source = url
   }
-  previewOpen.value = true
+
+  // Check if already open
+  const existingIdx = activePreviews.value.findIndex((p) => p.source === source)
+  if (existingIdx !== -1) {
+    focusPreview(activePreviews.value[existingIdx].id)
+    return
+  }
+
+  if (activePreviews.value.length >= 8) {
+    showError('最多只能同时打开 8 个预览窗口')
+    return
+  }
+
+  // Find lowest available index (1 to 8)
+  const usedIndices = activePreviews.value.map((p) => p.index)
+  let index = 1
+  while (usedIndices.includes(index)) {
+    index++
+  }
+
+  const id = Date.now().toString() + Math.random().toString(36).substring(2, 9)
+  activePreviews.value.push({ id, type, source, index })
 }
 
 function openMermaidPreview(source: string): void {
-  previewType.value = 'mermaid'
-  previewSource.value = source
-  previewOpen.value = true
+  if (!messagesLoaded.value) return
+  // Check if already open
+  const existingIdx = activePreviews.value.findIndex((p) => p.source === source)
+  if (existingIdx !== -1) {
+    focusPreview(activePreviews.value[existingIdx].id)
+    return
+  }
+
+  if (activePreviews.value.length >= 8) {
+    showError('最多只能同时打开 8 个预览窗口')
+    return
+  }
+
+  // Find lowest available index (1 to 8)
+  const usedIndices = activePreviews.value.map((p) => p.index)
+  let index = 1
+  while (usedIndices.includes(index)) {
+    index++
+  }
+
+  const id = Date.now().toString() + Math.random().toString(36).substring(2, 9)
+  activePreviews.value.push({ id, type: 'mermaid', source, index })
+}
+
+function openMathPreview(source: string): void {
+  if (!messagesLoaded.value) return
+  const existingIdx = activePreviews.value.findIndex((p) => p.type === 'math' && p.source === source)
+  if (existingIdx !== -1) {
+    focusPreview(activePreviews.value[existingIdx].id)
+    return
+  }
+
+  if (activePreviews.value.length >= 8) {
+    showError('最多只能同时打开 8 个预览窗口')
+    return
+  }
+
+  const usedIndices = activePreviews.value.map((p) => p.index)
+  let index = 1
+  while (usedIndices.includes(index)) {
+    index++
+  }
+
+  const id = Date.now().toString() + Math.random().toString(36).substring(2, 9)
+  activePreviews.value.push({ id, type: 'math', source, index })
+}
+
+function openTablePreview(source: string): void {
+  if (!messagesLoaded.value) return
+  const existingIdx = activePreviews.value.findIndex((p) => p.type === 'table' && p.source === source)
+  if (existingIdx !== -1) {
+    focusPreview(activePreviews.value[existingIdx].id)
+    return
+  }
+
+  if (activePreviews.value.length >= 8) {
+    showError('最多只能同时打开 8 个预览窗口')
+    return
+  }
+
+  const usedIndices = activePreviews.value.map((p) => p.index)
+  let index = 1
+  while (usedIndices.includes(index)) {
+    index++
+  }
+
+  const id = Date.now().toString() + Math.random().toString(36).substring(2, 9)
+  activePreviews.value.push({ id, type: 'table', source, index })
 }
 
 
@@ -175,6 +363,26 @@ const allSkills = computed<ChatSkillMeta[]>(() => {
 
 const selectedSkills = ref<ChatSkillMeta[]>([])
 const showSkillPicker = ref(false)
+const showWindowManager = ref(false)
+const chosenPlaceholder = ref('给 Learnova 发送消息...')
+
+function toggleWindowManager(): void {
+  showWindowManager.value = !showWindowManager.value
+  if (showWindowManager.value) {
+    showSkillPicker.value = false
+  }
+}
+
+function toggleSkillPicker(): void {
+  showSkillPicker.value = !showSkillPicker.value
+  if (showSkillPicker.value) {
+    showWindowManager.value = false
+  }
+}
+
+function closeAllPreviews(): void {
+  activePreviews.value = []
+}
 
 // ── 附件状态与处理函数 ───────────────────────────────────────────────────────
 const fileInputRef = ref<HTMLInputElement | null>(null)
@@ -836,6 +1044,16 @@ async function stopStreaming(): Promise<void> {
 // 发送快捷键偏好走共享单例，设置中心修改后此处实时生效（不再各自缓存一份）
 const { enterMode: sendKeyPref, loadEnterMode } = usePreferences()
 
+const resolvedPlaceholder = computed(() => {
+  const base = chosenPlaceholder.value
+  if (base === '__SHORTCUT_HINT__') {
+    return sendKeyPref.value === 'ctrl_enter'
+      ? '给 Learnova 发送消息... (Enter 换行，Ctrl/⌘ + Enter 发送)'
+      : '给 Learnova 发送消息... (Enter 发送，Shift + Enter 换行)'
+  }
+  return base
+})
+
 function handleComposerKeydown(event: KeyboardEvent): void {
   if (showSkillPicker.value && (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Enter' || event.key === 'Escape')) {
     return
@@ -877,6 +1095,9 @@ function checkAtTrigger(): void {
   const before = el.value.slice(0, pos)
   const match = before.match(/(^|[\s\n])@([a-z0-9-]*)$/)
   showSkillPicker.value = Boolean(match)
+  if (showSkillPicker.value) {
+    showWindowManager.value = false
+  }
 }
 
 function handleComposerInput(): void {
@@ -984,6 +1205,7 @@ function onDrawerLeave(el: Element, done: () => void): void {
 
 // ── 挂载 / 销毁 ──────────────────────────────────────────────────────────────
 async function validateAndLoad(): Promise<void> {
+  messagesLoaded.value = false
   // 阶段 1：确保项目列表可用，校验 pid 归属（失败 → 退回总览）
   try {
     if (projects.value.length === 0) await loadProjects()
@@ -1013,6 +1235,31 @@ async function validateAndLoad(): Promise<void> {
   }
   currentSession.value = match
 
+  // 从 localStorage 恢复该会话打开 the 窗口元信息
+  const saved = localStorage.getItem(`preview_windows_${match.sid}`)
+  if (saved) {
+    try {
+      const parsed = JSON.parse(saved) as PreviewItem[]
+      // Migration: Ensure every restored item has a valid index
+      let nextIdx = 1
+      for (const item of parsed) {
+        if (item.index === undefined || typeof item.index !== 'number') {
+          const used = parsed.map((p) => p.index).filter((idx) => idx !== undefined && typeof idx === 'number')
+          while (used.includes(nextIdx)) {
+            nextIdx++
+          }
+          item.index = nextIdx
+        }
+      }
+      activePreviews.value = parsed
+    } catch (err) {
+      console.error('Failed to parse preview windows from localStorage:', err)
+      activePreviews.value = []
+    }
+  } else {
+    activePreviews.value = []
+  }
+
   // 尝试从本地缓存恢复历史数据，快速显示首屏，避免白屏卡顿
   try {
     const cacheKey = `chat_cache_${sid.value}`
@@ -1036,8 +1283,11 @@ async function validateAndLoad(): Promise<void> {
   try {
     await loadMessages(true)
     await loadUserSkills()
+    await nextTick()
+    messagesLoaded.value = true
   } catch (error) {
     errorMessage.value = getErrorMessage(error)
+    messagesLoaded.value = true
   }
   // 项目技能由 useProjectSkills(pidOrNull) 的 watch 自动加载，这里不需要显式调用
 
@@ -1066,6 +1316,10 @@ async function validateAndLoad(): Promise<void> {
 }
 
 onMounted(() => {
+  if (PLACEHOLDERS && PLACEHOLDERS.length > 0) {
+    const randomIndex = Math.floor(Math.random() * PLACEHOLDERS.length)
+    chosenPlaceholder.value = PLACEHOLDERS[randomIndex]
+  }
   void loadEnterMode()
   void validateAndLoad()
   nextTick(autosizeComposer)
@@ -1088,6 +1342,14 @@ onBeforeUnmount(() => {
   }
 })
 
+onBeforeRouteLeave(() => {
+  messagesLoaded.value = false
+})
+
+onBeforeRouteUpdate(() => {
+  messagesLoaded.value = false
+})
+
 watch(draft, () => { nextTick(autosizeComposer) })
 
 watch(
@@ -1105,8 +1367,8 @@ watch(
   <div class="absolute inset-0">
     <!-- 消息滚动区铺满整个区域，消息可滚动到浮动 composer 之下（composer 叠在其上层） -->
     <div ref="chatContainer" class="absolute inset-0 overflow-y-auto px-4 py-5 md:px-6" @scroll.passive="handleChatScroll" @load.capture="handleImageLoad">
-      <!-- pb-40 预留空间，使最后一条消息可滚动至浮动 composer 上方而不被永久遮挡 -->
-      <div class="mx-auto flex max-w-3xl flex-col gap-5 pb-40">
+      <!-- pb-52 预留空间，使最后一条消息可滚动至浮动 composer 上方而不被永久遮挡 -->
+      <div class="mx-auto flex max-w-3xl flex-col gap-5 pb-52">
         <div v-for="message in messages" :key="message.id" class="flex w-full flex-col">
           <div v-if="message.role === 'user'" class="group flex justify-end">
             <div class="flex max-w-[85%] flex-col items-end gap-1.5">
@@ -1167,20 +1429,22 @@ watch(
                     <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
                   </svg>
                 </button>
-                <div class="rounded-3xl border border-[#d1d5db] bg-[#e5e7eb] px-5 py-3 text-[15px] leading-relaxed text-[#1f2937]">
+                <div class="rounded-3xl bg-[#e5e7eb] px-4 py-2 text-[15px] leading-relaxed text-[#1f2937]">
                   <p class="whitespace-pre-wrap break-words">{{ message.content }}</p>
                 </div>
               </div>
             </div>
           </div>
-          <div v-else class="group flex max-w-[85%] min-w-0 flex-col items-start">
-            <div class="rounded-3xl bg-white px-5 py-4 text-[15px] leading-relaxed text-[#1f2937] w-full max-w-full overflow-hidden">
+          <div v-else class="group flex w-full min-w-0 flex-col items-start">
+            <div class="rounded-3xl bg-white px-4 py-3 text-[15px] leading-relaxed text-[#1f2937] w-full max-w-full overflow-hidden">
               <MessageContent
                 v-if="message.content"
                 :content="message.content"
                 :streaming="message.pending === true"
                 @preview-mermaid="openMermaidPreview"
                 @preview-image="openImagePreview"
+                @preview-math="openMathPreview"
+                @preview-table="openTablePreview"
               />
               <p v-else-if="!message.pending" class="whitespace-pre-wrap break-words text-[#6b7280]">（空响应）</p>
               <div v-if="message.pending" class="mt-3 flex gap-1">
@@ -1247,19 +1511,10 @@ watch(
       </div>
     </div>
 
-    <!-- 底部整宽渐变：叠在消息层之上、composer 之下（z-10），让消息在界面最下方淡出到页面底色 -->
-    <div
-      class="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-40"
-      style="background: linear-gradient(to bottom, transparent, #f3f4f6 78%);"
-      aria-hidden="true"
-    />
     <!-- 浮动 composer：绝对贴底并叠在消息层最上方（z-20）；外层透明且不拦截事件，
          消息可在其下方/周围透出，仅内部 composer 区域接收点击 -->
-    <footer class="pointer-events-none absolute inset-x-0 bottom-0 z-20 px-4 pb-4 pt-2 md:px-6">
+    <footer class="pointer-events-none absolute inset-x-0 bottom-0 z-20 px-4 pb-4 pt-2 md:px-6 font-hans">
       <div class="pointer-events-auto mx-auto max-w-3xl">
-        <p v-if="errorMessage" class="mb-2 rounded-md border border-[#efb3a7] bg-[#fff7ed] px-3 py-2 text-sm text-[#9a3412]">
-          {{ errorMessage }}
-        </p>
         <p v-if="toolStatus" class="mb-2 text-xs text-[#4b5563]">{{ toolStatus }}</p>
 
         <Transition
@@ -1277,11 +1532,20 @@ watch(
             @toggle="handlePickerToggle"
             @close="showSkillPicker = false"
           />
+          <WindowManager
+            v-else-if="showWindowManager"
+            :previews="activePreviews"
+            @close-preview="closePreview"
+            @close-all="closeAllPreviews"
+            @focus-preview="focusPreview"
+            @toggle-minimize="toggleMinimizePreview"
+            @close="showWindowManager = false"
+          />
         </Transition>
         <div
           :class="[
-            'composer-shell relative bg-white p-4 shadow-sm focus-within:ring-2 focus-within:ring-[#1f2937]/20',
-            showSkillPicker ? 'drawer-open' : '',
+            'composer-shell relative bg-white px-4 pt-3.5 pb-2 border border-neutral-200 shadow-sm',
+            (showSkillPicker || showWindowManager) ? 'drawer-open' : '',
             streaming ? 'generating' : '',
           ]"
         >
@@ -1326,9 +1590,9 @@ watch(
           <textarea
             ref="composerTextarea"
             v-model="draft"
-            class="composer-textarea w-full resize-none bg-transparent text-[15px] leading-relaxed outline-none placeholder:text-[#9ca3af]"
+            class="composer-textarea w-full resize-none bg-transparent text-sm leading-relaxed outline-none placeholder:text-[#9ca3af] font-hans"
             :disabled="streaming || preparing"
-            :placeholder="sendKeyPref === 'ctrl_enter' ? '给 Learnova 发送消息... (Enter 换行，Ctrl/⌘ + Enter 发送，@ 呼出技能选择)' : '给 Learnova 发送消息... (Enter 发送，Shift + Enter 换行，@ 呼出技能选择)'"
+            :placeholder="resolvedPlaceholder"
             rows="2"
             @keydown="handleComposerKeydown"
             @input="handleComposerInput"
@@ -1340,13 +1604,13 @@ watch(
             <div class="flex items-center gap-1">
               <!-- 上传附件按钮（现在排第一） -->
               <button
-                class="flex h-8 w-8 items-center justify-center rounded-full text-[#6b7280] transition hover:bg-[#f3f4f6] hover:text-[#1f2937] disabled:cursor-not-allowed disabled:opacity-50"
+                class="flex h-7 w-7 items-center justify-center rounded-full text-[#6b7280] transition hover:bg-[#f3f4f6] hover:text-[#1f2937] disabled:cursor-not-allowed disabled:opacity-50"
                 :disabled="streaming || preparing"
                 title="上传附件（图片/文本/PDF，支持多选）"
                 type="button"
                 @click="triggerFileSelect"
               >
-                <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg class="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v14m7-7H5" />
                 </svg>
               </button>
@@ -1363,37 +1627,59 @@ watch(
 
               <!-- 添加技能按钮（现在排第二） -->
               <button
-                class="flex h-8 w-8 items-center justify-center rounded-full text-[#6b7280] transition hover:bg-[#f3f4f6] hover:text-[#1f2937] disabled:cursor-not-allowed disabled:opacity-50"
+                class="flex h-7 w-7 items-center justify-center rounded-full text-[#6b7280] transition hover:bg-[#f3f4f6] hover:text-[#1f2937] disabled:cursor-not-allowed disabled:opacity-50"
+                :class="{ 'bg-neutral-100 text-[#1f2937]': showSkillPicker }"
                 :disabled="streaming || preparing"
                 title="添加技能"
                 type="button"
-                @click="showSkillPicker = !showSkillPicker"
+                @click="toggleSkillPicker"
               >
-                <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg class="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
                 </svg>
+              </button>
+
+              <!-- 窗口管理按钮（现在排第三） -->
+              <button
+                class="flex h-7 w-7 items-center justify-center rounded-full text-[#6b7280] transition hover:bg-[#f3f4f6] hover:text-[#1f2937] disabled:cursor-not-allowed disabled:opacity-50 relative cursor-pointer"
+                :class="{ 'bg-neutral-100 text-[#1f2937]': showWindowManager }"
+                :disabled="streaming || preparing"
+                title="窗口管理"
+                type="button"
+                @click="toggleWindowManager"
+              >
+                <svg class="h-3.5 w-3.5" aria-hidden="true" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <rect x="3" y="3" width="18" height="18" rx="2" stroke-width="2" />
+                  <line x1="3" y1="9" x2="21" y2="9" stroke-width="2" />
+                </svg>
+                <span
+                  v-if="activePreviews.length > 0"
+                  class="absolute -top-1 -right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-indigo-600 text-[8px] font-bold text-white select-none scale-85 origin-top-right transition-transform"
+                >
+                  {{ activePreviews.length }}
+                </span>
               </button>
             </div>
             <button
               v-if="streaming"
-              class="flex h-9 items-center justify-center gap-1 rounded-2xl border border-[#d1d5db] bg-white px-5 text-[#6b7280] transition hover:border-[#9ca3af] hover:text-[#1f2937]"
+              class="flex h-7.5 items-center justify-center gap-1 rounded-xl border border-[#d1d5db] bg-white px-3 text-[#6b7280] transition hover:border-[#9ca3af] hover:text-[#1f2937]"
               title="停止生成"
               type="button"
               @click="stopStreaming"
             >
-              <svg class="h-4 w-4" aria-hidden="true" fill="currentColor" viewBox="0 0 24 24">
+              <svg class="h-4.5 w-4.5" aria-hidden="true" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M7 7h10v10H7z" />
               </svg>
             </button>
             <button
               v-else
-              class="flex h-9 items-center justify-center gap-1 rounded-2xl border border-transparent bg-[#1f2937] px-5 text-white transition hover:bg-[#111827] disabled:cursor-not-allowed disabled:border-[#d1d5db] disabled:bg-white disabled:text-[#9ca3af]"
+              class="flex h-7.5 w-7.5 items-center justify-center rounded-xl border border-[#d1d5db] bg-transparent text-[#1f2937] transition hover:bg-[#f3f4f6] hover:text-[#111827] disabled:cursor-not-allowed disabled:text-[#9ca3af]"
               :disabled="!canSend"
               title="发送"
               type="button"
               @click="sendMessage"
             >
-              <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg class="h-4.5 w-4.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14m0 0-6-6m6 6-6 6" />
               </svg>
             </button>
@@ -1420,14 +1706,31 @@ watch(
         @cancel="handleDeleteTurnCancel"
       />
     </Transition>
-    <Transition name="dialog-fade" appear>
-      <MediaPreviewDialog
-        v-if="previewOpen"
-        :open="previewOpen"
-        :type="previewType"
-        :source="previewSource"
-        @close="closePreview"
-      />
-    </Transition>
+    <MediaPreviewDialog
+      v-if="messagesLoaded"
+      v-for="(preview, index) in activePreviews"
+      v-show="!preview.minimized"
+      :key="preview.id"
+      :open="true"
+      :type="preview.type"
+      :source="preview.source"
+      :index="preview.index"
+      :highlight="highlightedPreviewId === preview.id"
+      :stagger-index="index"
+      :initial-x="preview.windowX"
+      :initial-y="preview.windowY"
+      :initial-width="preview.windowWidth"
+      :initial-height="preview.windowHeight"
+      :dock-left="preview.dockLeft"
+      :dock-right="preview.dockRight"
+      :dock-top="preview.dockTop"
+      :dock-bottom="preview.dockBottom"
+      :rel-x="preview.relX"
+      :rel-y="preview.relY"
+      @close="closePreview(preview.id)"
+      @focus="focusPreview(preview.id)"
+      @minimize="preview.minimized = true"
+      @update-rect="(rect) => updatePreviewRect(preview.id, rect)"
+    />
   </div>
 </template>
