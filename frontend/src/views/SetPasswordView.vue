@@ -83,24 +83,24 @@ async function handleSubmit(): Promise<void> {
 </script>
 
 <template>
-  <main class="min-h-screen bg-slate-100 px-6 py-16 text-slate-900">
-    <div class="mx-auto w-full max-w-4xl rounded-[36px] border border-slate-200 bg-white shadow-[0_40px_120px_-50px_rgba(15,23,42,0.2)]">
+  <main class="min-h-screen bg-[#f3f4f6] px-6 py-16 text-[#1f2937]">
+    <div class="mx-auto w-full max-w-4xl rounded-2xl border border-[#d1d5db] bg-white shadow-lg">
       <div class="grid gap-6 lg:grid-cols-[0.95fr_0.8fr]">
-        <div class="rounded-[36px] bg-slate-950 p-10 text-white sm:p-12 lg:p-14">
+        <div class="rounded-2xl bg-[#1f2937] p-10 text-white sm:p-12 lg:p-14">
           <div class="space-y-6">
-            <span class="inline-flex rounded-full bg-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.3em] text-slate-200">
+            <span class="inline-flex rounded-full bg-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.3em] text-white/90">
               {{ isReset ? '安全中心' : '账号初始化' }}
             </span>
             <h1 class="text-4xl font-semibold tracking-tight text-white">
               {{ isReset ? '重置账户密码' : '设置密码并完成注册' }}
             </h1>
-            <p class="max-w-xl text-base leading-7 text-slate-300">
+            <p class="max-w-xl text-base leading-7 text-white/80">
               {{ isReset ? '请填写您的新密码，系统将自动更新并登录您的账户。' : '请填写用户名和新密码，系统将自动为您创建账户并登录。该页面适用于已完成 NJUtable 邮件验证的用户。' }}
             </p>
           </div>
-          <div class="mt-8 rounded-[28px] border border-white/10 bg-white/5 p-6 text-sm text-slate-200 shadow-[0_20px_80px_-40px_rgba(15,23,42,0.5)]">
+          <div class="mt-8 rounded-xl border border-white/10 bg-white/5 p-6 text-sm text-white/90">
             <div class="font-semibold text-white">提示</div>
-            <ul class="mt-4 space-y-3 text-slate-300">
+            <ul class="mt-4 space-y-3 text-white/70">
               <li>• 确保使用邮件链接访问此页面。</li>
               <li>• 密码长度至少 8 位。</li>
               <li>• 如果链接已过期，请重新申请注册或重置密码。</li>
@@ -108,60 +108,60 @@ async function handleSubmit(): Promise<void> {
           </div>
         </div>
 
-        <div class="flex flex-col justify-center rounded-[36px] bg-white p-10 shadow-sm sm:p-12 lg:p-14">
-          <div v-if="errorMessage" class="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+        <div class="flex flex-col justify-center rounded-2xl bg-white p-10 sm:p-12 lg:p-14">
+          <div v-if="errorMessage" class="mb-4 rounded-xl border border-[#efb3a7] bg-[#fff7ed] px-4 py-3 text-sm text-[#9a3412]">
             {{ errorMessage }}
           </div>
 
-          <div v-if="successMessage" class="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+          <div v-if="successMessage" class="mb-4 rounded-xl border border-emerald-100 bg-emerald-50/50 px-4 py-3 text-sm text-emerald-700">
             {{ successMessage }}
           </div>
 
           <form v-if="!successMessage" class="space-y-5" @submit.prevent="handleSubmit">
-          <label v-if="!isReset" class="block">
-            <span class="mb-2 block text-sm font-medium text-slate-700">用户名</span>
-            <input
-              v-model="form.username"
-              class="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20"
-              autocomplete="username"
-              type="text"
-            />
-          </label>
+            <label v-if="!isReset" class="block">
+              <span class="mb-2 block text-sm font-medium text-[#4b5563]">用户名</span>
+              <input
+                v-model="form.username"
+                class="h-12 w-full rounded-xl border border-[#d1d5db] bg-white px-4 text-[#1f2937] outline-none transition focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20"
+                autocomplete="username"
+                type="text"
+              />
+            </label>
 
-          <label class="block">
-            <span class="mb-2 block text-sm font-medium text-slate-700">新密码</span>
-            <input
-              v-model="form.password"
-              class="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20"
-              autocomplete="new-password"
-              type="password"
-            />
-          </label>
+            <label class="block">
+              <span class="mb-2 block text-sm font-medium text-[#4b5563]">新密码</span>
+              <input
+                v-model="form.password"
+                class="h-12 w-full rounded-xl border border-[#d1d5db] bg-white px-4 text-[#1f2937] outline-none transition focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20"
+                autocomplete="new-password"
+                type="password"
+              />
+            </label>
 
-          <label class="block">
-            <span class="mb-2 block text-sm font-medium text-slate-700">确认新密码</span>
-            <input
-              v-model="form.confirmPassword"
-              class="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20"
-              autocomplete="new-password"
-              type="password"
-            />
-          </label>
+            <label class="block">
+              <span class="mb-2 block text-sm font-medium text-[#4b5563]">确认新密码</span>
+              <input
+                v-model="form.confirmPassword"
+                class="h-12 w-full rounded-xl border border-[#d1d5db] bg-white px-4 text-[#1f2937] outline-none transition focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20"
+                autocomplete="new-password"
+                type="password"
+              />
+            </label>
 
-          <button
-            type="submit"
-            class="h-12 w-full rounded-2xl bg-slate-900 px-4 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
-            :disabled="submitting || !canSubmit"
-          >
-            {{ submitting ? '处理中...' : (isReset ? '确认重置并登录' : '设置密码并登录') }}
-          </button>
-        </form>
+            <button
+              type="submit"
+              class="h-12 w-full rounded-xl border border-transparent bg-[#1f2937] px-4 text-sm font-semibold text-white transition-all duration-200 hover:bg-[#111827] active:scale-95 disabled:cursor-not-allowed disabled:border-[#d1d5db] disabled:bg-white disabled:text-[#9ca3af] disabled:active:scale-100"
+              :disabled="submitting || !canSubmit"
+            >
+              {{ submitting ? '处理中...' : (isReset ? '确认重置并登录' : '设置密码并登录') }}
+            </button>
+          </form>
 
-        <p class="mt-6 text-sm leading-6 text-slate-500">
-          {{ isReset ? '如果您已申请重置密码，请使用最近一次收到的邮件链接访问本页面完成重置。' : '如果您已在 NJUtable 提交注册表单，请使用邮件中的链接访问本页面完成密码设置。' }}
-        </p>
+          <p class="mt-6 text-sm leading-6 text-[#9ca3af]">
+            {{ isReset ? '如果您已申请重置密码，请使用最近一次收到的邮件链接访问本页面完成重置。' : '如果您已在 NJUtable 提交注册表单，请使用邮件中的链接访问本页面完成密码设置。' }}
+          </p>
+        </div>
       </div>
     </div>
-  </div>
   </main>
 </template>

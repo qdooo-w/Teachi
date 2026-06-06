@@ -24,11 +24,12 @@ import { useProjects } from './composables/useProjects'
 import { useLayout } from './composables/useLayout'
 import { useProjectSkills } from './composables/useProjectSkills'
 import { useUserSkills } from './composables/useUserSkills'
-import { PREVIEW_PROJECT_LIMIT, REGISTRATION_FORM_URL, API_BASE_URL } from './config'
+import { PREVIEW_PROJECT_LIMIT, API_BASE_URL } from './config'
 
 // ── 认证（状态 / 行为均来自 composable，模板继续使用同名 ref） ───────────────
 const {
   token,
+  currentUser,
   bootstrapping,
   preparing,
   authSubmitting,
@@ -300,10 +301,20 @@ function updateKeyboardOffset() {
 
 const showUserProfileDialog = ref(false)
 const avatarVersion = ref(0)
+const hasAvatarError = ref(false)
+
+function handleAvatarError() {
+  hasAvatarError.value = true
+}
 
 function handleAvatarUpdated() {
   avatarVersion.value++
+  hasAvatarError.value = false
 }
+
+watch([avatarVersion, currentUser], () => {
+  hasAvatarError.value = false
+})
 
 onMounted(() => {
   setOnTokenReady(async () => {
@@ -358,7 +369,7 @@ onBeforeUnmount(() => {
 
     <!-- 登录 / 注册 / 找回密码 -->
     <section v-else-if="!isAuthenticated && route.name !== 'set-password' && route.name !== 'register-confirm'" class="flex h-full items-center justify-center px-4">
-      <div class="w-full max-w-[420px] rounded-lg border border-[#d1d5db] bg-white p-6 shadow-sm">
+      <div class="w-full max-w-[420px] rounded-2xl border border-[#d1d5db]/80 bg-white p-6 shadow-md">
         <div class="mb-6">
           <div class="text-2xl font-bold tracking-normal">Learnova</div>
           <div class="mt-1 text-sm text-[#6b7280]">
@@ -367,11 +378,11 @@ onBeforeUnmount(() => {
         </div>
 
         <form class="space-y-4" @submit.prevent="handleSubmitAuth">
-          <div v-if="authMode !== 'forgot'" class="grid grid-cols-2 rounded-md border border-[#d1d5db] bg-[#f9fafb] p-1">
+          <div v-if="authMode !== 'forgot'" class="grid grid-cols-2 rounded-xl border border-[#e5e7eb] bg-[#f9fafb] p-1">
             <button
               type="button"
               :class="[
-                'h-9 rounded px-3 text-sm font-medium transition-colors',
+                'h-9 rounded-lg px-3 text-sm font-medium transition-all duration-200 active:scale-95',
                 authMode === 'login' ? 'bg-white text-[#111827] shadow-sm' : 'text-[#6b7280] hover:text-[#111827]',
               ]"
               @click="authMode = 'login'; authError = ''"
@@ -381,7 +392,7 @@ onBeforeUnmount(() => {
             <button
               type="button"
               :class="[
-                'h-9 rounded px-3 text-sm font-medium transition-colors',
+                'h-9 rounded-lg px-3 text-sm font-medium transition-all duration-200 active:scale-95',
                 authMode === 'register' ? 'bg-white text-[#111827] shadow-sm' : 'text-[#6b7280] hover:text-[#111827]',
               ]"
               @click="authMode = 'register'; authError = ''"
@@ -395,7 +406,7 @@ onBeforeUnmount(() => {
               <span class="mb-1 block text-sm font-medium">邮箱</span>
               <input
                 v-model="authForm.email"
-                class="h-11 w-full rounded-md border border-[#d1d5db] bg-white px-3 outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
+                class="h-11 w-full rounded-lg border border-[#d1d5db] bg-white px-3 text-sm text-[#1f2937] outline-none transition focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20"
                 autocomplete="email"
                 type="email"
               />
@@ -406,7 +417,7 @@ onBeforeUnmount(() => {
                 <span class="text-sm font-medium">密码</span>
                 <button
                   type="button"
-                  class="text-xs text-[#1f6f5b] hover:underline bg-transparent border-none p-0 cursor-pointer"
+                  class="text-xs text-[#4b5563] hover:text-[#1f2937] hover:underline bg-transparent border-none p-0 cursor-pointer"
                   @click="authMode = 'forgot'; authError = ''"
                 >
                   忘记密码？
@@ -414,7 +425,7 @@ onBeforeUnmount(() => {
               </div>
               <input
                 v-model="authForm.password"
-                class="h-11 w-full rounded-md border border-[#d1d5db] bg-white px-3 outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
+                class="h-11 w-full rounded-lg border border-[#d1d5db] bg-white px-3 text-sm text-[#1f2937] outline-none transition focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20"
                 autocomplete="current-password"
                 type="password"
               />
@@ -426,7 +437,7 @@ onBeforeUnmount(() => {
               <span class="mb-1 block text-sm font-medium">邮箱</span>
               <input
                 v-model="authForm.email"
-                class="h-11 w-full rounded-md border border-[#d1d5db] bg-white px-3 outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
+                class="h-11 w-full rounded-lg border border-[#d1d5db] bg-white px-3 text-sm text-[#1f2937] outline-none transition focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20"
                 autocomplete="email"
                 type="email"
                 placeholder="请输入您的学校邮箱"
@@ -439,7 +450,7 @@ onBeforeUnmount(() => {
               <span class="mb-1 block text-sm font-medium">邮箱</span>
               <input
                 v-model="authForm.email"
-                class="h-11 w-full rounded-md border border-[#d1d5db] bg-white px-3 outline-none transition focus:border-[#1f6f5b] focus:ring-2 focus:ring-[#1f6f5b]/20"
+                class="h-11 w-full rounded-lg border border-[#d1d5db] bg-white px-3 text-sm text-[#1f2937] outline-none transition focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20"
                 autocomplete="email"
                 type="email"
                 placeholder="请输入您注册的学校邮箱"
@@ -447,12 +458,12 @@ onBeforeUnmount(() => {
             </label>
           </template>
 
-          <p v-if="authError" class="rounded-md border border-[#efb3a7] bg-[#fff7ed] px-3 py-2 text-sm text-[#9a3412]">
+          <p v-if="authError" class="rounded-xl border border-[#efb3a7] bg-[#fff7ed] px-3 py-2 text-sm text-[#9a3412]">
             {{ authError }}
           </p>
 
           <button
-            class="h-11 w-full rounded-md bg-[#1f2937] px-4 text-sm font-semibold text-white transition hover:bg-[#111827] disabled:cursor-not-allowed disabled:bg-[#9ca3af]"
+            class="h-11 w-full rounded-xl border border-transparent bg-[#1f2937] px-4 text-sm font-semibold text-white transition-all duration-200 hover:bg-[#111827] active:scale-95 disabled:cursor-not-allowed disabled:border-[#d1d5db] disabled:bg-white disabled:text-[#9ca3af] disabled:active:scale-100"
             :disabled="authSubmitting"
             type="submit"
           >
@@ -462,7 +473,7 @@ onBeforeUnmount(() => {
           <div v-if="authMode === 'forgot'" class="text-center mt-2">
             <button
               type="button"
-              class="text-sm text-[#6b7280] hover:text-[#111827] bg-transparent border-none cursor-pointer"
+              class="text-sm text-[#6b7280] hover:text-[#1f2937] bg-transparent border-none cursor-pointer active:scale-95 transition-all duration-200"
               @click="authMode = 'login'; authError = ''"
             >
               &larr; 返回登录
@@ -481,57 +492,49 @@ onBeforeUnmount(() => {
         @click="sidebarOpen = false"
       />
 
-      <!-- 侧边栏 -->
       <aside
         :class="[
           'fixed z-50 flex h-full flex-col bg-white transition-all duration-300 md:relative',
           sidebarOpen
-            ? 'w-64 translate-x-0 border-r border-[#d1d5db]'
+            ? 'w-56 translate-x-0'
             : '-translate-x-full overflow-hidden border-none md:w-0 md:translate-x-0',
         ]"
       >
-        <div class="flex h-full w-64 flex-shrink-0 flex-col p-4">
-          <div class="mb-6 mt-2 flex items-center justify-between gap-2 px-2">
+        <div class="flex h-full w-56 flex-shrink-0 flex-col px-2.5 py-4">
+          <div class="mb-5 mt-2 flex items-center justify-start gap-2 pl-4 pr-2">
             <button
-              class="flex items-center gap-2 text-left"
+              class="flex items-center gap-1 text-left"
               type="button"
               @click="closeSidebarOnMobile(); router.push({ name: 'overview' })"
             >
-              <span class="text-2xl font-bold tracking-tight">Learnova</span>
-            </button>
-            <button
-              class="flex h-7 items-center gap-1 rounded-full border border-[#e5e7eb] px-2.5 text-xs text-[#4b5563] transition-colors hover:border-[#d1d5db] hover:bg-[#f3f4f6] hover:text-[#4b5563]"
-              :class="{ 'border-[#d1d5db] bg-[#f3f4f6] text-[#4b5563]': $route.name === 'community' }"
-              type="button"
-              title="技能社区"
-              @click="closeSidebarOnMobile(); router.push({ name: 'community' })"
-            >
-              <svg class="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87m6-5.13a4 4 0 11-8 0 4 4 0 018 0zm6 3a3 3 0 11-6 0 3 3 0 016 0z" />
-              </svg>
-              社区
+              <span 
+                class="text-[23px] font-bold tracking-tight"
+                style="font-family: 'Source Han Serif SC', 'Source Han Serif CN', 'Noto Serif CJK SC', 'Songti SC', 'SimSun', serif;"
+              >
+                Learnova
+              </span>
             </button>
           </div>
 
-          <div class="mb-4 flex min-h-[34px] items-center gap-1 rounded-2xl bg-[#f3f4f6] px-2">
-            <button
-              type="button"
-              disabled
-              class="flex h-6 w-6 flex-shrink-0 cursor-not-allowed items-center justify-center text-[#9ca3af]"
-            >
-              <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-              </svg>
-            </button>
-            <input
-              type="text"
-              disabled
-              class="h-7 flex-1 bg-transparent text-sm outline-none placeholder:text-transparent"
-            />
-          </div>
+          <button
+            class="mx-1 mb-3 flex h-8 items-center justify-start gap-1.5 rounded-xl pl-4 pr-2 text-left transition-all duration-200 active:scale-95"
+            :class="[
+              $route.name === 'community'
+                ? 'bg-[#1f2937] text-white font-medium shadow-sm'
+                : 'bg-[#f3f4f6]/80 text-[#4b5563] hover:bg-[#e5e7eb] hover:text-[#1f2937]'
+            ]"
+            type="button"
+            title="技能社区"
+            @click="closeSidebarOnMobile(); router.push({ name: 'community' })"
+          >
+            <svg class="h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+            </svg>
+            <span class="text-xs whitespace-nowrap">技能社区</span>
+          </button>
 
           <div class="no-scrollbar flex-1 overflow-y-auto">
-            <div class="mb-2 px-2 text-xs font-medium text-[#6b7280]">我的科目</div>
+            <div class="mb-2 pl-4 text-xs font-medium text-[#6b7280]">我的科目</div>
             <div class="flex flex-col gap-1">
               <div
                 v-for="project in previewProjects"
@@ -551,7 +554,7 @@ onBeforeUnmount(() => {
                   role="button"
                   tabindex="0"
                   :class="[
-                    'flex min-h-[34px] w-full cursor-pointer items-center justify-start gap-2 rounded-2xl px-3 py-1.5 text-left text-sm transition-colors',
+                    'flex h-8 w-auto mx-1 cursor-pointer items-center justify-start gap-2 rounded-xl pl-4 pr-2 text-left text-[13px] transition-colors',
                     ($route.params.pid as string | undefined) === project.pid
                       ? 'bg-[#e5e7eb] font-medium'
                       : 'hover:bg-[#e5e7eb]',
@@ -559,7 +562,7 @@ onBeforeUnmount(() => {
                   @click="closeSidebarOnMobile(); router.push({ name: 'subject', params: { pid: project.pid } })"
                   @keydown.enter.prevent="closeSidebarOnMobile(); router.push({ name: 'subject', params: { pid: project.pid } })"
                 >
-                  <span class="font-hans flex-1 truncate text-sm">{{ project.projectname }}</span>
+                  <span class="font-hans flex-1 truncate text-[13px]">{{ project.projectname }}</span>
                   <RowMenu
                     :open="openMenuKey === projectKey('sidebar', project.pid)"
                     class="opacity-0 transition-opacity group-hover:opacity-100"
@@ -573,66 +576,71 @@ onBeforeUnmount(() => {
               </div>
               <button
                 type="button"
-                class="flex min-h-[34px] w-full items-center justify-start gap-2 rounded-2xl px-3 py-1.5 text-left text-sm text-[#6b7280] transition-colors hover:bg-[#e5e7eb]"
+                class="flex w-full items-center justify-start px-4 py-1 bg-transparent border-none outline-none text-[#9ca3af] hover:text-[#4b5563] transition-colors select-none cursor-pointer"
                 @click="closeSidebarOnMobile(); router.push({ name: 'overview' })"
               >
-                查看全部科目
+                <span class="text-xs whitespace-nowrap">查看全部科目</span>
               </button>
             </div>
           </div>
 
-          <div class="mt-4 flex-shrink-0 space-y-1 pt-4">
+          <div class="mt-3 flex-shrink-0 flex flex-col space-y-0.5 pt-3 border-t border-[#e5e7eb]/60">
             <button
-              class="flex min-h-[34px] w-full cursor-not-allowed items-center justify-start gap-2 rounded-2xl border border-transparent px-3 py-1.5 text-left text-sm text-[#9ca3af]"
+              class="flex h-8 w-auto mx-1 cursor-not-allowed items-center justify-start gap-1.5 rounded-xl border border-transparent pl-4 pr-2 text-left text-[#9ca3af]"
               type="button"
               disabled
               title="暂未实现"
             >
-              <svg class="h-4 w-4 flex-shrink-0" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg class="h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
               </svg>
-              文档
+              <span class="text-xs whitespace-nowrap">文档</span>
             </button>
             <button
-              class="flex min-h-[34px] w-full cursor-not-allowed items-center justify-start gap-2 rounded-2xl border border-transparent px-3 py-1.5 text-left text-sm text-[#9ca3af]"
+              class="flex h-8 w-auto mx-1 cursor-not-allowed items-center justify-start gap-1.5 rounded-xl border border-transparent pl-4 pr-2 text-left text-[#9ca3af]"
               type="button"
               disabled
               title="暂未实现"
             >
-              <svg class="h-4 w-4 flex-shrink-0" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg class="h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
               </svg>
-              仪表盘
+              <span class="text-xs whitespace-nowrap">仪表盘</span>
             </button>
             <button
-              class="flex min-h-[34px] w-full items-center justify-start gap-2 rounded-2xl border border-transparent px-3 py-1.5 text-left text-sm text-[#4b5563] transition-colors hover:bg-[#e5e7eb]"
+              class="flex h-8 w-auto mx-1 items-center justify-start gap-1.5 rounded-xl border border-transparent pl-4 pr-2 text-left text-[#4b5563] transition-all duration-200 hover:bg-[#e5e7eb] active:scale-95"
               type="button"
               title="AI 模型配置"
               @click="showSettingsDialog = true"
             >
-              <svg class="h-4 w-4 flex-shrink-0" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg class="h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
               </svg>
-              设置
+              <span class="text-xs whitespace-nowrap">设置</span>
             </button>
             <div
-              class="mt-2 flex cursor-pointer items-center gap-3 rounded-2xl px-3 py-2.5 shadow-sm transition-colors hover:bg-[#e5e7eb]"
+              class="mt-1.5 mx-1 flex cursor-pointer items-center gap-2 rounded-xl px-2 py-2 shadow-sm transition-all duration-200 hover:bg-[#e5e7eb] active:scale-[0.98]"
               title="个人中心"
               @click="showUserProfileDialog = true"
             >
-              <div class="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-[#d1d5db] text-sm overflow-hidden border border-slate-200">
+              <div class="relative flex h-7.5 w-7.5 flex-shrink-0 items-center justify-center rounded-full bg-[#e5e7eb] text-sm overflow-hidden border border-slate-200 select-none">
+                <!-- 底层灰底首字母占位 -->
+                <span class="font-semibold text-slate-500 text-xs">{{ avatarLetter }}</span>
+                <!-- 顶层图片覆盖 -->
                 <img 
-                  v-if="currentUser" 
+                  v-if="currentUser?.head_file && !hasAvatarError" 
                   :src="`${API_BASE_URL}/auth/avatar/${currentUser.uuid}?t=${avatarVersion}`" 
-                  class="h-full w-full object-cover" 
+                  class="absolute inset-0 h-full w-full object-cover" 
                   alt="Avatar" 
+                  @error="handleAvatarError"
                 />
-                <span v-else>{{ avatarLetter }}</span>
               </div>
               <div class="min-w-0 flex-1">
-                <div class="truncate text-sm font-medium">{{ displayUser }}</div>
-                <div class="truncate text-xs text-[#6b7280]">个人中心</div>
+                <div class="truncate text-[12px] font-semibold text-[#1f2937] leading-none">{{ displayUser }}</div>
+                <div class="whitespace-nowrap text-[9.5px] sm:text-[10px] text-[#6b7280] mt-1 leading-none" :title="currentUser?.email">
+                  {{ currentUser?.email || '个人中心' }}
+                </div>
               </div>
             </div>
           </div>
@@ -644,7 +652,7 @@ onBeforeUnmount(() => {
         <header class="flex h-14 flex-shrink-0 items-center justify-between px-4">
           <div class="flex min-w-0 items-center gap-3 overflow-hidden">
             <button
-              class="flex-shrink-0 rounded-xl p-2 text-[#4b5563] transition-colors hover:bg-[#e5e7eb]"
+              class="flex-shrink-0 rounded p-2 text-[#4b5563] transition-colors hover:bg-[#e5e7eb]"
               type="button"
               title="切换侧边栏"
               @click="sidebarOpen = !sidebarOpen"
@@ -677,7 +685,7 @@ onBeforeUnmount(() => {
           <div class="flex items-center gap-1">
             <button
               v-if="$route.name === 'chat'"
-              class="flex h-9 items-center gap-1 rounded-xl border border-transparent px-3 text-sm text-[#4b5563] transition-colors hover:border-[#d1d5db] hover:bg-[#e5e7eb]"
+              class="flex h-9 items-center gap-1 rounded border border-transparent px-3 text-sm text-[#4b5563] transition-colors hover:border-[#d1d5db] hover:bg-[#e5e7eb]"
               type="button"
               title="新建对话"
               @click="router.push({ name: 'subject', params: { pid: $route.params.pid } })"
@@ -694,7 +702,7 @@ onBeforeUnmount(() => {
               </svg>
             </span>
             <button
-              class="flex h-9 w-9 items-center justify-center rounded-xl border border-transparent text-[#9ca3af] cursor-not-allowed"
+              class="flex h-9 w-9 items-center justify-center rounded border border-transparent text-[#9ca3af] cursor-not-allowed"
               type="button"
               title="技能仓库（暂不可用）"
               disabled
@@ -705,7 +713,7 @@ onBeforeUnmount(() => {
               </svg>
             </button>
             <button
-              class="flex h-9 w-9 items-center justify-center rounded-xl border border-transparent text-[#4b5563] transition-colors hover:border-[#d1d5db] hover:bg-[#e5e7eb]"
+              class="flex h-9 w-9 items-center justify-center rounded border border-transparent text-[#4b5563] transition-colors hover:border-[#d1d5db] hover:bg-[#e5e7eb]"
               type="button"
               title="我的技能"
               @click="showUserSkillManager = true"
@@ -716,7 +724,7 @@ onBeforeUnmount(() => {
             </button>
             <button
               v-if="projectSkillSpace"
-              class="flex h-9 w-9 items-center justify-center rounded-xl border border-transparent text-[#4b5563] transition-colors hover:border-[#d1d5db] hover:bg-[#e5e7eb]"
+              class="flex h-9 w-9 items-center justify-center rounded border border-transparent text-[#4b5563] transition-colors hover:border-[#d1d5db] hover:bg-[#e5e7eb]"
               type="button"
               title="项目技能"
               @click="showProjectSkillManager = true"
@@ -809,6 +817,7 @@ onBeforeUnmount(() => {
     <UserProfileDialog
       :show="showUserProfileDialog"
       @close="showUserProfileDialog = false"
+      @logout="handleLogout"
     />
   </main>
 </template>
