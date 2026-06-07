@@ -298,8 +298,25 @@ async function renderContent(): Promise<void> {
       
       // Auto-fit window size for table
       if (props.initialWidth === undefined || props.initialHeight === undefined) {
-        windowWidth.value = Math.min(850, Math.max(550, Math.round(window.innerWidth * 0.7)))
-        windowHeight.value = Math.min(500, Math.max(350, Math.round(window.innerHeight * 0.5)))
+        const tableElement = container.querySelector('table') as HTMLElement | null
+        if (tableElement) {
+          const rect = tableElement.getBoundingClientRect()
+          const contentW = rect.width
+          const contentH = rect.height
+          
+          // Add padding (48px for p-6 padding) + title bar height (36px) + extra breathing room (16px)
+          const targetW = contentW + 48
+          const targetH = contentH + 48 + 36 + 16
+          
+          const maxW = Math.min(950, window.innerWidth * 0.85)
+          const maxH = Math.min(700, window.innerHeight * 0.75)
+          
+          windowWidth.value = Math.max(550, Math.min(maxW, Math.round(targetW)))
+          windowHeight.value = Math.max(180, Math.min(maxH, Math.round(targetH)))
+        } else {
+          windowWidth.value = Math.min(850, Math.max(550, Math.round(window.innerWidth * 0.7)))
+          windowHeight.value = Math.min(500, Math.max(350, Math.round(window.innerHeight * 0.5)))
+        }
         
         // Center the window strictly inside bounds
         const baseLeft = (window.innerWidth - windowWidth.value) / 2
@@ -429,51 +446,50 @@ let startY = 0
 let startOffsetX = 0
 let startOffsetY = 0
 
-function handleDragStart(e: MouseEvent | TouchEvent): void {
-  if (e instanceof MouseEvent && e.button !== 0) return
+function handleDragStart(e: PointerEvent): void {
+  if (e.button !== 0) return
+  e.preventDefault()
+
+  const target = e.currentTarget as HTMLElement
+  if (target && typeof target.setPointerCapture === 'function') {
+    try {
+      target.setPointerCapture(e.pointerId)
+    } catch (err) {}
+  }
 
   isDragging.value = true
   
-  const clientX = e instanceof MouseEvent ? e.clientX : e.touches[0].clientX
-  const clientY = e instanceof MouseEvent ? e.clientY : e.touches[0].clientY
-  
-  startX = clientX
-  startY = clientY
+  startX = e.clientX
+  startY = e.clientY
   startOffsetX = offsetX.value
   startOffsetY = offsetY.value
 
-  if (e instanceof MouseEvent) {
-    document.addEventListener('mousemove', handleDragMove)
-    document.addEventListener('mouseup', handleDragEnd)
-  } else {
-    document.addEventListener('touchmove', handleDragMove, { passive: false })
-    document.addEventListener('touchend', handleDragEnd)
-  }
+  document.addEventListener('pointermove', handleDragMove)
+  document.addEventListener('pointerup', handleDragEnd)
+  document.addEventListener('pointercancel', handleDragEnd)
 }
 
-function handleDragMove(e: MouseEvent | TouchEvent): void {
+function handleDragMove(e: PointerEvent): void {
   if (!isDragging.value) return
+  e.preventDefault()
 
-  if (e instanceof TouchEvent) {
-    e.preventDefault()
-  }
-
-  const clientX = e instanceof MouseEvent ? e.clientX : e.touches[0].clientX
-  const clientY = e instanceof MouseEvent ? e.clientY : e.touches[0].clientY
-
-  const dx = clientX - startX
-  const dy = clientY - startY
-
-  offsetX.value = startOffsetX + dx
-  offsetY.value = startOffsetY + dy
+  offsetX.value = startOffsetX + (e.clientX - startX)
+  offsetY.value = startOffsetY + (e.clientY - startY)
 }
 
-function handleDragEnd(): void {
+function handleDragEnd(e: PointerEvent): void {
   isDragging.value = false
-  document.removeEventListener('mousemove', handleDragMove)
-  document.removeEventListener('mouseup', handleDragEnd)
-  document.removeEventListener('touchmove', handleDragMove)
-  document.removeEventListener('touchend', handleDragEnd)
+  
+  const target = e.currentTarget as HTMLElement
+  if (target && typeof target.releasePointerCapture === 'function') {
+    try {
+      target.releasePointerCapture(e.pointerId)
+    } catch (err) {}
+  }
+
+  document.removeEventListener('pointermove', handleDragMove)
+  document.removeEventListener('pointerup', handleDragEnd)
+  document.removeEventListener('pointercancel', handleDragEnd)
 }
 
 // Window Dragging (outer window translation)
@@ -482,44 +498,56 @@ let windowDragStartY = 0
 let windowDragStartLeft = 0
 let windowDragStartTop = 0
 
-function handleWindowDragStart(e: MouseEvent | TouchEvent): void {
-  if (e instanceof MouseEvent && e.button !== 0) return
+function handleWindowDragStart(e: PointerEvent): void {
+  if (e.button !== 0) return
+  e.preventDefault()
+
+  const target = e.currentTarget as HTMLElement
+  if (target && typeof target.setPointerCapture === 'function') {
+    try {
+      target.setPointerCapture(e.pointerId)
+    } catch (err) {}
+  }
 
   isDraggingWindow.value = true
 
-  const clientX = e instanceof MouseEvent ? e.clientX : e.touches[0].clientX
-  const clientY = e instanceof MouseEvent ? e.clientY : e.touches[0].clientY
-
-  windowDragStartX = clientX
-  windowDragStartY = clientY
+  windowDragStartX = e.clientX
+  windowDragStartY = e.clientY
   windowDragStartLeft = windowX.value
   windowDragStartTop = windowY.value
 
-  if (e instanceof MouseEvent) {
-    document.addEventListener('mousemove', handleWindowDragMove)
-    document.addEventListener('mouseup', handleWindowDragEnd)
-  } else {
-    document.addEventListener('touchmove', handleWindowDragMove, { passive: false })
-    document.addEventListener('touchend', handleWindowDragEnd)
-  }
+  document.addEventListener('pointermove', handleWindowDragMove)
+  document.addEventListener('pointerup', handleWindowDragEnd)
+  document.addEventListener('pointercancel', handleWindowDragEnd)
 }
 
-function handleWindowDragMove(e: MouseEvent | TouchEvent): void {
+function handleWindowDragMove(e: PointerEvent): void {
   if (!isDraggingWindow.value) return
+  e.preventDefault()
 
-  if (e instanceof TouchEvent) {
-    e.preventDefault()
-  }
-
-  const clientX = e instanceof MouseEvent ? e.clientX : e.touches[0].clientX
-  const clientY = e instanceof MouseEvent ? e.clientY : e.touches[0].clientY
-
-  const dx = clientX - windowDragStartX
-  const dy = clientY - windowDragStartY
+  const dx = e.clientX - windowDragStartX
+  const dy = e.clientY - windowDragStartY
 
   // Constrain coordinates completely inside the viewport bounds
   windowX.value = Math.max(0, Math.min(window.innerWidth - windowWidth.value, windowDragStartLeft + dx))
   windowY.value = Math.max(0, Math.min(window.innerHeight - windowHeight.value, windowDragStartTop + dy))
+}
+
+function handleWindowDragEnd(e: PointerEvent): void {
+  isDraggingWindow.value = false
+  
+  const target = e.currentTarget as HTMLElement
+  if (target && typeof target.releasePointerCapture === 'function') {
+    try {
+      target.releasePointerCapture(e.pointerId)
+    } catch (err) {}
+  }
+
+  document.removeEventListener('pointermove', handleWindowDragMove)
+  document.removeEventListener('pointerup', handleWindowDragEnd)
+  document.removeEventListener('pointercancel', handleWindowDragEnd)
+  
+  updateRectEmit()
 }
 
 // Window Resizing
@@ -528,64 +556,56 @@ let resizeDragStartY = 0
 let resizeStartWidth = 0
 let resizeStartHeight = 0
 
-function handleResizeStart(e: MouseEvent | TouchEvent): void {
-  if (e instanceof MouseEvent && e.button !== 0) return
+function handleResizeStart(e: PointerEvent): void {
+  if (e.button !== 0) return
+  e.preventDefault()
+
+  const target = e.currentTarget as HTMLElement
+  if (target && typeof target.setPointerCapture === 'function') {
+    try {
+      target.setPointerCapture(e.pointerId)
+    } catch (err) {}
+  }
 
   isResizing.value = true
 
-  const clientX = e instanceof MouseEvent ? e.clientX : e.touches[0].clientX
-  const clientY = e instanceof MouseEvent ? e.clientY : e.touches[0].clientY
-
-  resizeDragStartX = clientX
-  resizeDragStartY = clientY
+  resizeDragStartX = e.clientX
+  resizeDragStartY = e.clientY
   resizeStartWidth = windowWidth.value
   resizeStartHeight = windowHeight.value
 
-  if (e instanceof MouseEvent) {
-    document.addEventListener('mousemove', handleResizeMove)
-    document.addEventListener('mouseup', handleResizeEnd)
-  } else {
-    document.addEventListener('touchmove', handleResizeMove, { passive: false })
-    document.addEventListener('touchend', handleResizeEnd)
-  }
+  document.addEventListener('pointermove', handleResizeMove)
+  document.addEventListener('pointerup', handleResizeEnd)
+  document.addEventListener('pointercancel', handleResizeEnd)
 }
 
-function handleResizeMove(e: MouseEvent | TouchEvent): void {
+function handleResizeMove(e: PointerEvent): void {
   if (!isResizing.value) return
+  e.preventDefault()
 
-  if (e instanceof TouchEvent) {
-    e.preventDefault()
-  }
+  const dx = e.clientX - resizeDragStartX
+  const dy = e.clientY - resizeDragStartY
 
-  const clientX = e instanceof MouseEvent ? e.clientX : e.touches[0].clientX
-  const clientY = e instanceof MouseEvent ? e.clientY : e.touches[0].clientY
-
-  const dx = clientX - resizeDragStartX
-  const dy = clientY - resizeDragStartY
-
-  // Limit window size (min 380x300 or 220x80 for math, max fit screen boundaries)
+  // Limit window size (min 380x300 or 220x80 for math, 380x180 for table, max fit screen boundaries)
   const minW = props.type === 'math' ? 220 : 380
-  const minH = props.type === 'math' ? 80 : 300
+  const minH = props.type === 'math' ? 80 : (props.type === 'table' ? 180 : 300)
   windowWidth.value = Math.max(minW, Math.min(window.innerWidth - windowX.value - 10, resizeStartWidth + dx))
   windowHeight.value = Math.max(minH, Math.min(window.innerHeight - windowY.value - 10, resizeStartHeight + dy))
 }
 
-function handleResizeEnd(): void {
+function handleResizeEnd(e: PointerEvent): void {
   isResizing.value = false
-  document.removeEventListener('mousemove', handleResizeMove)
-  document.removeEventListener('mouseup', handleResizeEnd)
-  document.removeEventListener('touchmove', handleResizeMove)
-  document.removeEventListener('touchend', handleResizeEnd)
   
-  updateRectEmit()
-}
+  const target = e.currentTarget as HTMLElement
+  if (target && typeof target.releasePointerCapture === 'function') {
+    try {
+      target.releasePointerCapture(e.pointerId)
+    } catch (err) {}
+  }
 
-function handleWindowDragEnd(): void {
-  isDraggingWindow.value = false
-  document.removeEventListener('mousemove', handleWindowDragMove)
-  document.removeEventListener('mouseup', handleWindowDragEnd)
-  document.removeEventListener('touchmove', handleWindowDragMove)
-  document.removeEventListener('touchend', handleWindowDragEnd)
+  document.removeEventListener('pointermove', handleResizeMove)
+  document.removeEventListener('pointerup', handleResizeEnd)
+  document.removeEventListener('pointercancel', handleResizeEnd)
   
   updateRectEmit()
 }
@@ -617,7 +637,7 @@ function restorePosition(): void {
   if (props.initialWidth !== undefined) {
     windowWidth.value = Math.min(props.initialWidth, window.innerWidth)
   } else {
-    if (props.type !== 'math' && props.type !== 'mermaid') {
+    if (props.type !== 'math' && props.type !== 'mermaid' && props.type !== 'table') {
       const isMobile = window.innerWidth < 768
       windowWidth.value = isMobile ? Math.round(window.innerWidth * 0.9) : 600
     }
@@ -626,7 +646,7 @@ function restorePosition(): void {
   if (props.initialHeight !== undefined) {
     windowHeight.value = Math.min(props.initialHeight, window.innerHeight)
   } else {
-    if (props.type !== 'math' && props.type !== 'mermaid') {
+    if (props.type !== 'math' && props.type !== 'mermaid' && props.type !== 'table') {
       const isMobile = window.innerWidth < 768
       windowHeight.value = isMobile ? Math.round(window.innerHeight * 0.7) : 650
     }
@@ -721,18 +741,15 @@ onMounted(() => {
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', handleKeydown)
   window.removeEventListener('resize', handleViewportResize)
-  document.removeEventListener('mousemove', handleDragMove)
-  document.removeEventListener('mouseup', handleDragEnd)
-  document.removeEventListener('touchmove', handleDragMove)
-  document.removeEventListener('touchend', handleDragEnd)
-  document.removeEventListener('mousemove', handleWindowDragMove)
-  document.removeEventListener('mouseup', handleWindowDragEnd)
-  document.removeEventListener('touchmove', handleWindowDragMove)
-  document.removeEventListener('touchend', handleWindowDragEnd)
-  document.removeEventListener('mousemove', handleResizeMove)
-  document.removeEventListener('mouseup', handleResizeEnd)
-  document.removeEventListener('touchmove', handleResizeMove)
-  document.removeEventListener('touchend', handleResizeEnd)
+  document.removeEventListener('pointermove', handleDragMove)
+  document.removeEventListener('pointerup', handleDragEnd)
+  document.removeEventListener('pointercancel', handleDragEnd)
+  document.removeEventListener('pointermove', handleWindowDragMove)
+  document.removeEventListener('pointerup', handleWindowDragEnd)
+  document.removeEventListener('pointercancel', handleWindowDragEnd)
+  document.removeEventListener('pointermove', handleResizeMove)
+  document.removeEventListener('pointerup', handleResizeEnd)
+  document.removeEventListener('pointercancel', handleResizeEnd)
   if (copyTimer.value) {
     window.clearTimeout(copyTimer.value)
   }
@@ -771,14 +788,14 @@ onBeforeUnmount(() => {
       height: windowHeight + 'px',
       transition: (loaded && isInitialTransitionActive) ? 'opacity 350ms cubic-bezier(0.16, 1, 0.3, 1), transform 350ms cubic-bezier(0.16, 1, 0.3, 1)' : 'border-color 300ms ease, box-shadow 300ms ease'
     }"
-    @mousedown="emit('focus')"
-    @touchstart="emit('focus')"
+    @pointerdown="emit('focus')"
+    @dragstart.prevent
   >
     <!-- Window Title Bar -->
     <div
       class="h-9 bg-neutral-50 border-b border-neutral-100 flex items-center justify-between px-3 cursor-move select-none flex-shrink-0"
-      @mousedown="handleWindowDragStart"
-      @touchstart="handleWindowDragStart"
+      @pointerdown="handleWindowDragStart"
+      @dragstart.prevent
     >
       <div class="flex items-center gap-1.5 font-medium text-xs text-neutral-700 min-w-0 flex-1">
         <span style="display: inline-block; font-size: 12px; transform: scale(0.9); transform-origin: left center; white-space: nowrap;" class="truncate">
@@ -787,7 +804,7 @@ onBeforeUnmount(() => {
       </div>
 
       <!-- Controls inside title bar -->
-      <div class="flex items-center gap-1 flex-shrink-0" @mousedown.stop="emit('focus')" @touchstart.stop="emit('focus')">
+      <div class="flex items-center gap-1 flex-shrink-0" @pointerdown.stop="emit('focus')">
         <!-- Zoom Out -->
         <button
           type="button"
@@ -887,8 +904,8 @@ onBeforeUnmount(() => {
           'transition-transform duration-200': !isDragging
         }"
         :style="{ transform: `translate(${offsetX}px, ${offsetY}px) scale(${scale})` }"
-        @mousedown="handleDragStart"
-        @touchstart="handleDragStart"
+        @pointerdown="handleDragStart"
+        @dragstart.prevent
         @click.stop
       >
         <!-- Render Image -->
@@ -900,6 +917,7 @@ onBeforeUnmount(() => {
           class="w-full h-full object-contain select-none shadow-lg rounded-lg"
           @load="handleImageLoad"
           @error="handleImageError"
+          @dragstart.prevent
         />
 
         <!-- Render Mermaid -->
@@ -946,8 +964,7 @@ onBeforeUnmount(() => {
             ref="mathContainer"
             class="w-full text-center overflow-x-auto text-neutral-800"
             :class="{ 'opacity-0': rendering }"
-            @mousedown.stop
-            @touchstart.stop
+            @pointerdown.stop
           />
         </div>
 
@@ -956,8 +973,7 @@ onBeforeUnmount(() => {
           v-else-if="type === 'table'"
           class="relative bg-white rounded-xl shadow-sm overflow-auto w-full h-full p-6 markdown-body"
           style="cursor: default;"
-          @mousedown.stop
-          @touchstart.stop
+          @pointerdown.stop
         >
           <!-- 简洁加载动画 -->
           <div
@@ -982,8 +998,7 @@ onBeforeUnmount(() => {
     <!-- Resize Handle -->
     <div
       class="absolute bottom-0 right-0 w-5 h-5 cursor-se-resize flex items-end justify-end p-0.5 z-[130] group/resize"
-      @mousedown="handleResizeStart"
-      @touchstart="handleResizeStart"
+      @pointerdown="handleResizeStart"
     >
       <svg class="w-3 h-3 text-neutral-400 group-hover/resize:text-neutral-600 transition-colors" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
         <line x1="6" y1="18" x2="18" y2="6"></line>

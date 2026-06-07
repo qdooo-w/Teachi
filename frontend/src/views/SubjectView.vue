@@ -538,7 +538,7 @@ watch(
 </script>
 
 <template>
-  <div class="absolute inset-0 flex flex-col overflow-y-auto px-4 pt-5 md:px-6">
+  <div class="absolute inset-0 flex flex-col overflow-y-auto px-4 pt-16 md:px-6">
     <div v-if="currentProject" class="mx-auto flex w-full max-w-3xl flex-1 flex-col">
       <div class="mb-8">
         <h2 class="mb-2 text-3xl font-bold">{{ currentProject.projectname }}</h2>
@@ -598,8 +598,10 @@ watch(
             />
           </div>
         </div>
-        <div v-if="sessions.length === 0" class="rounded-lg bg-white py-10 text-center text-[#9ca3af] shadow-sm">
-          暂无会话，在下方输入以开始。
+        <div v-if="sessions.length === 0" class="flex items-center justify-center my-6 py-2 w-full text-center">
+          <span class="text-xs font-medium text-[#9ca3af] font-hans">
+            暂无会话，在下方输入以开始
+          </span>
         </div>
       </div>
 
