@@ -1366,7 +1366,7 @@ watch(
 <template>
   <div class="absolute inset-0">
     <!-- 消息滚动区铺满整个区域，消息可滚动到浮动 composer 之下（composer 叠在其上层） -->
-    <div ref="chatContainer" class="absolute inset-0 overflow-y-auto px-4 py-5 md:px-6" @scroll.passive="handleChatScroll" @load.capture="handleImageLoad">
+    <div ref="chatContainer" class="absolute inset-0 overflow-y-auto px-4 pt-16 pb-5 md:px-6" @scroll.passive="handleChatScroll" @load.capture="handleImageLoad">
       <!-- pb-52 预留空间，使最后一条消息可滚动至浮动 composer 上方而不被永久遮挡 -->
       <div class="mx-auto flex max-w-3xl flex-col gap-5 pb-52">
         <div v-for="message in messages" :key="message.id" class="flex w-full flex-col">

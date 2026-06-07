@@ -139,6 +139,21 @@ watch(route, (to, from) => {
 const { projects, loadProjects, resetProjects, upsertProject, removeProject } = useProjects()
 const { sidebarOpen, isMobile, handleResize, closeSidebarOnMobile } = useLayout()
 
+// ── 全局捕获滚动，用于检测任何滚动区域是否向下滚动，控制顶栏半透明背景显隐 ───
+const hasScrolled = ref(false)
+
+function handleGlobalScroll(e: Event) {
+  const target = e.target as HTMLElement
+  if (target && target.scrollTop !== undefined) {
+    hasScrolled.value = target.scrollTop > 8
+  }
+}
+
+// 路由改变时重置滚动状态
+watch(route, () => {
+  hasScrolled.value = false
+})
+
 const previewProjects = computed(() => projects.value.slice(0, PREVIEW_PROJECT_LIMIT))
 
 const subjectProject = computed(() => {
@@ -318,7 +333,7 @@ async function handleLogout(): Promise<void> {
 // ── 生命周期 ─────────────────────────────────────────────────────────────────
 function updateKeyboardOffset() {
   if (window.visualViewport) {
-    const offset = window.innerHeight - window.visualViewport.height
+    const offset = isMobile.value ? Math.max(0, window.innerHeight - window.visualViewport.height) : 0
     document.documentElement.style.setProperty('--keyboard-offset', `${offset}px`)
   }
 }
@@ -367,6 +382,7 @@ onMounted(() => {
   window.addEventListener('learnova-token-change', handleTokenChange)
   window.addEventListener('resize', handleResize)
   window.addEventListener('learnova-avatar-updated', handleAvatarUpdated)
+  window.addEventListener('scroll', handleGlobalScroll, true) // 捕获局部滚动
   if (window.visualViewport) {
     window.visualViewport.addEventListener('resize', updateKeyboardOffset)
     window.visualViewport.addEventListener('scroll', updateKeyboardOffset)
@@ -380,6 +396,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('learnova-token-change', handleTokenChange)
   window.removeEventListener('resize', handleResize)
   window.removeEventListener('learnova-avatar-updated', handleAvatarUpdated)
+  window.removeEventListener('scroll', handleGlobalScroll, true)
   if (window.visualViewport) {
     window.visualViewport.removeEventListener('resize', updateKeyboardOffset)
     window.visualViewport.removeEventListener('scroll', updateKeyboardOffset)
@@ -769,10 +786,17 @@ watch(
 
       <!-- 主内容区 -->
       <section class="relative flex min-w-0 flex-1 flex-col bg-[#f3f4f6] transition-all duration-300">
-        <header class="flex h-14 flex-shrink-0 items-center justify-between px-4">
-          <div class="flex min-w-0 items-center gap-3 overflow-hidden">
+        <header class="absolute top-0 left-0 right-0 z-30 flex h-14 flex-shrink-0 items-center justify-between px-4 pointer-events-none">
+          <div
+            class="flex min-w-0 items-center gap-3 overflow-hidden pointer-events-auto px-3 py-1 rounded-full transition-all duration-300 scale-90 origin-left"
+            :class="[
+              hasScrolled || isMobile
+                ? 'bg-white/80 backdrop-blur-md border border-[#e5e7eb] shadow-sm'
+                : 'bg-transparent border border-transparent'
+            ]"
+          >
             <button
-              class="flex-shrink-0 rounded p-2 text-[#4b5563] transition-colors hover:bg-[#e5e7eb]"
+              class="flex-shrink-0 rounded-full p-2 text-[#4b5563] transition-all duration-200 hover:bg-[#e5e7eb] active:scale-95"
               type="button"
               title="切换侧边栏"
               @click="sidebarOpen = !sidebarOpen"
@@ -781,31 +805,39 @@ watch(
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
               </svg>
             </button>
-            <div class="flex items-center gap-2 truncate text-sm font-medium text-[#4b5563]">
+            <div class="flex items-center gap-2 truncate text-sm font-medium text-[#4b5563] pr-2">
               <template v-if="$route.name === 'overview'">
-                <span class="text-[#1f2937]">科目总览</span>
+                <span class="text-[#1f2937] font-semibold">科目总览</span>
                 <span v-if="preparing" class="text-xs text-[#9ca3af]">准备中</span>
               </template>
               <template v-else-if="$route.name === 'community'">
                 <span class="text-[#1f2937] font-semibold text-sm">技能社区</span>
               </template>
               <template v-else-if="$route.name === 'subject' && subjectProject">
-                <span class="cursor-pointer text-[#9ca3af] hover:text-[#1f2937]" @click="router.push({ name: 'overview' })">科目</span>
+                <span class="cursor-pointer text-[#9ca3af] hover:text-[#1f2937] transition-colors" @click="router.push({ name: 'overview' })">科目</span>
                 <span class="text-[#9ca3af]">/</span>
-                <span class="text-[#1f2937]">{{ truncateText(subjectProject.projectname, 20) }}</span>
+                <span class="text-[#1f2937] font-semibold">{{ truncateText(subjectProject.projectname, 20) }}</span>
               </template>
               <template v-else-if="$route.name === 'chat' && chatProject && chatSession">
-                <span class="hidden md:inline cursor-pointer text-[#9ca3af] hover:text-[#1f2937]" @click="closeSidebarOnMobile(); router.push({ name: 'subject', params: { pid: $route.params.pid } })">{{ truncateText(chatProject.projectname, 8) }}</span>
+                <span class="hidden md:inline cursor-pointer text-[#9ca3af] hover:text-[#1f2937] transition-colors" @click="closeSidebarOnMobile(); router.push({ name: 'subject', params: { pid: $route.params.pid } })">{{ truncateText(chatProject.projectname, 8) }}</span>
                 <span class="hidden md:inline text-[#9ca3af]">/</span>
-                <span class="text-[#1f2937]">{{ truncateText(chatSession.sessionname, 25) }}</span>
+                <span class="text-[#1f2937] font-semibold">{{ truncateText(chatSession.sessionname, 25) }}</span>
               </template>
             </div>
           </div>
 
-          <div class="flex items-center gap-1">
+          <div
+            class="flex items-center gap-1.5 pointer-events-auto p-1 rounded-full transition-all duration-300 scale-90 origin-right"
+            :class="[
+              hasScrolled || isMobile
+                ? 'bg-white/80 backdrop-blur-md border border-[#e5e7eb] shadow-sm'
+                : 'bg-transparent border border-transparent'
+            ]"
+          >
+            <!-- 新建对话：仅保留一个加号 -->
             <button
               v-if="$route.name === 'chat'"
-              class="flex h-9 items-center gap-1 rounded border border-transparent px-3 text-sm text-[#4b5563] transition-colors hover:border-[#d1d5db] hover:bg-[#e5e7eb]"
+              class="flex h-8 w-8 items-center justify-center rounded-full border border-[#d1d5db] bg-white text-[#4b5563] transition-all duration-200 hover:bg-[#e5e7eb] active:scale-95"
               type="button"
               title="新建对话"
               @click="router.push({ name: 'subject', params: { pid: $route.params.pid } })"
@@ -813,45 +845,19 @@ watch(
               <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
               </svg>
-              <span class="hidden md:inline">新建对话</span>
             </button>
-            <span class="hidden md:flex h-9 items-center gap-1 px-2 text-sm text-[#9ca3af]">
-              Skills管理
-              <svg class="h-3 w-3" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-              </svg>
-            </span>
+            
+            <!-- Skills 管理：整合为统一的单一按钮 -->
             <button
-              class="flex h-9 w-9 items-center justify-center rounded border border-transparent text-[#9ca3af] cursor-not-allowed"
+              class="flex h-8 items-center gap-1 rounded-full border border-[#d1d5db] bg-white px-3 text-xs font-semibold text-[#4b5563] transition-all duration-200 hover:bg-[#e5e7eb] active:scale-95"
               type="button"
-              title="技能仓库（暂不可用）"
-              disabled
+              title="管理您的技能"
+              @click="projectSkillSpace ? (showProjectSkillManager = true) : (showUserSkillManager = true)"
             >
-              <svg class="h-4.5 w-4.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" stroke-linecap="round" stroke-linejoin="round"/>
-                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" stroke-linecap="round" stroke-linejoin="round"/>
+              <svg class="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
               </svg>
-            </button>
-            <button
-              class="flex h-9 w-9 items-center justify-center rounded border border-transparent text-[#4b5563] transition-colors hover:border-[#d1d5db] hover:bg-[#e5e7eb]"
-              type="button"
-              title="我的技能"
-              @click="showUserSkillManager = true"
-            >
-              <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0zM12 14a7 7 0 0 0-7 7h14a7 7 0 0 0-7-7z" />
-              </svg>
-            </button>
-            <button
-              v-if="projectSkillSpace"
-              class="flex h-9 w-9 items-center justify-center rounded border border-transparent text-[#4b5563] transition-colors hover:border-[#d1d5db] hover:bg-[#e5e7eb]"
-              type="button"
-              title="项目技能"
-              @click="showProjectSkillManager = true"
-            >
-              <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
-              </svg>
+              <span>Skills</span>
             </button>
           </div>
         </header>

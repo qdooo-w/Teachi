@@ -53,8 +53,8 @@ function recalcPadding(): void {
   for (const child of contentBox.value.children) {
     childH += (child as HTMLElement).offsetHeight
   }
-  // 外层容器有 py-5（20px top + 20px bottom）和 pb-28（112px bottom）
-  const verticalPad = 20 + 20 + 112
+  // 外层容器有 pt-16（64px top）、pb-5（20px bottom）和 pb-28（112px bottom）
+  const verticalPad = 64 + 20 + 112
   contentPaddingTop.value = Math.max(0, Math.floor((areaH - verticalPad - childH) / 2))
 }
 
@@ -371,7 +371,7 @@ onMounted(async () => {
 <template>
   <div class="absolute inset-0">
     <!-- 可滚动内容区，底部留出面板高度的空间 -->
-    <div ref="scrollArea" class="absolute inset-0 overflow-y-auto px-4 py-5 md:px-6">
+    <div ref="scrollArea" class="absolute inset-0 overflow-y-auto px-4 pt-16 pb-5 md:px-6">
       <div
         ref="contentBox"
         class="mx-auto flex min-h-full w-full max-w-3xl flex-col pb-28"
@@ -455,8 +455,10 @@ onMounted(async () => {
                   </div>
                 </div>
               </div>
-              <div v-else class="rounded-lg bg-white px-6 py-10 text-center text-sm text-[#6b7280] shadow-sm">
-                还没有科目，在下方输入以新建。
+              <div v-else class="flex items-center justify-center my-6 py-2 w-full text-center">
+                <span class="text-xs font-medium text-[#9ca3af] font-hans">
+                  还没有科目，在下方输入以新建
+                </span>
               </div>
             </div>
 
