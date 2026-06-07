@@ -948,6 +948,10 @@ async function sendMessage(): Promise<void> {
 
   draft.value = ''
   selectedSkills.value = []
+  if (PLACEHOLDERS && PLACEHOLDERS.length > 0) {
+    const randomIndex = Math.floor(Math.random() * PLACEHOLDERS.length)
+    chosenPlaceholder.value = PLACEHOLDERS[randomIndex]
+  }
   pendingAttachments.value = []
   errorMessage.value = ''
   toolStatus.value = ''
@@ -1316,10 +1320,6 @@ async function validateAndLoad(): Promise<void> {
 }
 
 onMounted(() => {
-  if (PLACEHOLDERS && PLACEHOLDERS.length > 0) {
-    const randomIndex = Math.floor(Math.random() * PLACEHOLDERS.length)
-    chosenPlaceholder.value = PLACEHOLDERS[randomIndex]
-  }
   void loadEnterMode()
   void validateAndLoad()
   nextTick(autosizeComposer)
@@ -1361,14 +1361,25 @@ watch(
   },
   { immediate: true },
 )
+
+watch(
+  () => currentSession.value?.sid,
+  (newSid) => {
+    if (newSid && PLACEHOLDERS && PLACEHOLDERS.length > 0) {
+      const randomIndex = Math.floor(Math.random() * PLACEHOLDERS.length)
+      chosenPlaceholder.value = PLACEHOLDERS[randomIndex]
+    }
+  },
+  { immediate: true },
+)
 </script>
 
 <template>
   <div class="absolute inset-0">
     <!-- 消息滚动区铺满整个区域，消息可滚动到浮动 composer 之下（composer 叠在其上层） -->
     <div ref="chatContainer" class="absolute inset-0 overflow-y-auto px-4 pt-16 pb-5 md:px-6" @scroll.passive="handleChatScroll" @load.capture="handleImageLoad">
-      <!-- pb-52 预留空间，使最后一条消息可滚动至浮动 composer 上方而不被永久遮挡 -->
-      <div class="mx-auto flex max-w-3xl flex-col gap-5 pb-52">
+      <!-- pb-32 预留空间，使最后一条消息可滚动至浮动 composer 上方而不被永久遮挡 -->
+      <div class="mx-auto flex max-w-3xl flex-col gap-5 pb-32">
         <div v-for="message in messages" :key="message.id" class="flex w-full flex-col">
           <div v-if="message.role === 'user'" class="group flex justify-end">
             <div class="flex max-w-[85%] flex-col items-end gap-1.5">
@@ -1406,37 +1417,37 @@ watch(
               <div class="flex items-end gap-1">
                 <button
                   v-if="message.anchor_msg_id && !streaming"
-                  class="flex h-6 w-6 items-center justify-center rounded text-[#9ca3af] opacity-0 transition-opacity hover:bg-[#e5e7eb] hover:text-[#4b5563] group-hover:opacity-100"
+                  class="flex h-7 w-7 items-center justify-center rounded-lg text-[#6b7280] opacity-0 transition-all duration-200 hover:bg-[#e5e7eb] hover:text-[#1f2937] group-hover:opacity-100 active:scale-95"
                   title="编辑后重放"
                   type="button"
                   @click="openEditPromptDialog(message)"
                 >
-                  <svg class="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
+                  <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
                     <path d="M12 20h9" />
                     <path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
                   </svg>
                 </button>
                 <button
                   v-if="message.anchor_msg_id && !streaming"
-                  class="flex h-6 w-6 items-center justify-center rounded text-[#9ca3af] opacity-0 transition-opacity hover:bg-[#fee2e2] hover:text-[#b91c1c] group-hover:opacity-100"
+                  class="flex h-7 w-7 items-center justify-center rounded-lg text-[#6b7280] opacity-0 transition-all duration-200 hover:bg-[#fee2e2] hover:text-[#b91c1c] group-hover:opacity-100 active:scale-95"
                   title="删除此回合"
                   type="button"
                   @click="openDeleteTurnDialog(message)"
                 >
-                  <svg class="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
+                  <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
                     <path d="M3 6h18" />
                     <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
                     <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
                   </svg>
                 </button>
-                <div class="rounded-3xl bg-[#e5e7eb] px-4 py-2 text-[15px] leading-relaxed text-[#1f2937]">
+                <div class="rounded-3xl bg-white px-4 py-2 text-[15px] leading-relaxed text-[#1f2937]">
                   <p class="whitespace-pre-wrap break-words">{{ message.content }}</p>
                 </div>
               </div>
             </div>
           </div>
           <div v-else class="group flex w-full min-w-0 flex-col items-start">
-            <div class="rounded-3xl bg-white px-4 py-3 text-[15px] leading-relaxed text-[#1f2937] w-full max-w-full overflow-hidden">
+            <div class="bg-[#f3f4f6] px-4 py-3 text-[15px] leading-relaxed text-[#1f2937] w-full max-w-full overflow-hidden">
               <MessageContent
                 v-if="message.content"
                 :content="message.content"
@@ -1455,38 +1466,38 @@ watch(
             </div>
             <div v-if="message.content && !message.pending" class="ml-2 mt-1 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
               <button
-                class="flex h-6 w-6 items-center justify-center rounded text-[#9ca3af] hover:bg-[#e5e7eb] hover:text-[#4b5563]"
+                class="flex h-7 w-7 items-center justify-center rounded-lg text-[#6b7280] transition-all duration-200 hover:bg-[#e5e7eb] hover:text-[#1f2937] active:scale-95"
                 :title="copiedId === message.id ? '已复制' : '复制'"
                 type="button"
                 @click="copyMessage(message.id, message.content)"
               >
-                <svg v-if="copiedId !== message.id" class="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg v-if="copiedId !== message.id" class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v2m-6 12h8a2 2 0 0 1 2-2v-8a2 2 0 0 1-2-2h-8a2 2 0 0 1-2 2v8a2 2 0 0 1 2 2z" />
                 </svg>
-                <svg v-else class="h-3.5 w-3.5 text-[#1f2937]" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg v-else class="h-4 w-4 text-[#1f2937]" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
                 </svg>
               </button>
               <button
-                class="flex h-6 w-6 items-center justify-center rounded text-[#9ca3af] hover:bg-[#e5e7eb] hover:text-[#4b5563] disabled:cursor-not-allowed disabled:opacity-40"
+                class="flex h-7 w-7 items-center justify-center rounded-lg text-[#6b7280] transition-all duration-200 hover:bg-[#e5e7eb] hover:text-[#1f2937] disabled:cursor-not-allowed disabled:opacity-40 active:scale-95"
                 title="重新生成"
                 type="button"
                 :disabled="streaming || !message.anchor_msg_id"
                 @click="regenerateMessage(message)"
               >
-                <svg class="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v6h6M20 20v-6h-6M5.07 9A7 7 0 0 1 19 11M18.93 15A7 7 0 0 1 5 13" />
                 </svg>
               </button>
               <template v-if="message.anchor_msg_id && anchorVersionCount(message.anchor_msg_id) > 1">
                 <button
-                  class="flex h-6 w-6 items-center justify-center rounded text-[#9ca3af] hover:bg-[#e5e7eb] hover:text-[#4b5563] disabled:cursor-not-allowed disabled:opacity-40"
+                  class="flex h-7 w-7 items-center justify-center rounded-lg text-[#6b7280] transition-all duration-200 hover:bg-[#e5e7eb] hover:text-[#1f2937] disabled:cursor-not-allowed disabled:opacity-40 active:scale-95"
                   title="上一版本"
                   type="button"
                   :disabled="streaming"
                   @click="switchVersion(message.anchor_msg_id, -1)"
                 >
-                  <svg class="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
                   </svg>
                 </button>
@@ -1494,13 +1505,13 @@ watch(
                   {{ anchorDisplayedPos(message.anchor_msg_id) }}/{{ anchorVersionCount(message.anchor_msg_id) }}
                 </span>
                 <button
-                  class="flex h-6 w-6 items-center justify-center rounded text-[#9ca3af] hover:bg-[#e5e7eb] hover:text-[#4b5563] disabled:cursor-not-allowed disabled:opacity-40"
+                  class="flex h-7 w-7 items-center justify-center rounded-lg text-[#6b7280] transition-all duration-200 hover:bg-[#e5e7eb] hover:text-[#1f2937] disabled:cursor-not-allowed disabled:opacity-40 active:scale-95"
                   title="下一版本"
                   type="button"
                   :disabled="streaming"
                   @click="switchVersion(message.anchor_msg_id, 1)"
                 >
-                  <svg class="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
                   </svg>
                 </button>
@@ -1590,6 +1601,7 @@ watch(
           <textarea
             ref="composerTextarea"
             v-model="draft"
+            :key="currentSession?.sid || 'default'"
             class="composer-textarea w-full resize-none bg-transparent text-sm leading-relaxed outline-none placeholder:text-[#9ca3af] font-hans"
             :disabled="streaming || preparing"
             :placeholder="resolvedPlaceholder"
