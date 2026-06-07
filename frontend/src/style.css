@@ -270,6 +270,8 @@ input {
 .markdown-body .mermaid-block svg {
   max-width: 100%;
   height: auto;
+  display: block;
+  margin: 0 auto;
 }
 .markdown-body .mermaid-error {
   margin: 0.75em 0;

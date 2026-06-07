@@ -484,7 +484,7 @@ watch(
     <section v-else-if="!isAuthenticated && route.name !== 'set-password' && route.name !== 'register-confirm'" class="flex h-full items-center justify-center px-4">
       <div class="w-full max-w-[420px] rounded-2xl border border-[#d1d5db]/80 bg-white p-6 shadow-md">
         <div class="mb-6">
-          <svg viewBox="0 0 1323.48 135.75" class="h-6 w-auto text-[#1f2937]" fill="currentColor" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <svg viewBox="0 0 1323.48 135.75" class="mx-auto h-6 w-auto text-[#1f2937]" fill="currentColor" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
             <g>
               <polygon points="1279.68 40.08 1232.46 87.28 1185.25 135.43 1131.31 135.41 1193.93 72.76 1267.42 .83 1323.47 .8 1323.48 135.55 1279.92 135.6 1279.68 40.08"/>
               <polygon points="451.56 40.12 361.23 135.37 306.24 135.42 368.3 71.12 435.62 .77 493.41 .76 493.42 135.55 451.82 135.64 451.56 40.12"/>
@@ -630,13 +630,13 @@ watch(
         ]"
       >
         <div class="flex h-full w-56 flex-shrink-0 flex-col px-2.5 py-4">
-          <div class="mb-5 mt-2 flex items-center justify-start gap-2 pl-4 pr-2">
+          <div class="mb-5 mt-2 flex items-center justify-center gap-2 px-2">
             <button
               class="flex items-center gap-1 text-left"
               type="button"
               @click="closeSidebarOnMobile(); router.push({ name: 'overview' })"
             >
-              <svg viewBox="0 0 1323.48 135.75" class="h-4 w-auto text-[#1f2937] transition-colors duration-200" fill="currentColor" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+              <svg viewBox="0 0 1323.48 135.75" class="mx-auto h-4 w-auto text-[#1f2937] transition-colors duration-200" fill="currentColor" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
                 <g>
                   <polygon points="1279.68 40.08 1232.46 87.28 1185.25 135.43 1131.31 135.41 1193.93 72.76 1267.42 .83 1323.47 .8 1323.48 135.55 1279.92 135.6 1279.68 40.08"/>
                   <polygon points="451.56 40.12 361.23 135.37 306.24 135.42 368.3 71.12 435.62 .77 493.41 .76 493.42 135.55 451.82 135.64 451.56 40.12"/>

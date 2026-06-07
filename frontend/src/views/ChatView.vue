@@ -84,6 +84,9 @@ const chatContainer = ref<HTMLElement | null>(null)
 const currentAbort = ref<AbortController | null>(null)
 const stickToBottom = ref(true)
 const composerTextarea = ref<HTMLTextAreaElement | null>(null)
+const composerFooter = ref<HTMLElement | null>(null)
+const composerHeight = ref(128)
+let footerResizeObserver: ResizeObserver | null = null
 const copiedId = ref<string | null>(null)
 let copyResetTimer: number | null = null
 // 当前正在生成的那条 user 输入（不含 skill 前缀），用于 stop 后回填到输入框
@@ -1034,8 +1037,13 @@ async function stopStreaming(): Promise<void> {
   } finally {
     currentAbort.value?.abort()
     // 把刚才发出去的内容回填到输入框，便于用户继续修改后再发送
-    if (restored && !draft.value.trim()) {
-      draft.value = restored
+    if (restored) {
+      const trimmedDraft = draft.value.trim()
+      if (trimmedDraft) {
+        draft.value = trimmedDraft + '\n' + restored
+      } else {
+        draft.value = restored
+      }
       await nextTick()
       autosizeComposer()
       composerTextarea.value?.focus()
@@ -1326,6 +1334,14 @@ onMounted(() => {
   if (window.visualViewport) {
     window.visualViewport.addEventListener('resize', handleVisualViewportResize)
   }
+  if (composerFooter.value) {
+    footerResizeObserver = new ResizeObserver(() => {
+      if (composerFooter.value) {
+        composerHeight.value = composerFooter.value.offsetHeight
+      }
+    })
+    footerResizeObserver.observe(composerFooter.value)
+  }
 })
 
 onBeforeUnmount(() => {
@@ -1340,6 +1356,10 @@ onBeforeUnmount(() => {
   if (window.visualViewport) {
     window.visualViewport.removeEventListener('resize', handleVisualViewportResize)
   }
+  if (footerResizeObserver) {
+    footerResizeObserver.disconnect()
+    footerResizeObserver = null
+  }
 })
 
 onBeforeRouteLeave(() => {
@@ -1351,6 +1371,11 @@ onBeforeRouteUpdate(() => {
 })
 
 watch(draft, () => { nextTick(autosizeComposer) })
+watch(composerHeight, () => {
+  if (stickToBottom.value) {
+    scrollToBottom()
+  }
+})
 
 watch(
   () => currentSession.value?.sessionname,
@@ -1378,8 +1403,8 @@ watch(
   <div class="absolute inset-0">
     <!-- 消息滚动区铺满整个区域，消息可滚动到浮动 composer 之下（composer 叠在其上层） -->
     <div ref="chatContainer" class="absolute inset-0 overflow-y-auto px-4 pt-16 pb-5 md:px-6" @scroll.passive="handleChatScroll" @load.capture="handleImageLoad">
-      <!-- pb-32 预留空间，使最后一条消息可滚动至浮动 composer 上方而不被永久遮挡 -->
-      <div class="mx-auto flex max-w-3xl flex-col gap-5 pb-32">
+      <!-- 动态预留空间，使最后一条消息可滚动至浮动 composer 上方而不被永久遮挡 -->
+      <div class="mx-auto flex max-w-3xl flex-col gap-5" :style="{ paddingBottom: `${composerHeight}px` }">
         <div v-for="message in messages" :key="message.id" class="flex w-full flex-col">
           <div v-if="message.role === 'user'" class="group flex justify-end">
             <div class="flex max-w-[85%] flex-col items-end gap-1.5">
@@ -1524,7 +1549,7 @@ watch(
 
     <!-- 浮动 composer：绝对贴底并叠在消息层最上方（z-20）；外层透明且不拦截事件，
          消息可在其下方/周围透出，仅内部 composer 区域接收点击 -->
-    <footer class="pointer-events-none absolute inset-x-0 bottom-0 z-20 px-4 pb-4 pt-2 md:px-6 font-hans">
+    <footer ref="composerFooter" class="pointer-events-none absolute inset-x-0 bottom-0 z-20 px-4 pb-4 pt-2 md:px-6 font-hans">
       <div class="pointer-events-auto mx-auto max-w-3xl">
         <p v-if="toolStatus" class="mb-2 text-xs text-[#4b5563]">{{ toolStatus }}</p>
 
@@ -1603,7 +1628,7 @@ watch(
             v-model="draft"
             :key="currentSession?.sid || 'default'"
             class="composer-textarea w-full resize-none bg-transparent text-sm leading-relaxed outline-none placeholder:text-[#9ca3af] font-hans"
-            :disabled="streaming || preparing"
+            :disabled="preparing"
             :placeholder="resolvedPlaceholder"
             rows="2"
             @keydown="handleComposerKeydown"
@@ -1617,7 +1642,7 @@ watch(
               <!-- 上传附件按钮（现在排第一） -->
               <button
                 class="flex h-7 w-7 items-center justify-center rounded-full text-[#6b7280] transition hover:bg-[#f3f4f6] hover:text-[#1f2937] disabled:cursor-not-allowed disabled:opacity-50"
-                :disabled="streaming || preparing"
+                :disabled="preparing"
                 title="上传附件（图片/文本/PDF，支持多选）"
                 type="button"
                 @click="triggerFileSelect"
@@ -1641,7 +1666,7 @@ watch(
               <button
                 class="flex h-7 w-7 items-center justify-center rounded-full text-[#6b7280] transition hover:bg-[#f3f4f6] hover:text-[#1f2937] disabled:cursor-not-allowed disabled:opacity-50"
                 :class="{ 'bg-neutral-100 text-[#1f2937]': showSkillPicker }"
-                :disabled="streaming || preparing"
+                :disabled="preparing"
                 title="添加技能"
                 type="button"
                 @click="toggleSkillPicker"
@@ -1655,7 +1680,7 @@ watch(
               <button
                 class="flex h-7 w-7 items-center justify-center rounded-full text-[#6b7280] transition hover:bg-[#f3f4f6] hover:text-[#1f2937] disabled:cursor-not-allowed disabled:opacity-50 relative cursor-pointer"
                 :class="{ 'bg-neutral-100 text-[#1f2937]': showWindowManager }"
-                :disabled="streaming || preparing"
+                :disabled="preparing"
                 title="窗口管理"
                 type="button"
                 @click="toggleWindowManager"
