@@ -123,7 +123,6 @@ const keyword = ref('')
 const skills = ref<CommunitySkillSummary[]>([])
 const total = ref(0)
 const loading = ref(false)
-const errorMsg = ref('')
 // ── 排序/筛选状态 ──────────────────────────────────────────────────────
 const sort = ref<CommunitySort>('popular')
 const offset = ref(0)
@@ -174,14 +173,9 @@ function formatDate(ts: number): string {
   return d.toLocaleDateString('zh-CN')
 }
 
-function formatFullDate(ts: number): string {
-  return new Date(ts * 1000).toLocaleString('zh-CN')
-}
-
 // ── 加载技能列表 ──────────────────────────────────────────────────────────
 async function loadSkills(): Promise<void> {
   loading.value = true
-  errorMsg.value = ''
   try {
     const kw = keyword.value.trim()
     const r = await listCommunitySkills({
@@ -194,7 +188,7 @@ async function loadSkills(): Promise<void> {
     skills.value = r.skills
     total.value = r.total
   } catch (e) {
-    errorMsg.value = getErrorMessage(e)
+    showError('加载技能列表失败', getErrorMessage(e))
   } finally {
     loading.value = false
   }
@@ -700,14 +694,6 @@ onBeforeUnmount(() => {
 
         <!-- 内容区 -->
         <div class="min-h-0 flex-1 overflow-y-auto px-5 pt-0 pb-4">
-          <!-- 错误提示 -->
-          <p
-            v-if="errorMsg"
-            class="mb-4 rounded-lg border border-[#efb3a7] bg-[#fff7ed] px-3 py-2 text-sm text-[#9a3412]"
-          >
-            {{ errorMsg }}
-          </p>
-
           <!-- 加载态 -->
           <div v-if="loading" class="py-16 text-center text-sm text-[#9ca3af]">
             加载中...

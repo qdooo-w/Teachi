@@ -2,14 +2,15 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getErrorMessage, setPassword, setStoredToken } from '../api'
+import { useNotification } from '../composables/useNotification'
 
 const route = useRoute()
 const router = useRouter()
 const tempToken = ref<string>('')
 const isReset = ref(false)
 const submitting = ref(false)
-const errorMessage = ref('')
 const successMessage = ref('')
+const { showError } = useNotification()
 
 const form = reactive({
   username: '',
@@ -33,30 +34,29 @@ onMounted(() => {
   isReset.value = route.query.is_reset === 'true'
 
   if (!tempToken.value) {
-    errorMessage.value = '未检测到临时令牌，请通过邮件中的链接访问此页面。'
+    showError('未检测到临时令牌，请通过邮件中的链接访问此页面。')
   }
 })
 
 async function handleSubmit(): Promise<void> {
-  errorMessage.value = ''
   if (!tempToken.value) {
-    errorMessage.value = '未检测到临时令牌，请通过邮件中的链接访问此页面。'
+    showError('未检测到临时令牌，请通过邮件中的链接访问此页面。')
     return
   }
   if (!isReset.value && !form.username.trim()) {
-    errorMessage.value = '请输入用户名。'
+    showError('请输入用户名。')
     return
   }
   if (!form.password.trim()) {
-    errorMessage.value = '请输入密码。'
+    showError('请输入密码。')
     return
   }
   if (form.password !== form.confirmPassword) {
-    errorMessage.value = '两次输入的密码不一致。'
+    showError('两次输入的密码不一致。')
     return
   }
   if (form.password.length < 8) {
-    errorMessage.value = '密码长度至少为 8 位。'
+    showError('密码长度至少为 8 位。')
     return
   }
 
@@ -75,7 +75,7 @@ async function handleSubmit(): Promise<void> {
       void router.replace({ name: 'overview' })
     }, 800)
   } catch (error) {
-    errorMessage.value = getErrorMessage(error)
+    showError('设置密码失败', getErrorMessage(error))
   } finally {
     submitting.value = false
   }
@@ -109,10 +109,6 @@ async function handleSubmit(): Promise<void> {
         </div>
 
         <div class="flex flex-col justify-center rounded-2xl bg-white p-10 sm:p-12 lg:p-14">
-          <div v-if="errorMessage" class="mb-4 rounded-xl border border-[#efb3a7] bg-[#fff7ed] px-4 py-3 text-sm text-[#9a3412]">
-            {{ errorMessage }}
-          </div>
-
           <div v-if="successMessage" class="mb-4 rounded-xl border border-emerald-100 bg-emerald-50/50 px-4 py-3 text-sm text-emerald-700">
             {{ successMessage }}
           </div>

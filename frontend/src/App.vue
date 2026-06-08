@@ -59,6 +59,15 @@ const {
 watch(errorMessage, (newVal) => {
   if (newVal) {
     showGlobalError(newVal)
+    errorMessage.value = ''
+  }
+})
+
+// 将登录/注册表单的内联 authError 转发到全局通知
+watch(authError, (newVal) => {
+  if (newVal) {
+    showGlobalError(newVal)
+    authError.value = ''
   }
 })
 
@@ -514,7 +523,7 @@ watch(
                 'h-9 rounded-lg px-3 text-sm font-medium transition-all duration-200 active:scale-95',
                 authMode === 'login' ? 'bg-white text-[#111827] shadow-sm' : 'text-[#6b7280] hover:text-[#111827]',
               ]"
-              @click="authMode = 'login'; authError = ''"
+              @click="authMode = 'login'; clearAllNotifications()"
             >
               登录
             </button>
@@ -524,7 +533,7 @@ watch(
                 'h-9 rounded-lg px-3 text-sm font-medium transition-all duration-200 active:scale-95',
                 authMode === 'register' ? 'bg-white text-[#111827] shadow-sm' : 'text-[#6b7280] hover:text-[#111827]',
               ]"
-              @click="authMode = 'register'; authError = ''"
+              @click="authMode = 'register'; clearAllNotifications()"
             >
               注册
             </button>
@@ -547,7 +556,7 @@ watch(
                 <button
                   type="button"
                   class="text-xs text-[#4b5563] hover:text-[#1f2937] hover:underline bg-transparent border-none p-0 cursor-pointer"
-                  @click="authMode = 'forgot'; authError = ''"
+                  @click="authMode = 'forgot'; clearAllNotifications()"
                 >
                   忘记密码？
                 </button>
@@ -587,10 +596,6 @@ watch(
             </label>
           </template>
 
-          <p v-if="authError" class="rounded-xl border border-[#efb3a7] bg-[#fff7ed] px-3 py-2 text-sm text-[#9a3412]">
-            {{ authError }}
-          </p>
-
           <button
             class="h-11 w-full rounded-xl border border-transparent bg-[#1f2937] px-4 text-sm font-semibold text-white transition-all duration-200 hover:bg-[#111827] active:scale-95 disabled:cursor-not-allowed disabled:border-[#d1d5db] disabled:bg-white disabled:text-[#9ca3af] disabled:active:scale-100"
             :disabled="authSubmitting"
@@ -603,7 +608,7 @@ watch(
             <button
               type="button"
               class="text-sm text-[#6b7280] hover:text-[#1f2937] bg-transparent border-none cursor-pointer active:scale-95 transition-all duration-200"
-              @click="authMode = 'login'; authError = ''"
+              @click="authMode = 'login'; clearAllNotifications()"
             >
               &larr; 返回登录
             </button>
