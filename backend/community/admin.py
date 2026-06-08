@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from backend.auth import get_current_user
+from backend.community.utils import resolve_db as _resolve_db
 from backend.db import DatabaseFacade
 from backend.db_dep import get_db
 
@@ -15,14 +16,6 @@ logger = logging.getLogger(__name__)
 router_owner = APIRouter(prefix="/owner", tags=["owner"])
 router_admin = APIRouter(prefix="/admin", tags=["admin"])
 
-def _resolve_db(db_param: Any) -> DatabaseFacade:
-    """解析并返回数据库门面实例"""
-    if isinstance(db_param, DatabaseFacade):
-        return db_param
-    global_db = globals().get("db")
-    if isinstance(global_db, DatabaseFacade):
-        return global_db
-    raise RuntimeError("DatabaseFacade not initialized in admin module")
 
 class ReviewActionRequest(BaseModel):
     """审核决策请求负载模型，包含审核备注信息"""
@@ -242,3 +235,34 @@ def admin_reject(
         note=payload.note
     )
     return log
+
+
+@router_admin.get("/community/reports")
+def list_reports(
+    status_filter: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
+):
+    """列出待处理的评论举报（仅系统管理员）。"""
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail={"code": "FORBIDDEN", "message": "System admin only"})
+
+    db = _resolve_db(db)
+    sql = """
+        SELECT r.*, c.content as comment_content, u.username as reporter_name
+        FROM community_comment_reports r
+        JOIN community_skill_comments c ON r.comment_id = c.id
+        JOIN users u ON r.reporter_uuid = u.uuid
+    """
+    params: list = []
+    if status_filter:
+        sql += " WHERE r.status = ?"
+        params.append(status_filter)
+    sql += " ORDER BY r.created_at DESC LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
+
+    with db.get_connection() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return [dict(r) for r in rows]

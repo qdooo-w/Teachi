@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import shutil
 import uuid
 import json
 from pathlib import Path
@@ -12,10 +11,15 @@ from pydantic import BaseModel, Field
 
 from backend.auth import get_current_user, verify_nonce
 from backend.config import (
-    BASE_DIR,
     PAGE_DEFAULT_LIMIT,
     PAGE_MAX_LIMIT,
     SORT_DEFAULT,
+)
+from backend.community.utils import (
+    resolve_db as _resolve_db,
+    archive_root as _archive_root,
+    resolve_archive_path as _resolve_archive_path,
+    copy_skill_dir as _copy_skill_dir,
 )
 from backend.db import DatabaseFacade
 from backend.db_dep import get_db
@@ -24,14 +28,6 @@ from backend.skill_parser import validate_skill_name
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/community", tags=["community"])
-
-def _resolve_db(db_param: Any) -> DatabaseFacade:
-    if isinstance(db_param, DatabaseFacade):
-        return db_param
-    global_db = globals().get("db")
-    if isinstance(global_db, DatabaseFacade):
-        return global_db
-    raise RuntimeError("DatabaseFacade not initialized in community module")
 
 class CommunitySkillSummary(BaseModel):
     id: str
@@ -96,27 +92,6 @@ def _to_summary(record: dict) -> CommunitySkillSummary:
         size_bytes=record.get("size_bytes")
     )
 
-def _archive_root() -> Path:
-    root = (BASE_DIR / "archived_skill").resolve()
-    root.mkdir(parents=True, exist_ok=True)
-    return root
-
-def _resolve_archive_path(archive_path: str) -> Path:
-    root = _archive_root()
-    target = (BASE_DIR / archive_path).resolve()
-    if target != root and root not in target.parents:
-        raise FileError("Archived skill path is outside archived_skill directory.")
-    return target
-
-def _copy_skill_dir(src: Path, dst: Path) -> None:
-    if not src.is_dir():
-        raise FileError("Skill folder not found")
-    if dst.exists():
-        raise FileError("Target skill folder already exists")
-    try:
-        shutil.copytree(src, dst)
-    except Exception as e:
-        raise FileError(str(e)) from e
 
 def _install_target_fs(
     payload: InstallSkillRequest,
@@ -147,6 +122,18 @@ def _install_target_fs(
             return UserFile(user_uuid=user_uuid, db_facade=db_facade)
         except PermissionError:
             raise HTTPException(status_code=403, detail={"code": "FORBIDDEN", "message": "Access denied"})
+
+@router.get("/leaderboard")
+def get_community_leaderboard(
+    limit: int = Query(10, ge=1, le=50),
+    _user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
+):
+    """获取社区技能排行榜（按下载量排序）。"""
+    db = _resolve_db(db)
+    skills = db.community.list_skills(limit=limit, sort="popular")
+    return {"skills": [_to_summary(s) for s in skills]}
+
 
 @router.get("/skills", response_model=CommunitySkillListResponse)
 def list_community_skills(
@@ -236,8 +223,22 @@ def install_community_skill(
         raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "Version not found"})
 
     name = skill_record["name"]
-    library_id = str(uuid.uuid4()) if payload.target == "library" else None
-    
+
+    # 安装到仓库时，复用 version_id 作为 library_id
+    if payload.target == "library":
+        library_id = payload.version_id
+        # 检查是否已在仓库中（发布者发布时已创建，或其他用户已安装）
+        existing = db.library.get_by_id(library_id)
+        if existing:
+            if existing["user_uuid"] == user_uuid:
+                # 自己发布的技能，已在仓库中
+                raise HTTPException(status_code=409, detail={"code": "ALREADY_IN_LIBRARY", "message": "该版本已在你的仓库中"})
+            else:
+                # 其他用户已安装过相同 version_id（理论上不应发生，因为 version_id 全局唯一）
+                library_id = str(uuid.uuid4())
+    else:
+        library_id = None
+
     target_fs = _install_target_fs(payload, user_uuid, db, library_id)
 
     if payload.target == "library":
@@ -247,7 +248,7 @@ def install_community_skill(
             skill_dir = target_fs._safe_path(f"skills/{name}")
         except FileError:
             raise HTTPException(status_code=400, detail={"code": "INVALID_NAME", "message": "Invalid skill name"})
-            
+
         if skill_dir.exists():
             raise HTTPException(status_code=409, detail={"code": "CONFLICT", "message": "Skill already exists locally"})
 
@@ -257,11 +258,10 @@ def install_community_skill(
             # Fallback to old format where content is directly in archive_path
             archive_dir = _resolve_archive_path(version_record["archive_path"])
         _copy_skill_dir(archive_dir, skill_dir)
-        
+
         if payload.target == "library":
-            # Extra library sync logic
-            readme_path = skill_dir / "README.md"
-            readme_content = readme_path.read_text(encoding="utf-8") if readme_path.is_file() else ""
+            # readme_md 从社区版本记录获取
+            readme_content = version_record.get("readme_md", "")
             db.library.create(
                 user_uuid=user_uuid,
                 name=name,
@@ -271,13 +271,12 @@ def install_community_skill(
                 tags=version_record["tags"],
                 version=version_record["version"],
                 changelog=version_record["changelog"],
-                source="community",
-                community_skill_id=skill_id,
+                community_skill_id=skill_id,  # 有值表示来自社区
                 local_path=f"data/{user_uuid}/library/{library_id}",
                 size_bytes=version_record["size_bytes"],
                 skill_id=library_id
             )
-            
+
     except FileError as e:
         raise HTTPException(status_code=400, detail={"code": "FILE_ERROR", "message": str(e)})
 
@@ -414,3 +413,51 @@ def delete_comment_endpoint(
     deleted = db.community.delete_comment(comment_id, current_user["uuid"], is_admin=is_admin)
     if not deleted:
         raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "Comment not found or not authorized"})
+
+
+class AddContributorRequest(BaseModel):
+    user_uuid: str
+
+
+@router.get("/skills/{skill_id}/contributors")
+def list_contributors(
+    skill_id: str,
+    _user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
+):
+    """获取技能贡献者列表。"""
+    db = _resolve_db(db)
+    return db.community.get_contributors(skill_id)
+
+
+@router.post("/skills/{skill_id}/contributors")
+def add_contributor(
+    skill_id: str,
+    payload: AddContributorRequest,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
+):
+    """添加贡献者（仅技能管理员可操作）。"""
+    db = _resolve_db(db)
+    if not db.community.is_skill_admin(skill_id, current_user["uuid"]):
+        raise HTTPException(status_code=403, detail={"code": "FORBIDDEN", "message": "Not an admin of this skill"})
+    success = db.community.add_contributor(skill_id, payload.user_uuid)
+    if not success:
+        raise HTTPException(status_code=400, detail={"code": "BAD_REQUEST", "message": "Failed to add contributor"})
+    return {"success": True}
+
+
+@router.delete("/skills/{skill_id}/contributors/{user_uuid}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_contributor(
+    skill_id: str,
+    user_uuid: str,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
+):
+    """移除贡献者（仅技能管理员可操作）。"""
+    db = _resolve_db(db)
+    if not db.community.is_skill_admin(skill_id, current_user["uuid"]):
+        raise HTTPException(status_code=403, detail={"code": "FORBIDDEN", "message": "Not an admin of this skill"})
+    success = db.community.remove_contributor(skill_id, user_uuid)
+    if not success:
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "Contributor not found"})

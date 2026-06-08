@@ -124,6 +124,18 @@ class MessageListResponse(BaseModel):
     messages: list[MessageItem]
 
 
+@router.get("/users/search")
+def search_users(
+    q: str = Query(..., min_length=1, max_length=100),
+    limit: int = Query(10, ge=1, le=50),
+    current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
+):
+    """按用户名搜索用户。"""
+    users = db.users.search_by_username(q, limit)
+    return {"users": users}
+
+
 @router.get("/users/{user_id}/projects", response_model=ProjectListResponse)
 def list_user_projects(
     user_id: str,

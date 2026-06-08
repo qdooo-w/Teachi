@@ -37,7 +37,8 @@ from backend.skill_parser import SkillFields, SkillParseError, parse_skill_file
 router = APIRouter(tags=["transfer"])
 
 
-from backend.community import CommunitySkillSummary, _archive_root, _resolve_archive_path, _to_summary
+from backend.community.routes import CommunitySkillSummary, _to_summary
+from backend.community.utils import archive_root as _archive_root, resolve_archive_path as _resolve_archive_path
 
 
 def _directory_size(path: Path) -> int:

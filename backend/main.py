@@ -8,11 +8,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.auth import router as auth_router
 from backend.config import APP_NAME, CORS_ALLOW_ORIGINS, LOG_LEVEL, LOG_REQUESTS
 from backend.config.auth import validate_auth_config
-from backend.admin import router_admin, router_owner
-from backend.community import router as community_router
+from backend.community import router as community_router, library_router, router_owner, router_admin
 from backend.data import router as data_router
 from backend.db_dep import db, get_db
-from backend.library import router as library_router
 from backend.logging import configure_logging
 from backend.loop import router as loop_router
 from backend.settings import router as settings_router
