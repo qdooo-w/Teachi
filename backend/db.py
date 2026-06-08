@@ -114,6 +114,16 @@ class UsersFacade(_DataBase):
                 return None
         return self.get_by_uuid(user_uuid)
 
+    def search_by_username(self, query: str, limit: int = 10) -> list[dict]:
+        """按用户名模糊搜索用户。"""
+        with self._cursor() as cursor:
+            cursor.execute(
+                "SELECT uuid, username, email FROM users WHERE username LIKE ? LIMIT ?",
+                (f"%{query}%", limit),
+            )
+            rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+
 class ProjectsFacade(_DataBase):
     def create(self, projectname: str, user_uuid: str) -> dict:
         pid = str(uuid.uuid4())
@@ -1091,32 +1101,40 @@ class CommunitySkillsFacade(_DataBase):
         self,
         *,
         keyword: str | None = None,
-        tag: str | None = None,
+        tags: list[str] | None = None,
         limit: int = 20,
         offset: int = 0,
         sort: str = "popular",
     ) -> list[dict]:
-        order_clause = "ORDER BY s.created_at DESC" if sort == "newest" else "ORDER BY s.downloads DESC, s.created_at DESC"
+        if sort == "newest":
+            order_clause = "ORDER BY s.created_at DESC"
+        elif sort == "most_liked":
+            order_clause = "ORDER BY s.likes DESC, s.created_at DESC"
+        else:
+            order_clause = "ORDER BY s.downloads DESC, s.created_at DESC"
         params: list = []
         where_parts: list = ["v.status = 'APPROVED'"]
-        
+        tag_joins: list[str] = []
+
         if keyword:
             like = f"%{keyword.strip()}%"
             where_parts.append("(s.name LIKE ? OR s.display_name LIKE ? OR s.description LIKE ?)")
             params.extend([like, like, like])
-            
-        if tag:
-            where_parts.append("json_each.value = ?")
-            params.append(tag)
-            
+
+        if tags:
+            for i, t in enumerate(tags):
+                alias = f"t{i}"
+                tag_joins.append(f"JOIN json_each(v.tags) AS {alias} ON {alias}.value = ?")
+                params.append(t.strip())
+
         where_clause = f"WHERE {' AND '.join(where_parts)}"
-        tag_join = ", json_each(v.tags)" if tag else ""
-        
+        tag_join_str = " ".join(tag_joins)
+
         sql = f"""
-            SELECT s.*, v.version, v.tags, v.size_bytes 
+            SELECT s.*, v.version, v.tags, v.size_bytes
             FROM community_skills s
             JOIN community_skill_versions v ON s.id = v.skill_id
-            {tag_join}
+            {tag_join_str}
             {where_clause}
             GROUP BY s.id
             {order_clause}
@@ -1128,25 +1146,29 @@ class CommunitySkillsFacade(_DataBase):
             cursor.execute(sql, params)
             return [dict(row) for row in cursor.fetchall()]
 
-    def count_skills(self, *, keyword: str | None = None, tag: str | None = None) -> int:
+    def count_skills(self, *, keyword: str | None = None, tags: list[str] | None = None) -> int:
         params: list = []
         where_parts: list = ["v.status = 'APPROVED'"]
+        tag_joins: list[str] = []
+
         if keyword:
             like = f"%{keyword.strip()}%"
             where_parts.append("(s.name LIKE ? OR s.display_name LIKE ? OR s.description LIKE ?)")
             params.extend([like, like, like])
-        if tag:
-            where_parts.append("json_each.value = ?")
-            params.append(tag)
+        if tags:
+            for i, t in enumerate(tags):
+                alias = f"t{i}"
+                tag_joins.append(f"JOIN json_each(v.tags) AS {alias} ON {alias}.value = ?")
+                params.append(t.strip())
 
         where_clause = f"WHERE {' AND '.join(where_parts)}"
-        tag_join = ", json_each(v.tags)" if tag else ""
+        tag_join_str = " ".join(tag_joins)
 
         sql = f"""
             SELECT COUNT(DISTINCT s.id) AS total
             FROM community_skills s
             JOIN community_skill_versions v ON s.id = v.skill_id
-            {tag_join}
+            {tag_join_str}
             {where_clause}
         """
         with self._cursor() as cursor:
@@ -1218,7 +1240,13 @@ class CommunitySkillsFacade(_DataBase):
                 """,
                 (comment_id, skill_id, user_uuid, content, parent_id, depth, reply_to_uuid, now_ts, now_ts)
             )
-            cursor.execute("SELECT * FROM community_skill_comments WHERE id = ?", (comment_id,))
+            cursor.execute(
+                """SELECT c.*, u.username
+                   FROM community_skill_comments c
+                   LEFT JOIN users u ON c.user_uuid = u.uuid
+                   WHERE c.id = ?""",
+                (comment_id,),
+            )
             return self._row_to_dict(cursor.fetchone())
 
     def create_report(self, *, report_id: str, comment_id: str, reporter_uuid: str, reason: str, detail: str = "") -> dict:
@@ -1328,12 +1356,47 @@ class CommunitySkillsFacade(_DataBase):
             cursor.execute("SELECT * FROM community_skill_contributors WHERE skill_id = ?", (skill_id,))
             return [dict(row) for row in cursor.fetchall()]
 
-    def list_comments(self, skill_id: str, parent_id: str | None = None, limit: int = 50, offset: int = 0) -> list[dict]:
+    def add_contributor(self, skill_id: str, user_uuid: str) -> bool:
+        """添加贡献者。"""
+        now_ts = self._now_timestamp()
+        try:
+            with self._cursor() as cursor:
+                cursor.execute(
+                    "INSERT OR IGNORE INTO community_skill_contributors (skill_id, user_uuid, role, created_at) VALUES (?, ?, 'contributor', ?)",
+                    (skill_id, user_uuid, now_ts),
+                )
+                return cursor.rowcount > 0
+        except Exception:
+            return False
+
+    def remove_contributor(self, skill_id: str, user_uuid: str) -> bool:
+        """移除贡献者。"""
         with self._cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM community_skill_contributors WHERE skill_id = ? AND user_uuid = ?",
+                (skill_id, user_uuid),
+            )
+            return cursor.rowcount > 0
+
+    def list_comments(self, skill_id: str, parent_id: str | None = None, limit: int = 50, offset: int = 0, *, current_user_uuid: str | None = None) -> list[dict]:
+        with self._cursor() as cursor:
+            base = """SELECT c.*, u.username,
+                             ru.username AS reply_to_username,
+                             CASE WHEN cl.user_uuid IS NOT NULL THEN 1 ELSE 0 END AS liked_by_me
+                      FROM community_skill_comments c
+                      LEFT JOIN users u ON c.user_uuid = u.uuid
+                      LEFT JOIN users ru ON c.reply_to_uuid = ru.uuid
+                      LEFT JOIN community_comment_likes cl ON cl.comment_id = c.id AND cl.user_uuid = ?"""
             if parent_id:
-                cursor.execute("SELECT * FROM community_skill_comments WHERE skill_id = ? AND parent_id = ? ORDER BY created_at ASC LIMIT ? OFFSET ?", (skill_id, parent_id, limit, offset))
+                cursor.execute(
+                    base + " WHERE c.skill_id = ? AND c.parent_id = ? ORDER BY c.created_at ASC LIMIT ? OFFSET ?",
+                    (current_user_uuid, skill_id, parent_id, limit, offset),
+                )
             else:
-                cursor.execute("SELECT * FROM community_skill_comments WHERE skill_id = ? AND parent_id IS NULL ORDER BY created_at DESC LIMIT ? OFFSET ?", (skill_id, limit, offset))
+                cursor.execute(
+                    base + " WHERE c.skill_id = ? AND c.parent_id IS NULL ORDER BY c.created_at DESC LIMIT ? OFFSET ?",
+                    (current_user_uuid, skill_id, limit, offset),
+                )
             return [dict(row) for row in cursor.fetchall()]
 
     def delete_comment(self, comment_id: str, user_uuid: str, *, is_admin: bool = False) -> bool:
@@ -1363,12 +1426,12 @@ class CommunitySkillsFacade(_DataBase):
                 return True
 
 class UserLibrarySkillsFacade(_DataBase):
-    """
-    用户个人技能仓库数据访问层对象 (UserLibrarySkillsFacade)
-    
+    """用户个人技能仓库数据访问层对象。
+
     【核心数据流】
-    - 提供用户将运行层技能“收集 (Collect)”到个人仓库，以及从仓库安装技能至运行层的持久化支持。
-    - 管理个人仓库记录及其关联的社区技能 ID (`community_skill_id`)。
+    - 提供用户将运行层技能收集到个人仓库，以及从仓库安装技能至运行层的持久化支持。
+    - 管理个人仓库记录及其关联的社区技能 ID (community_skill_id)。
+    - 来源推断：community_skill_id 有值表示来自社区，为空表示来自运行层收集。
     """
 
     def create(
@@ -1382,18 +1445,29 @@ class UserLibrarySkillsFacade(_DataBase):
         tags: str,
         version: str,
         changelog: str,
-        source: str | None,
         community_skill_id: str | None,
         local_path: str,
         size_bytes: int,
         skill_id: str | None = None
     ) -> dict:
-        """
-        在用户仓库中新增一条技能记录
-        
-        【数据流】
-        - 保存本地文件路径 (`local_path`)、大小 (`size_bytes`) 及基本前言元数据。
-        - 初始版本为 1.0.0。
+        """在用户仓库中新增一条技能记录。
+
+        Args:
+            user_uuid: 用户 ID
+            name: 技能标识名
+            display_name: 显示名
+            description: 描述
+            readme_md: README 内容
+            tags: 标签 JSON 数组
+            version: 版本号
+            changelog: 变更说明
+            community_skill_id: 关联的社区技能 ID，为空表示来自运行层
+            local_path: 本地文件路径
+            size_bytes: 文件大小
+            skill_id: 可选的技能 ID，默认自动生成
+
+        Returns:
+            创建的记录
         """
         skill_id = skill_id or str(uuid.uuid4())
         now_ts = self._now_timestamp()
@@ -1401,10 +1475,10 @@ class UserLibrarySkillsFacade(_DataBase):
             cursor.execute(
                 """
                 INSERT INTO user_library_skills
-                (id, user_uuid, name, display_name, description, readme_md, tags, version, changelog, source, community_skill_id, local_path, size_bytes, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, user_uuid, name, display_name, description, readme_md, tags, version, changelog, community_skill_id, local_path, size_bytes, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (skill_id, user_uuid, name, display_name, description, readme_md, tags, version, changelog, source, community_skill_id, local_path, size_bytes, now_ts, now_ts)
+                (skill_id, user_uuid, name, display_name, description, readme_md, tags, version, changelog, community_skill_id, local_path, size_bytes, now_ts, now_ts)
             )
         record = self.get_by_id(skill_id)
         if record is None:
@@ -1993,7 +2067,6 @@ class DatabaseFacade:
                 tags TEXT NOT NULL DEFAULT '[]',
                 version TEXT NOT NULL,
                 changelog TEXT DEFAULT '',
-                source TEXT,
                 community_skill_id TEXT,
                 local_path TEXT NOT NULL,
                 size_bytes INTEGER NOT NULL DEFAULT 0,

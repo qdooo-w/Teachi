@@ -1,2 +1,2 @@
-export const COMMUNITY_PAGE_LIMIT = 20
-export const COMMUNITY_MAX_UPLOAD_BYTES = 40 * 1024 * 1024
+/** 社区列表每页技能数 */
+export const COMMUNITY_PAGE_LIMIT = 15

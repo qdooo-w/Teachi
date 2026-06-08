@@ -811,30 +811,87 @@ export async function fetchModels(payload: FetchModelsRequest): Promise<FetchMod
 
 // ── 社区技能广场 ────────────────────────────────────────────────────────────────
 
-export type CommunitySort = 'popular' | 'newest'
+export type CommunitySort = 'popular' | 'newest' | 'most_liked'
 
 export interface CommunitySkillSummary {
   id: string
   owner_uuid: string
+  owner_username?: string
   name: string
   display_name: string | null
   description: string
-  license: string | null
-  compatibility: string | null
-  size_bytes: number
+  likes: number
   downloads: number
+  liked_by_me?: boolean
+  latest_version?: string | null
+  version?: string | null
+  tags?: string | null
+  size_bytes: number
   created_at: number
   updated_at: number
 }
 
-export type CommunitySkillDetail = CommunitySkillSummary
+/** 社区技能详情（含 README、贡献者、版本列表、当前用户点赞状态）
+ *  注意：后端详情接口的 latest_version 是完整版本对象，列表接口的是字符串 */
+export interface CommunitySkillDetail extends Omit<CommunitySkillSummary, 'latest_version'> {
+  readme_md?: string
+  liked_by_me: boolean
+  latest_version?: CommunitySkillVersion | null
+  contributors?: CommunityContributor[]
+  versions?: CommunitySkillVersion[]
+}
 
 export interface CommunitySkillListResponse {
   skills: CommunitySkillSummary[]
   total: number
-  limit: number
-  offset: number
-  sort: CommunitySort
+}
+
+export interface CommunityContributor {
+  skill_id: string
+  user_uuid: string
+  role: string
+  created_at: number
+  /** 后端 join 返回的用户名 */
+  username?: string
+}
+
+export interface CommunitySkillVersion {
+  id: string
+  skill_id: string
+  version: string
+  readme_md: string
+  changelog: string
+  tags: string
+  archive_path: string
+  size_bytes: number
+  downloads: number
+  status: string
+  submitted_by: string
+  created_at: number
+}
+
+export interface CommunityComment {
+  id: string
+  skill_id: string
+  user_uuid: string
+  /** 后端 join 返回的用户名 */
+  username?: string
+  content: string
+  parent_id: string | null
+  depth: number
+  reply_to_uuid: string | null
+  /** 被回复者的用户名 */
+  reply_to_username?: string
+  likes: number
+  liked_by_me?: boolean
+  created_at: number
+  updated_at: number
+  /** 前端组装：子回复列表 */
+  replies?: CommunityComment[]
+}
+
+export interface CommunityCommentListResponse {
+  comments: CommunityComment[]
 }
 
 export interface InstallResponse {
@@ -844,8 +901,9 @@ export interface InstallResponse {
 }
 
 export interface InstallSkillRequest {
-  target: 'user' | 'project'
+  target: 'user' | 'project' | 'library'
   pid?: string
+  version_id?: string
 }
 
 function nonceHeaders(): Record<string, string> {
@@ -855,17 +913,23 @@ function nonceHeaders(): Record<string, string> {
   }
 }
 
+// ── API 函数 ──────────────────────────────────────────────────────────────────
+
 export async function listCommunitySkills(params: {
   keyword?: string
   limit?: number
   offset?: number
   sort?: CommunitySort
+  tags?: string[]
 } = {}): Promise<CommunitySkillListResponse> {
   const search = new URLSearchParams()
   if (params.keyword) search.set('keyword', params.keyword)
   if (params.limit !== undefined) search.set('limit', String(params.limit))
   if (params.offset !== undefined) search.set('offset', String(params.offset))
   search.set('sort', params.sort ?? 'popular')
+  if (params.tags && params.tags.length > 0) {
+    for (const t of params.tags) search.append('tag', t)
+  }
   return request<CommunitySkillListResponse>(`/community/skills?${search.toString()}`)
 }
 
@@ -873,22 +937,17 @@ export async function getCommunitySkill(id: string): Promise<CommunitySkillDetai
   return request<CommunitySkillDetail>(`/community/skills/${encodeURIComponent(id)}`)
 }
 
+export async function likeCommunitySkill(id: string): Promise<{ liked: boolean }> {
+  return request<{ liked: boolean }>(`/community/skills/${encodeURIComponent(id)}/like`, {
+    method: 'POST',
+  })
+}
+
 export async function publishCommunitySkill(skillName: string): Promise<CommunitySkillDetail> {
   return request<CommunitySkillDetail>('/community/skills', {
     method: 'POST',
     headers: nonceHeaders(),
     body: JSON.stringify({ skill_name: skillName }),
-  })
-}
-
-export async function uploadCommunitySkillZip(file: File): Promise<CommunitySkillDetail> {
-  return request<CommunitySkillDetail>('/community/skills/upload', {
-    method: 'POST',
-    headers: {
-      ...nonceHeaders(),
-      'Content-Type': 'application/zip',
-    },
-    body: file,
   })
 }
 
@@ -902,6 +961,105 @@ export async function installCommunitySkill(id: string, payload?: InstallSkillRe
 
 export async function deleteCommunitySkill(id: string): Promise<void> {
   await request<void>(`/community/skills/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+// ── 社区评论 ──────────────────────────────────────────────────────────────────
+
+export async function listCommunityComments(
+  skillId: string,
+  params: { parent_id?: string; limit?: number; offset?: number } = {},
+): Promise<CommunityComment[]> {
+  const search = new URLSearchParams()
+  if (params.parent_id) search.set('parent_id', params.parent_id)
+  if (params.limit !== undefined) search.set('limit', String(params.limit))
+  if (params.offset !== undefined) search.set('offset', String(params.offset))
+  return request<CommunityComment[]>(
+    `/community/skills/${encodeURIComponent(skillId)}/comments?${search.toString()}`,
+  )
+}
+
+export async function createCommunityComment(
+  skillId: string,
+  payload: { content: string; parent_id?: string | null; reply_to_uuid?: string | null },
+): Promise<CommunityComment> {
+  return request<CommunityComment>(`/community/skills/${encodeURIComponent(skillId)}/comments`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function deleteCommunityComment(skillId: string, commentId: string): Promise<void> {
+  await request<void>(`/community/skills/${encodeURIComponent(skillId)}/comments/${encodeURIComponent(commentId)}`, {
+    method: 'DELETE',
+  })
+}
+
+export async function likeCommunityComment(commentId: string): Promise<{ liked: boolean }> {
+  return request<{ liked: boolean }>(`/community/comments/${encodeURIComponent(commentId)}/like`, {
+    method: 'POST',
+  })
+}
+
+export async function reportCommunityComment(
+  commentId: string,
+  payload: { reason: string; detail?: string },
+): Promise<{ id: string; status: string }> {
+  return request<{ id: string; status: string }>(
+    `/community/comments/${encodeURIComponent(commentId)}/report`,
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+  )
+}
+
+// ── 社区版本 ──────────────────────────────────────────────────────────────────
+
+export async function listCommunityVersions(skillId: string): Promise<CommunitySkillVersion[]> {
+  return request<CommunitySkillVersion[]>(
+    `/community/skills/${encodeURIComponent(skillId)}/versions`,
+  )
+}
+
+// ── 社区排行榜 ────────────────────────────────────────────────────────────────
+
+export async function getCommunityLeaderboard(limit = 10): Promise<CommunitySkillSummary[]> {
+  const search = new URLSearchParams()
+  search.set('limit', String(limit))
+  const response = await request<{ skills: CommunitySkillSummary[] }>(
+    `/community/leaderboard?${search.toString()}`,
+  )
+  return response.skills
+}
+
+// ── 仓库技能 ──────────────────────────────────────────────────────────────────
+
+export interface UserLibrarySkill {
+  id: string
+  user_uuid: string
+  name: string
+  display_name: string | null
+  description: string
+  readme_md: string
+  tags: string
+  version: string
+  changelog: string
+  community_skill_id: string | null
+  local_path: string
+  size_bytes: number
+  created_at: number
+  updated_at: number
+}
+
+export async function uploadLibrarySkillZip(file: File): Promise<UserLibrarySkill> {
+  return request<UserLibrarySkill>('/library/skills/upload', {
+    method: 'POST',
+    headers: {
+      ...nonceHeaders(),
+      'Content-Type': 'application/zip',
+    },
+    body: file,
+  })
 }
 
 // ─── 账号设置 ──────────────────────────────────────────────────────────────

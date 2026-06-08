@@ -4,6 +4,8 @@
 
 ## 近期变更
 
+- 2026-06-08（续）：精简 `user_library_skills` 表，删除 `source` 字段，改用 `community_skill_id` 推断来源。新增模板匹配 API（`GET /library/skills/match-template`）和 Fork API（`POST /library/skills/{id}/fork`）。更新 Collect API 支持 `template_id` 参数。删除数据结构中的 `source` 字段。
+- 2026-06-08：补全社区生态缺失 API：排行榜（`GET /community/leaderboard`）、用户名搜索（`GET /users/search`）、贡献者管理（`GET/POST/DELETE /community/skills/{id}/contributors`）、举报列表（`GET /admin/community/reports`）、仓库文件编辑（`GET/PUT /library/skills/{id}/files`）。补充数据结构定义：`UserSummary`、`CommunitySkillVersion`、`CommunitySkillContributor`、`CommunityCommentReport`、`SkillReviewLog`、`UserLibrarySkill`、`FileListEntry`。
 - 2026-06-04：新增「获取模型列表」API（`POST /settings/model-configs/fetch-models`），允许用户从 OpenAI 兼容提供商获取可用模型名称列表，便于在模型配置中直接选择而无需查阅文档。
 - 2026-06-02：新增账号设置 API（修改用户名、修改密码），偏好设置 API（enter_mode），user_instruction 全链路贯通；修改密码后自动清除 refresh token。
 - 2026-06-01：新增多模态附件系统及相关接口与 AI 工具。实现附件上传（`POST /sessions/{sid}/attachments`）、附件列表查询（`GET /sessions/{sid}/attachments`）和附件删除（`DELETE /sessions/{sid}/attachments/{attachment_id}`）。在物理存储上以 SHA-256 哈希命名文件以去重；会话内自动按文件类型生成友好文件名（如"图片1.png"）。引入 `list_attachment` 和 `view_attachment` AI 代理工具以统一处理附件、图片及 Skill 资源；完全移除了旧有的 `is_vision_assistant` 字段及数据库字段，模型配置的视觉支持通过 `supports_vision` 字段标识，并在 API 路由中完整支持该字段的读取与写入。
@@ -131,17 +133,25 @@ FastAPI 和后端当前可能返回两类错误体：
 | `id` | string | 社区技能 ID |
 | `owner_uuid` | string | 发布者用户 ID |
 | `name` | string | Skill 名称，来自 `SKILL.md` frontmatter |
+| `display_name` | string \| null | 显示名 |
 | `description` | string | Skill 描述，来自 frontmatter |
-| `license` | string \| null | 可选 license |
-| `compatibility` | string \| null | 可选兼容性说明 |
-| `size_bytes` | int | 归档 skill 文件夹内所有文件的总字节数 |
+| `likes` | int | 点赞数 |
 | `downloads` | int | 安装次数 |
 | `created_at` | float | 发布时间 |
 | `updated_at` | float | 更新时间 |
+| `version` | string \| null | 最新已审核版本号 |
+| `tags` | string \| null | 标签 JSON 数组 |
+| `size_bytes` | int \| null | 归档 skill 文件夹内所有文件的总字节数 |
 
 ### CommunitySkillDetail
 
-继承 `CommunitySkillSummary`，不额外返回 skill 文件内容。社区内容本体归档在服务端 `archived_skill/{id}/`，安装时按目录复制。
+继承 `CommunitySkillSummary`，额外包含以下字段。社区内容本体归档在服务端 `archived_skill/{id}/`，安装时按目录复制。
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `liked_by_me` | bool | 当前用户是否已点赞 |
+| `contributors` | `CommunitySkillContributor[]` | 贡献者列表 |
+| `latest_version` | `CommunitySkillVersion \| null` | 最新已审核版本详情 |
 
 ### CommunitySkillListResponse
 
@@ -160,6 +170,94 @@ FastAPI 和后端当前可能返回两类错误体：
 | `name` | string | 已安装技能名 |
 | `skill_id` | string | 社区技能 ID |
 | `downloads` | int | 安装后的下载计数 |
+
+### UserSummary
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `uuid` | string | 用户 ID |
+| `username` | string | 用户名 |
+| `email` | string | 邮箱 |
+
+### CommunitySkillVersion
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | string | 版本 ID（复用 library_id） |
+| `skill_id` | string | 所属社区技能 ID |
+| `version` | string | 语义化版本号 (x.y.z) |
+| `readme_md` | string | README 内容 |
+| `changelog` | string | 变更说明 |
+| `tags` | string | 标签 JSON 数组 |
+| `archive_path` | string | 归档路径 |
+| `size_bytes` | int | 文件大小 |
+| `downloads` | int | 版本下载计数 |
+| `status` | string | 审核状态 (PENDING_OWNER / PENDING_ADMIN / APPROVED / REJECTED) |
+| `submitted_by` | string | 提交者用户 ID |
+| `created_at` | float | 提交时间 |
+
+### CommunitySkillContributor
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `skill_id` | string | 技能 ID |
+| `user_uuid` | string | 用户 ID |
+| `role` | string | 角色 (默认 "contributor") |
+| `created_at` | float | 添加时间 |
+
+### CommunityCommentReport
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | string | 举报 ID |
+| `comment_id` | string | 被举报评论 ID |
+| `reporter_uuid` | string | 举报者 ID |
+| `reason` | string | 举报原因 |
+| `detail` | string | 详细说明 |
+| `status` | string | 处理状态 (PENDING / RESOLVED / DISMISSED) |
+| `created_at` | float | 举报时间 |
+
+### SkillReviewLog
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | string | 日志 ID |
+| `version_id` | string | 版本 ID |
+| `reviewer_uuid` | string | 审核者 ID |
+| `action` | string | 操作 (APPROVE_BY_OWNER / REJECT_BY_OWNER / APPROVE_BY_ADMIN / REJECT_BY_ADMIN) |
+| `from_status` | string | 原状态 |
+| `to_status` | string | 新状态 |
+| `note` | string | 审核备注 |
+| `created_at` | float | 审核时间 |
+
+### UserLibrarySkill
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | string | 仓库技能 ID |
+| `user_uuid` | string | 用户 ID |
+| `name` | string | 技能标识名 |
+| `display_name` | string \| null | 显示名 |
+| `description` | string | 描述 |
+| `readme_md` | string | README 内容 |
+| `tags` | string | 标签 JSON 数组 |
+| `version` | string | 当前版本号 |
+| `changelog` | string | 变更说明 |
+| `community_skill_id` | string \| null | 关联的社区技能 ID（有值=来自社区，空=来自运行层收集） |
+| `local_path` | string | 本地文件路径 |
+| `size_bytes` | int | 文件大小 |
+| `created_at` | float | 创建时间 |
+| `updated_at` | float | 更新时间 |
+
+### FileListEntry
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `name` | string | 条目名 |
+| `is_dir` | bool | 是否目录 |
+| `rel_path` | string | 相对路径 |
+| `size` | int | 文件大小（目录为 0） |
+| `updated_at` | float | 修改时间 |
 
 ### ModelConfigItem
 
@@ -389,6 +487,37 @@ FastAPI 和后端当前可能返回两类错误体：
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `status` | string | 固定为 `healthy` |
+
+## 用户接口
+
+### GET `/users/search`
+
+意义：按用户名模糊搜索用户。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+查询参数：
+
+| 名称 | 类型 | 必填 | 默认值 | 说明 |
+|---|---|---|---|---|
+| `q` | string | 是 | — | 搜索关键词，1-100 字符 |
+| `limit` | int | 否 | 10 | 返回数量，1-50 |
+
+成功返回：`200 OK`
+
+返回体：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `users` | `UserSummary[]` | 匹配的用户列表 |
+
+`UserSummary`：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `uuid` | string | 用户 ID |
+| `username` | string | 用户名 |
+| `email` | string | 邮箱 |
 
 ## 项目接口
 
@@ -846,6 +975,26 @@ FastAPI 和后端当前可能返回两类错误体：
 
 ## 社区技能广场接口
 
+### GET `/community/leaderboard`
+
+意义：获取社区技能排行榜（按下载量排序）。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+查询参数：
+
+| 名称 | 类型 | 必填 | 默认值 | 说明 |
+|---|---|---|---|---|
+| `limit` | int | 否 | 10 | 返回数量，1-50 |
+
+成功返回：`200 OK`
+
+返回体：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `skills` | `CommunitySkillSummary[]` | 排行榜技能列表 |
+
 ### GET `/community/skills`
 
 意义：查询社区技能列表，支持关键字过滤、分页和排序。
@@ -1008,6 +1157,793 @@ zip 约束：
 |---|---|---|
 | 403 | `{ code: "FORBIDDEN", message: "Only the author can delete this skill" }` | 不是作者 |
 | 404 | `{ code: "RESOURCE_NOT_FOUND", message: "Community skill not found" }` | 技能不存在 |
+
+### POST `/community/skills/{skill_id}/like`
+
+意义：点赞或取消点赞社区技能（Toggle 模式）。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `skill_id` | string | 是 | 社区技能 ID |
+
+请求体：无。
+
+成功返回：`200 OK`
+
+返回体：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `liked` | bool | `true` 表示点赞成功，`false` 表示取消点赞 |
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 404 | `{ code: "NOT_FOUND", message: "Skill not found" }` | 技能不存在 |
+
+### GET `/community/skills/{skill_id}/versions`
+
+意义：获取社区技能的已审核版本列表。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `skill_id` | string | 是 | 社区技能 ID |
+
+成功返回：`200 OK`
+
+返回体：`CommunitySkillVersion[]`，按 `created_at` 降序排列。
+
+### GET `/community/skills/{skill_id}/comments`
+
+意义：获取社区技能的评论列表（树形结构，仅顶级评论和一级回复）。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `skill_id` | string | 是 | 社区技能 ID |
+
+查询参数：
+
+| 名称 | 类型 | 必填 | 默认值 | 说明 |
+|---|---|---|---|---|
+| `parent_id` | string \| null | 否 | null | 指定父评论 ID 获取其回复；为空则获取顶级评论 |
+| `limit` | int | 否 | 50 | 1-100 |
+| `offset` | int | 否 | 0 | 起始偏移 |
+
+成功返回：`200 OK`
+
+返回体：`CommunitySkillComment[]`
+
+### POST `/community/skills/{skill_id}/comments`
+
+意义：发表评论或回复。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `skill_id` | string | 是 | 社区技能 ID |
+
+请求体：
+
+| 字段 | 类型 | 必填 | 约束 | 说明 |
+|---|---|---|---|---|
+| `content` | string | 是 | 1-1000 字符 | 评论内容 |
+| `parent_id` | string \| null | 否 | — | 父评论 ID，为空则为顶级评论 |
+| `reply_to_uuid` | string \| null | 否 | — | 被回复者 UUID（仅二级回复时有值）|
+
+成功返回：`201 Created`
+
+返回体：`CommunitySkillComment`
+
+评论嵌套规则：
+- `parent_id=null` → 顶级评论 (depth=0)
+- `parent_id=xxx` 且父评论 depth=0 → 二级回复 (depth=1)
+- `parent_id=xxx` 且父评论 depth>=1 → `400 BAD_REQUEST` (最大嵌套2层)
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 400 | `{ code: "BAD_REQUEST", message: "Max nesting depth exceeded" }` | 超过最大嵌套层级 |
+| 400 | `{ code: "BAD_REQUEST", message: "Parent comment not found" }` | 父评论不存在 |
+| 422 | 参数校验错误 | `content` 为空或超过 1000 字符 |
+
+### DELETE `/community/skills/{skill_id}/comments/{comment_id}`
+
+意义：删除评论。评论作者可删除自己的评论，系统管理员 (role=admin) 可删除任意评论。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `skill_id` | string | 是 | 社区技能 ID |
+| `comment_id` | string | 是 | 评论 ID |
+
+成功返回：`204 No Content`
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 404 | `{ code: "NOT_FOUND", message: "Comment not found or not authorized" }` | 评论不存在或无权删除 |
+
+### POST `/community/comments/{comment_id}/like`
+
+意义：点赞或取消点赞评论（Toggle 模式）。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `comment_id` | string | 是 | 评论 ID |
+
+请求体：无。
+
+成功返回：`200 OK`
+
+返回体：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `liked` | bool | `true` 表示点赞成功，`false` 表示取消点赞 |
+
+### POST `/community/comments/{comment_id}/report`
+
+意义：举报评论。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `comment_id` | string | 是 | 评论 ID |
+
+请求体：
+
+| 字段 | 类型 | 必填 | 约束 | 说明 |
+|---|---|---|---|---|
+| `reason` | string | 是 | 1-100 字符 | 举报原因 |
+| `detail` | string | 否 | — | 详细说明 |
+
+成功返回：`200 OK`
+
+返回体：`CommunityCommentReport`
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 422 | 参数校验错误 | `reason` 为空或超过 100 字符 |
+
+### GET `/community/skills/{skill_id}/contributors`
+
+意义：获取技能贡献者列表。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `skill_id` | string | 是 | 社区技能 ID |
+
+成功返回：`200 OK`
+
+返回体：`CommunitySkillContributor[]`
+
+### POST `/community/skills/{skill_id}/contributors`
+
+意义：添加贡献者（仅技能管理员可操作）。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `skill_id` | string | 是 | 社区技能 ID |
+
+请求体：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `user_uuid` | string | 是 | 要添加的用户 ID |
+
+成功返回：`200 OK`
+
+返回体：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `success` | bool | 固定为 `true` |
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 400 | `{ code: "BAD_REQUEST", message: "Failed to add contributor" }` | 添加失败（可能已存在） |
+| 403 | `{ code: "FORBIDDEN", message: "Not an admin of this skill" }` | 不是技能管理员 |
+
+### DELETE `/community/skills/{skill_id}/contributors/{user_uuid}`
+
+意义：移除贡献者（仅技能管理员可操作）。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `skill_id` | string | 是 | 社区技能 ID |
+| `user_uuid` | string | 是 | 要移除的用户 ID |
+
+成功返回：`204 No Content`
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 403 | `{ code: "FORBIDDEN", message: "Not an admin of this skill" }` | 不是技能管理员 |
+| 404 | `{ code: "NOT_FOUND", message: "Contributor not found" }` | 贡献者不存在 |
+
+---
+
+## 仓库技能接口
+
+### GET `/library/skills/parse-runtime`
+
+意义：解析运行层技能的 SKILL.md 配置，用于辅助填充收集表单。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+查询参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `skill_name` | string | 是 | 运行层中的技能文件夹名 |
+
+成功返回：`200 OK`
+
+返回体：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `frontmatter` | object | SKILL.md frontmatter 解析结果 |
+| `latest_in_library` | object \| null | 仓库中同名技能的最新记录（如已有）|
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 400 | `{ code: "INVALID_NAME", message: ... }` | 技能名不合法 |
+| 403 | `{ code: "FORBIDDEN", message: "Access denied" }` | 无权访问 |
+| 404 | `{ code: "NOT_FOUND", message: "Skill not found" }` | 技能不存在 |
+| 422 | `{ code: "NO_SKILL_MD", message: "Missing SKILL.md" }` | 缺少 SKILL.md |
+| 422 | `{ code: "PARSE_ERROR", message: ... }` | 解析失败 |
+
+### GET `/library/skills/match-template`
+
+意义：根据 skill_name 在仓库中查找最佳匹配的模板技能。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+查询参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `skill_name` | string | 是 | 运行层技能目录名 |
+
+成功返回：`200 OK`
+
+返回体：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `skill_name` | string | 请求的技能名 |
+| `matched` | `UserLibrarySkill \| null` | 匹配到的仓库技能（同名），未匹配则为 null |
+
+### POST `/library/skills/collect`
+
+意义：收集运行层技能到个人仓库。从 `skills/{skill_name}/` 复制到 `library/{new_id}/skill/`。
+
+认证：需要 `Authorization: Bearer <access_token>`，并携带 nonce 请求头。
+
+请求体：
+
+| 字段 | 类型 | 必填 | 约束 | 说明 |
+|---|---|---|---|---|
+| `skill_name` | string | 是 | 1-64 字符 | 运行层中的技能文件夹名 |
+| `template_id` | string \| null | 否 | — | 指定模板技能 ID，为空则自动匹配最佳模板 |
+
+**模板匹配逻辑**：
+1. 优先使用 `template_id` 指定的模板
+2. 否则查找仓库中同名技能作为最佳匹配
+3. 无模板时，元数据从 SKILL.md 读取或使用默认值
+
+成功返回：`200 OK`
+
+返回体：`UserLibrarySkill`
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 400 | `{ code: "INVALID_NAME", message: ... }` | 技能名不合法 |
+| 403 | `{ code: "FORBIDDEN", message: "Access denied" }` | 无权访问 |
+| 404 | `{ code: "NOT_FOUND", message: "Skill not found" }` | 技能不存在 |
+| 422 | `{ code: "NO_SKILL_MD", message: "Missing SKILL.md" }` | 缺少 SKILL.md |
+| 400/409 | nonce 相关错误 | 见上文 nonce 规则 |
+
+### GET `/library/skills`
+
+意义：获取当前用户的个人仓库技能列表。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+成功返回：`200 OK`
+
+返回体：`UserLibrarySkill[]`，按 `created_at` 降序排列。
+
+### GET `/library/skills/{library_id}`
+
+意义：获取单条仓库技能详情。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `library_id` | string | 是 | 仓库技能 ID |
+
+成功返回：`200 OK`
+
+返回体：`UserLibrarySkill`
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 404 | `{ code: "NOT_FOUND", message: "Library skill not found" }` | 技能不存在或不属于当前用户 |
+
+### GET `/library/skills/{library_id}/template`
+
+意义：查找社区同名已上架条目，供用户选择发布模板。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `library_id` | string | 是 | 仓库技能 ID |
+
+成功返回：`200 OK`
+
+返回体：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `library_skill` | UserLibrarySkill | 仓库技能记录 |
+| `matched_community_skill` | CommunitySkill \| null | 社区同名技能（如已有）|
+
+### GET `/library/skills/{library_id}/publish-form`
+
+意义：预填发布表单，返回仓库技能数据、已关联社区条目及建议版本号。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `library_id` | string | 是 | 仓库技能 ID |
+
+成功返回：`200 OK`
+
+返回体：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `library_skill` | UserLibrarySkill | 仓库技能记录 |
+| `community_skill` | CommunitySkill \| null | 已关联的社区技能（首次发布为 null）|
+| `latest_approved_version` | CommunitySkillVersion \| null | 最新已审核版本 |
+| `suggested_version` | string | 建议版本号（末位+1，如 "1.0.0" → "1.0.1"）|
+
+### POST `/library/skills/{library_id}/publish`
+
+意义：将仓库技能发布到社区（两阶段审核流第一步）。首次发布会自动创建社区技能主表记录。
+
+认证：需要 `Authorization: Bearer <access_token>`，并携带 nonce 请求头。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `library_id` | string | 是 | 仓库技能 ID |
+
+请求体：
+
+| 字段 | 类型 | 必填 | 约束 | 说明 |
+|---|---|---|---|---|
+| `version` | string | 是 | `^[0-9]+\.[0-9]+\.[0-9]+$` | 语义化版本号 |
+| `changelog` | string | 否 | — | 本次变更说明 |
+
+成功返回：`201 Created`
+
+返回体：`CommunitySkillVersion`（status=`PENDING_OWNER`）
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 404 | `{ code: "NOT_FOUND", message: "Library skill not found" }` | 技能不存在或不属于当前用户 |
+| 404 | `{ code: "NOT_FOUND", message: "Library skill data missing" }` | 仓库文件缺失 |
+| 422 | 参数校验错误 | `version` 格式不合法 |
+| 400/409 | nonce 相关错误 | 见上文 nonce 规则 |
+
+### POST `/library/skills/{library_id}/fork`
+
+意义：Fork 仓库技能，创建新的副本。用于修改从社区安装的技能后重新发布。
+
+认证：需要 `Authorization: Bearer <access_token>`，并携带 nonce 请求头。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `library_id` | string | 是 | 仓库技能 ID |
+
+请求体：无
+
+**行为**：
+- 创建新的 `library_id`（新 UUID）
+- 复制 skill 文件夹
+- 继承原有元数据（name, display_name, description, tags, readme_md）
+- 保留 `community_skill_id` 关联
+- version 重置为 "1.0.0"，changelog 重置为 "Fork"
+
+成功返回：`200 OK`
+
+返回体：`UserLibrarySkill`（新的仓库记录）
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 404 | `{ code: "NOT_FOUND", message: "Library skill not found" }` | 技能不存在或不属于当前用户 |
+| 400/409 | nonce 相关错误 | 见上文 nonce 规则 |
+
+### POST `/library/skills/{library_id}/install`
+
+意义：将仓库技能安装到运行层。纯文件复制，无 DB 写入。
+
+认证：需要 `Authorization: Bearer <access_token>`，并携带 nonce 请求头。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `library_id` | string | 是 | 仓库技能 ID |
+
+请求体：
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+|---|---|---|---|---|
+| `target` | string | 否 | `user` | `user` 或 `project` |
+| `pid` | string \| null | 否 | null | `target=project` 时必填 |
+
+成功返回：`200 OK`
+
+返回体：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `name` | string | 已安装技能名 |
+| `target` | string | 安装目标 |
+| `installed` | bool | 固定为 `true` |
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 404 | `{ code: "NOT_FOUND", message: "Library skill not found" }` | 技能不存在或不属于当前用户 |
+| 409 | `{ code: "CONFLICT", message: "Skill already exists" }` | 目标位置已存在同名技能 |
+| 422 | `{ code: "VALIDATION_ERROR", message: "pid is required" }` | `target=project` 但未提供 `pid` |
+| 400/409 | nonce 相关错误 | 见上文 nonce 规则 |
+
+### GET `/library/skills/{library_id}/files`
+
+意义：列出仓库技能的文件目录。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `library_id` | string | 是 | 仓库技能 ID |
+
+查询参数：
+
+| 名称 | 类型 | 必填 | 默认值 | 说明 |
+|---|---|---|---|---|
+| `path` | string | 否 | `.` | 相对 skill 目录的路径 |
+
+成功返回：`200 OK`
+
+返回体：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `path` | string | 请求的路径 |
+| `entries` | `FileListEntry[]` | 文件/目录列表 |
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 400 | `{ code: "FILE_ERROR", message: ... }` | 路径越界或目录不存在 |
+| 404 | `{ code: "NOT_FOUND", message: "Library skill not found" }` | 技能不存在或不属于当前用户 |
+
+### GET `/library/skills/{library_id}/files/content`
+
+意义：读取仓库技能的文件内容。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `library_id` | string | 是 | 仓库技能 ID |
+
+查询参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `path` | string | 是 | 相对 skill 目录的文件路径 |
+
+成功返回：`200 OK`
+
+返回体：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `path` | string | 文件路径 |
+| `content` | string | 文件内容 |
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 400 | `{ code: "FILE_ERROR", message: ... }` | 文件不存在或读取失败 |
+| 404 | `{ code: "NOT_FOUND", message: "Library skill not found" }` | 技能不存在或不属于当前用户 |
+
+### PUT `/library/skills/{library_id}/files`
+
+意义：写入仓库技能的文件。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `library_id` | string | 是 | 仓库技能 ID |
+
+请求体：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `path` | string | 是 | 相对 skill 目录的文件路径 |
+| `content` | string | 是 | 文件内容 |
+
+成功返回：`200 OK`
+
+返回体：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `path` | string | 文件路径 |
+| `success` | bool | 固定为 `true` |
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 400 | `{ code: "FILE_ERROR", message: ... }` | 写入失败 |
+| 404 | `{ code: "NOT_FOUND", message: "Library skill not found" }` | 技能不存在或不属于当前用户 |
+
+---
+
+## 审核接口
+
+### GET `/owner/reviews`
+
+意义：列出当前用户作为技能管理员 (Owner) 待审核的版本列表。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+请求体：无。
+
+成功返回：`200 OK`
+
+返回体：`CommunitySkillVersion[]`，包含关联的 `skill_name` 字段，按 `created_at` 升序。
+
+### POST `/owner/reviews/{version_id}/approve`
+
+意义：Owner 审核通过某个技能版本，将其状态流转为 `PENDING_ADMIN`。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `version_id` | string | 是 | 版本 ID |
+
+请求体：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `note` | string | 否 | 审核备注 |
+
+成功返回：`200 OK`
+
+返回体：`SkillReviewLog`
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 400 | `{ code: "BAD_STATUS", message: "Version is not in PENDING_OWNER state" }` | 版本状态不正确 |
+| 403 | `{ code: "FORBIDDEN", message: "Not an owner/admin of this skill" }` | 不是该技能的管理员 |
+| 404 | `{ code: "NOT_FOUND", message: "Version not found" }` | 版本不存在 |
+
+### POST `/owner/reviews/{version_id}/reject`
+
+意义：Owner 拒绝某个技能版本，将其状态流转为 `REJECTED`。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `version_id` | string | 是 | 版本 ID |
+
+请求体：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `note` | string | 否 | 审核备注 |
+
+成功返回：`200 OK`
+
+返回体：`SkillReviewLog`
+
+错误：同 Owner approve。
+
+### GET `/admin/reviews`
+
+意义：列出所有等待全局系统管理员审批的技能版本 (`PENDING_ADMIN`)。
+
+认证：需要 `Authorization: Bearer <access_token>`，且用户 role 必须为 `admin`。
+
+请求体：无。
+
+成功返回：`200 OK`
+
+返回体：`CommunitySkillVersion[]`，包含关联的 `skill_name` 字段。
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 403 | `{ code: "FORBIDDEN", message: "System admin only" }` | 非系统管理员 |
+
+### POST `/admin/reviews/{version_id}/approve`
+
+意义：全局管理员审核通过某个技能版本，将其状态流转为 `APPROVED`，上架社区。
+
+认证：需要 `Authorization: Bearer <access_token>`，且用户 role 必须为 `admin`。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `version_id` | string | 是 | 版本 ID |
+
+请求体：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `note` | string | 否 | 审核备注 |
+
+成功返回：`200 OK`
+
+返回体：`SkillReviewLog`
+
+额外副作用：更新 `community_skills.latest_version` 为此版本号。
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 400 | `{ code: "BAD_STATUS", message: "Version is not in PENDING_ADMIN state" }` | 版本状态不正确 |
+| 403 | `{ code: "FORBIDDEN", message: "System admin only" }` | 非系统管理员 |
+| 404 | `{ code: "NOT_FOUND", message: "Version not found" }` | 版本不存在 |
+
+### POST `/admin/reviews/{version_id}/reject`
+
+意义：全局管理员拒绝某个技能版本，将其状态流转为 `REJECTED`。
+
+认证：需要 `Authorization: Bearer <access_token>`，且用户 role 必须为 `admin`。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `version_id` | string | 是 | 版本 ID |
+
+请求体：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `note` | string | 否 | 审核备注 |
+
+成功返回：`200 OK`
+
+返回体：`SkillReviewLog`
+
+错误：同 Admin approve。
+
+### GET `/admin/community/reports`
+
+意义：列出评论举报列表（仅系统管理员）。
+
+认证：需要 `Authorization: Bearer <access_token>`，且用户 role 必须为 `admin`。
+
+查询参数：
+
+| 名称 | 类型 | 必填 | 默认值 | 说明 |
+|---|---|---|---|---|
+| `status_filter` | string \| null | 否 | null | 按状态过滤（PENDING/RESOLVED/DISMISSED） |
+| `limit` | int | 否 | 50 | 返回数量 |
+| `offset` | int | 否 | 0 | 起始偏移 |
+
+成功返回：`200 OK`
+
+返回体：`CommunityCommentReport[]`，包含关联的 `comment_content` 和 `reporter_name` 字段。
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 403 | `{ code: "FORBIDDEN", message: "System admin only" }` | 非系统管理员 |
+
+---
 
 ## 聊天循环接口
 

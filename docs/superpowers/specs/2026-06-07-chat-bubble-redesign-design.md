@@ -1,12 +1,14 @@
-# Design Spec: Chat Bubble Redesign
+# Design Spec: Chat Bubble Redesign & Logo Update
 
 ## 1. Objective
-Redesign the chat bubbles in the Learnova frontend application:
+Redesign the chat bubbles in the Learnova frontend application and update the logo:
 1. Cancel the AI reply's rounded dialog box design, changing its background color to blend with the main page background (`bg-[#f3f4f6]`).
 2. Change the user's message dialog bubble background color to white (`bg-white`), while preserving its `rounded-3xl` corners and no-border style.
+3. Replace the plain-text "Learnova" logo in the sidebar and login header with the new custom stylized SVG logo (`LEARNOVA.svg`).
 
 ## 2. Affected Files
 * [ChatView.vue](file:///home/seeck/Projects/Teachi/frontend/src/views/ChatView.vue) - Vue component rendering user and AI chat bubbles.
+* [App.vue](file:///home/seeck/Projects/Teachi/frontend/src/App.vue) - Main application layout containing the sidebar and auth view.
 * [SKILL.md](file:///home/seeck/Projects/Teachi/.agents/skills/learnova-design/SKILL.md) - Learnova design system guidelines.
 
 ## 3. Implementation Details
@@ -48,7 +50,13 @@ In `frontend/src/style.css`:
   * Padding: update to `0.5em 0` to preserve vertical spacing.
   * Hover styles: remove the white hover background and box shadows, keep transition properties.
 
+### 3.4 Logo Update
+In `frontend/src/App.vue`:
+* **Sidebar logo header (around line 627):**
+  * Replace the `<span ...>Learnova</span>` component with the stylized inline SVG from `LEARNOVA.svg`, styled as `h-4 w-auto text-[#1f2937] transition-colors duration-200` to fit the sidebar perfectly.
+* **Auth (Login/Register) header (around line 487):**
+  * Replace the `<div ...>Learnova</div>` text logo with the stylized inline SVG from `LEARNOVA.svg`, styled as `h-6 w-auto text-[#1f2937]`.
+
 ## 4. Verification Plan
 * Compile/Build the frontend code to ensure no syntax/template issues.
 * Inspect the styles locally if possible (we can verify static types and build).
-

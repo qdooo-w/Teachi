@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import logging
-import shutil
 import uuid
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Literal
 
@@ -10,7 +10,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from backend.auth import get_current_user, verify_nonce
-from backend.config import BASE_DIR
+from backend.community.utils import (
+    resolve_db as _resolve_db,
+    archive_root as _archive_root,
+    resolve_archive_path as _resolve_archive_path,
+    copy_skill_dir as _copy_skill_dir,
+    directory_size as _directory_size,
+)
 from backend.db import DatabaseFacade
 from backend.db_dep import get_db
 from backend.file import FileError, ProjectFile, UserFile, LibraryFile
@@ -19,41 +25,14 @@ from backend.skill_parser import (
     parse_skill_file,
     validate_skill_name,
 )
-from backend.community import _archive_root
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/library", tags=["library"])
 
-def _resolve_db(db_param: Any) -> DatabaseFacade:
-    if isinstance(db_param, DatabaseFacade):
-        return db_param
-    global_db = globals().get("db")
-    if isinstance(global_db, DatabaseFacade):
-        return global_db
-    raise RuntimeError("DatabaseFacade not initialized in library module")
 
 def _archive_rel_path(skill_id: str, version: str) -> str:
     return f"archived_skill/{skill_id}/{version}"
 
-def _resolve_archive_path(archive_path: str) -> Path:
-    root = _archive_root()
-    target = (BASE_DIR / archive_path).resolve()
-    if target != root and root not in target.parents:
-        raise FileError("Archived skill path is outside archived_skill directory.")
-    return target
-
-def _directory_size(path: Path) -> int:
-    return sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
-
-def _copy_skill_dir(src: Path, dst: Path) -> None:
-    if not src.is_dir():
-        raise FileError("Skill folder not found")
-    if dst.exists():
-        raise FileError("Target skill folder already exists")
-    try:
-        shutil.copytree(src, dst)
-    except Exception as e:
-        raise FileError(str(e)) from e
 
 def _suggest_next_version(current: str | None) -> str:
     """将版本号末位加一，用于预填发布表单的建议版本。"""
@@ -68,6 +47,7 @@ def _suggest_next_version(current: str | None) -> str:
 
 class CollectSkillRequest(BaseModel):
     skill_name: str = Field(..., min_length=1, max_length=64)
+    template_id: str | None = None  # 可选：指定模板技能 ID
 
 class PublishFromLibraryRequest(BaseModel):
     version: str = Field(..., pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$")
@@ -108,11 +88,30 @@ def parse_runtime_skill(
 
     # Check if we already have this in library
     latest_lib = db.library.get_latest_by_name(user_uuid=current_user["uuid"], name=skill_name)
-    
+
     return {
-        "frontmatter": fields.model_dump(),
+        "frontmatter": asdict(fields),
         "latest_in_library": latest_lib
     }
+
+
+@router.get("/skills/match-template")
+def match_template(
+    skill_name: str = Query(..., min_length=1, max_length=100),
+    current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
+):
+    """根据 skill_name 在仓库中查找最佳匹配的模板技能。
+
+    返回同名的仓库技能（如有），用于收集时预填元数据。
+    """
+    db = _resolve_db(db)
+    matched = db.library.get_latest_by_name(user_uuid=current_user["uuid"], name=skill_name)
+    return {
+        "skill_name": skill_name,
+        "matched": matched,  # 可能为 null
+    }
+
 
 @router.post("/skills/collect", dependencies=[Depends(verify_nonce)])
 def collect_skill_to_library(
@@ -124,15 +123,17 @@ def collect_skill_to_library(
     收集操作：从运行层 skills/{name} 复制到 library/{library_id}/skill/
     
     【数据流】
-    - 输入：Payload 中的运行层技能名称 (skill_name)
+    - 输入：Payload 中的运行层技能名称 (skill_name) 和可选的 template_id
+    - 模板匹配：优先使用 template_id 指定的模板，否则查找仓库中同名技能作为最佳匹配
     - 文件流：读取 data/{user_uuid}/skills/{skill_name} -> 复制到 data/{user_uuid}/library/{library_id}/skill/
-    - 数据库流：在 user_library_skills 表中新建一条记录，初始版本为 1.0.0，物理大小为收集后的目录大小，community_skill_id 初始为 NULL。
-    
+    - 数据库流：在 user_library_skills 表中新建一条记录，元数据从模板继承（如有）
+
     【调用链】
     - 客户端请求 -> APIRouter -> collect_skill_to_library()
     - 获取当前用户 -> get_current_user()
     - 初始化文件系统管理器 -> UserFile, LibraryFile (file.py)
     - 解析 SKILL.md -> parse_skill_file() (skill_parser.py)
+    - 模板匹配 -> db.library.get_by_id() 或 db.library.get_latest_by_name()
     - 文件复制 -> _copy_skill_dir()
     - 创建数据库记录 -> db.library.create() (db.py::UserLibrarySkillsFacade)
     """
@@ -140,46 +141,58 @@ def collect_skill_to_library(
     skill_name = payload.skill_name.strip()
     if name_err := validate_skill_name(skill_name):
         raise HTTPException(status_code=400, detail={"code": "INVALID_NAME", "message": name_err})
-        
+
     user_uuid = current_user["uuid"]
     try:
         user_fs = UserFile(user_uuid=user_uuid, db_facade=db)
         src_dir = user_fs._safe_path(f"skills/{skill_name}")
     except PermissionError:
         raise HTTPException(status_code=403, detail={"code": "FORBIDDEN", "message": "Access denied"})
-        
+
     if not src_dir.is_dir():
         raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "Skill not found"})
-        
+
     skill_md = src_dir / "SKILL.md"
     if not skill_md.is_file():
         raise HTTPException(status_code=422, detail={"code": "NO_SKILL_MD", "message": "Missing SKILL.md"})
-        
+
     try:
         fields = parse_skill_file(skill_md.read_text(encoding="utf-8"))
     except Exception as e:
         raise HTTPException(status_code=422, detail={"code": "PARSE_ERROR", "message": str(e)})
 
+    # 模板匹配：优先使用指定的 template_id，否则查找同名技能
+    template = None
+    if payload.template_id:
+        template = db.library.get_by_id(payload.template_id)
+        if template and template["user_uuid"] != user_uuid:
+            template = None  # 不允许使用其他用户的模板
+    if not template:
+        template = db.library.get_latest_by_name(user_uuid=user_uuid, name=skill_name)
+
+    # 从模板继承元数据，无模板时使用默认值
+    display_name = template["display_name"] if template else fields.display_name
+    description = template["description"] if template else ""  # 不从 SKILL.md 提取，留给作者另行填写
+    readme_md = template["readme_md"] if template else (fields.body if fields.body else "")
+    tags = template["tags"] if template else "[]"
+
     library_id = str(uuid.uuid4())
     library_fs = LibraryFile(library_id=library_id, user_uuid=user_uuid, db_facade=db)
     dst_dir = library_fs.base_path / "skill"
-    
+
     try:
         _copy_skill_dir(src_dir, dst_dir)
-        readme_path = dst_dir / "README.md"
-        readme_content = readme_path.read_text(encoding="utf-8") if readme_path.is_file() else ""
-        
+
         record = db.library.create(
             user_uuid=user_uuid,
             name=fields.name,
-            display_name=fields.display_name,
-            description=fields.description,
-            readme_md=readme_content,
-            tags="[]",
+            display_name=display_name,
+            description=description,
+            readme_md=readme_md,
+            tags=tags,
             version="1.0.0",
             changelog="Initial collect",
-            source="runtime",
-            community_skill_id=None,
+            community_skill_id=None,  # 为空表示来自运行层
             local_path=f"data/{user_uuid}/library/{library_id}",
             size_bytes=_directory_size(dst_dir),
             skill_id=library_id
@@ -385,3 +398,71 @@ def install_from_library(
     except FileError as e:
         raise HTTPException(status_code=400, detail={"code": "FILE_ERROR", "message": str(e)})
     return {"name": name, "target": payload.target, "installed": True}
+
+
+class WriteFileRequest(BaseModel):
+    path: str = Field(..., min_length=1)
+    content: str
+
+
+@router.get("/skills/{library_id}/files")
+def list_library_files(
+    library_id: str,
+    path: str = Query("."),
+    current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
+):
+    """列出仓库技能的文件。"""
+    db = _resolve_db(db)
+    record = db.library.get_by_id(library_id)
+    if not record or record["user_uuid"] != current_user["uuid"]:
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "Library skill not found"})
+
+    library_fs = LibraryFile(library_id=library_id, user_uuid=current_user["uuid"], db_facade=db)
+    try:
+        entries = library_fs.search_dir(f"skill/{path}")
+        return {"path": path, "entries": entries}
+    except FileError as e:
+        raise HTTPException(status_code=400, detail={"code": "FILE_ERROR", "message": str(e)})
+
+
+@router.get("/skills/{library_id}/files/content")
+def read_library_file(
+    library_id: str,
+    path: str = Query(...),
+    current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
+):
+    """读取仓库技能的文件内容。"""
+    db = _resolve_db(db)
+    record = db.library.get_by_id(library_id)
+    if not record or record["user_uuid"] != current_user["uuid"]:
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "Library skill not found"})
+
+    library_fs = LibraryFile(library_id=library_id, user_uuid=current_user["uuid"], db_facade=db)
+    try:
+        content = library_fs.read_file(f"skill/{path}")
+        return {"path": path, "content": content}
+    except FileError as e:
+        raise HTTPException(status_code=400, detail={"code": "FILE_ERROR", "message": str(e)})
+
+
+@router.put("/skills/{library_id}/files")
+def write_library_file(
+    library_id: str,
+    payload: WriteFileRequest,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
+):
+    """写入仓库技能的文件。"""
+    db = _resolve_db(db)
+    record = db.library.get_by_id(library_id)
+    if not record or record["user_uuid"] != current_user["uuid"]:
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "Library skill not found"})
+
+    library_fs = LibraryFile(library_id=library_id, user_uuid=current_user["uuid"], db_facade=db)
+    try:
+        library_fs.create_file(f"skill/{payload.path}", payload.content)
+        return {"path": payload.path, "success": True}
+    except FileError as e:
+        raise HTTPException(status_code=400, detail={"code": "FILE_ERROR", "message": str(e)})

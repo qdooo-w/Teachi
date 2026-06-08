@@ -35,7 +35,7 @@ def isolated_app(tmp_path, monkeypatch):
     facade.setup_database()
 
     # 用 FastAPI 的 dependency_overrides 替换 get_db，确保所有 Depends(get_db) 都注入测试 facade
-    from backend.community import router as community_router
+    from backend.community import router as community_router, library_router, router_owner, router_admin
     from backend.auth import router as auth_router
     from fastapi import FastAPI
 
@@ -43,6 +43,9 @@ def isolated_app(tmp_path, monkeypatch):
     app.dependency_overrides[get_db] = lambda: facade
     app.include_router(auth_router)
     app.include_router(community_router)
+    app.include_router(library_router)
+    app.include_router(router_owner)
+    app.include_router(router_admin)
 
     return app, facade
 

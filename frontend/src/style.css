@@ -20,6 +20,10 @@
   font-family: "Source Han Sans SC", "Noto Sans CJK SC", "Noto Sans SC", sans-serif;
 }
 
+.font-serif-hans {
+  font-family: "Source Han Serif SC", "Noto Serif CJK SC", "Noto Serif SC", serif;
+}
+
 html,
 body,
 #app {
@@ -270,6 +274,8 @@ input {
 .markdown-body .mermaid-block svg {
   max-width: 100%;
   height: auto;
+  display: block;
+  margin: 0 auto;
 }
 .markdown-body .mermaid-error {
   margin: 0.75em 0;

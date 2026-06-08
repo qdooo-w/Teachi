@@ -152,11 +152,18 @@ ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user';
 
 | 状态 | 含义 |
 |---|---|
-| `PENDING_OWNER` | 等待 skill 管理员审核（贡献者提交时） |
+| `PENDING_OWNER` | 等待 skill 管理员审核（**默认状态**，发布者是管理员时自动跳过到 PENDING_ADMIN） |
 | `REJECTED_OWNER` | 被 skill 管理员驳回 |
 | `PENDING_ADMIN` | 等待社区全局管理员审核 |
 | `APPROVED` | 审核通过，已上架 |
 | `REJECTED_ADMIN` | 被全局管理员驳回 |
+
+**状态流转**：
+```
+PENDING_OWNER ──(Owner 审核通过)──▶ PENDING_ADMIN ──(Admin 审核通过)──▶ APPROVED
+      │                                      │
+      └──────(Owner 审核拒绝)──▶ REJECTED ◄──┴──────(Admin 审核拒绝)──┘
+```
 
 ### 3. community_skill_likes (社区技能点赞表)
 
@@ -199,6 +206,18 @@ ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user';
 **联合主键**：`PRIMARY KEY(skill_id, user_uuid)`
 
 > **权限层级**：`admin_uuids` 中的用户（含 owner）有管理和审核权限，`contributor` 仅有提交权限。权限检查只查 `community_skills.admin_uuids` 一个字段。
+
+### 5.1 community_skill_admins (社区技能管理员表)
+
+| 字段名 | 类型 | 约束 | 说明 |
+|---|---|---|---|
+| `skill_id` | TEXT | NOT NULL, FK → `community_skills(id)` ON DELETE CASCADE | 社区项目 ID |
+| `user_uuid` | TEXT | NOT NULL, FK → `users(uuid)` ON DELETE CASCADE | 管理员 |
+| `created_at` | REAL | NOT NULL | 添加时间 |
+
+**联合主键**：`PRIMARY KEY(skill_id, user_uuid)`
+
+> **说明**：与 `community_skills.admin_uuids` JSON 字段双写同步。管理员子表用于 O(log n) 索引查询，避免每次解析 JSON 数组。发布时自动将发布者加入。
 
 ### 6. community_comment_likes (评论点赞表)
 
@@ -247,13 +266,13 @@ ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user';
 | `tags` | TEXT | NOT NULL, DEFAULT '[]' | 标签列表（JSON 数组），安装时从社区版本继承，收集时可套用模版 |
 | `version` | TEXT | NOT NULL | 版本号（上传时填写） |
 | `changelog` | TEXT | DEFAULT '' | 更新说明（上传时填写） |
-| `source` | TEXT | DEFAULT NULL | 来源说明（fork 时填写） |
-| `community_skill_id` | TEXT | DEFAULT NULL | 关联社区项目 ID（从社区安装时填写，本地创建为 NULL） |
+| `community_skill_id` | TEXT | DEFAULT NULL | 关联社区项目 ID（从社区安装时填写，本地创建为 NULL）。**有值表示来自社区，为空表示来自运行层收集** |
 | `local_path` | TEXT | NOT NULL | 本地物理存储路径（如 `data/{user_uuid}/library/{lib_skill_id}`） |
 | `size_bytes` | INTEGER | NOT NULL, DEFAULT 0 | 文件大小 |
 | `created_at` | REAL | NOT NULL | 创建/上传时间 |
 | `updated_at` | REAL | NOT NULL | 最后更新时间 |
 
+> **来源推断**：通过 `community_skill_id` 推断来源，不再使用 `source` 字段。
 > **注意**：没有 `UNIQUE(user_uuid, name)` 约束——同一用户可以有多个同名 skill 条目（不同版本/不同次上传），每条都是独立实体。
 
 ---
@@ -512,33 +531,65 @@ CREATE INDEX idx_review_logs_reviewer ON skill_review_logs(reviewer_uuid);
 
 ```json
 {
-  "source_path": "skills/code-reviewer (运行层 skill 相对路径)",
-  "source_scope": "user | project",
-  "source_pid": "项目 ID (scope=project 时必填)",
-  "template_skill_id": "uuid (可选，套用已有仓库 skill 作为模版，继承非即时性信息)",
-  "name": "code-reviewer",
-  "display_name": "代码审查助手",
-  "description": "...",
-  "readme_md": "...",
-  "tags": ["code", "review"],
-  "version": "1.0.0",
-  "changelog": "初始版本"
+  "skill_name": "code-reviewer",         // 运行层中的技能文件夹名
+  "template_id": null                    // 可选：指定模板技能 ID，为空则自动匹配最佳模板
 }
 ```
 
-> 每次 collect 都生成一个全新的 `user_library_skills` 条目（新 UUID），不会与已有条目冲突。`template_skill_id` 为空时，后端自动按 `name` 匹配仓库中最新同名 skill 作为模版；用户也可显式指定仓库中任意 skill 的 UUID 作为模版。
+> 每次 collect 都生成一个全新的 `user_library_skills` 条目（新 UUID），不会与已有条目冲突。
+> **模板匹配逻辑**：
+> 1. 优先使用 `template_id` 指定的模板
+> 2. 否则查找仓库中同名技能作为**最佳匹配**
+> 3. 无模板时，元数据从 SKILL.md 读取或使用默认值
+
+#### GET `/library/skills/match-template` 请求参数
+
+| 参数 | 说明 |
+|---|---|
+| `skill_name` | 运行层 skill 目录名 |
+
+#### 响应
+
+```json
+{
+  "skill_name": "code-reviewer",
+  "matched": {                         // 匹配到的仓库技能，未匹配则为 null
+    "id": "uuid",
+    "name": "code-reviewer",
+    "display_name": "代码审查助手",
+    "description": "...",
+    "readme_md": "...",
+    "tags": "[\"code\", \"review\"]",
+    "version": "1.0.0"
+  }
+}
+```
 
 #### POST `/library/skills/{skill_id}/publish` 请求
 
 ```json
 {
-  "changelog": "...",
-  "source": null,
-  "community_skill_id": "uuid (可选，已有社区项目则追加版本；新发布则后端自动创建)"
+  "version": "1.1.0",                  // 语义化版本号 x.y.z
+  "changelog": "新增xxx功能"            // 本次变更说明
 }
 ```
 
-> 发布时 `community_skill_versions.id` = `user_library_skills.id`。version、tags、readme_md 等从仓库 skill 继承，不需重填。
+> 发布时 `community_skill_versions.id` = `user_library_skills.id`。name、display_name、description、tags、readme_md 等从仓库 skill 继承，不需重填。
+
+#### POST `/library/skills/{skill_id}/fork` 请求
+
+```json
+{
+  // 无请求体，从原技能继承所有元数据
+}
+```
+
+> **Fork 操作**：用于修改从社区安装的技能后重新发布。
+> - 创建新的 `library_id`（新 UUID）
+> - 复制 skill 文件夹
+> - 继承原有元数据（name, display_name, description, tags, readme_md）
+> - 保留 `community_skill_id` 关联
+> - 用户可在表单中修改元数据后再发布
 
 #### GET `/library/skills` 响应
 
@@ -747,6 +798,15 @@ CREATE TABLE IF NOT EXISTS community_skill_contributors (
     FOREIGN KEY (user_uuid) REFERENCES users(uuid) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS community_skill_admins (
+    skill_id TEXT NOT NULL,
+    user_uuid TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    PRIMARY KEY (skill_id, user_uuid),
+    FOREIGN KEY (skill_id) REFERENCES community_skills(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_uuid) REFERENCES users(uuid) ON DELETE CASCADE
+);
+
 -- ═══════════════════ 仓库模块 ═══════════════════
 
 CREATE TABLE IF NOT EXISTS user_library_skills (
@@ -759,8 +819,7 @@ CREATE TABLE IF NOT EXISTS user_library_skills (
     tags TEXT NOT NULL DEFAULT '[]',
     version TEXT NOT NULL,
     changelog TEXT DEFAULT '',
-    source TEXT,
-    community_skill_id TEXT,
+    community_skill_id TEXT,  -- 有值=来自社区，空=来自运行层收集
     local_path TEXT NOT NULL,
     size_bytes INTEGER NOT NULL DEFAULT 0,
     created_at REAL NOT NULL,
@@ -799,6 +858,7 @@ CREATE INDEX IF NOT EXISTS idx_community_likes_skill ON community_skill_likes(sk
 CREATE INDEX IF NOT EXISTS idx_comment_likes_comment ON community_comment_likes(comment_id);
 CREATE INDEX IF NOT EXISTS idx_comment_reports_comment ON community_comment_reports(comment_id);
 CREATE INDEX IF NOT EXISTS idx_comment_reports_status ON community_comment_reports(status);
+CREATE INDEX IF NOT EXISTS idx_skill_admins_user ON community_skill_admins(user_uuid);
 CREATE INDEX IF NOT EXISTS idx_library_skills_user ON user_library_skills(user_uuid);
 CREATE INDEX IF NOT EXISTS idx_library_skills_community ON user_library_skills(community_skill_id);
 CREATE INDEX IF NOT EXISTS idx_review_logs_version ON skill_review_logs(version_id);
@@ -834,6 +894,7 @@ CREATE INDEX IF NOT EXISTS idx_review_logs_reviewer ON skill_review_logs(reviewe
 | 社区 | `community_comment_likes` | **新增** |
 | 社区 | `community_comment_reports` | **新增** |
 | 社区 | `community_skill_contributors` | **新增** |
+| 社区 | `community_skill_admins` | **新增** |
 | 仓库 | `user_library_skills` | **新增** |
 | 审核 | `skill_review_logs` | **新增** |
-| **总计** | **9 张新表 + 1 迁移** | |
+| **总计** | **10 张新表 + 1 迁移** | |

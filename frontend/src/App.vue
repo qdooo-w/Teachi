@@ -59,6 +59,15 @@ const {
 watch(errorMessage, (newVal) => {
   if (newVal) {
     showGlobalError(newVal)
+    errorMessage.value = ''
+  }
+})
+
+// 将登录/注册表单的内联 authError 转发到全局通知
+watch(authError, (newVal) => {
+  if (newVal) {
+    showGlobalError(newVal)
+    authError.value = ''
   }
 })
 
@@ -484,8 +493,24 @@ watch(
     <section v-else-if="!isAuthenticated && route.name !== 'set-password' && route.name !== 'register-confirm'" class="flex h-full items-center justify-center px-4">
       <div class="w-full max-w-[420px] rounded-2xl border border-[#d1d5db]/80 bg-white p-6 shadow-md">
         <div class="mb-6">
-          <div class="text-2xl font-bold tracking-normal">Learnova</div>
-          <div class="mt-1 text-sm text-[#6b7280]">
+          <svg viewBox="0 0 1323.48 135.75" class="mx-auto h-6 w-auto text-[#1f2937]" fill="currentColor" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <g>
+              <polygon points="1279.68 40.08 1232.46 87.28 1185.25 135.43 1131.31 135.41 1193.93 72.76 1267.42 .83 1323.47 .8 1323.48 135.55 1279.92 135.6 1279.68 40.08"/>
+              <polygon points="451.56 40.12 361.23 135.37 306.24 135.42 368.3 71.12 435.62 .77 493.41 .76 493.42 135.55 451.82 135.64 451.56 40.12"/>
+              <polygon points="1198.02 .16 1253.17 .21 1189.78 62.64 1117.2 135.37 1063.28 135.44 1064.43 .32 1106.58 .3 1106.4 93.64 1152.58 46.43 1198.02 .16"/>
+              <polygon points="144.55 103.03 144.63 135.56 0 135.64 .71 20.55 42.79 68.96 42.84 103.05 144.55 103.03"/>
+              <path d="M602.51,135.75l-43.8-36.52-45.14-39.11,103.94-.32c4.94-.02,9.32-3.36,9.35-8.24l.08-12.64c.03-4.78-4.54-8.5-9.56-8.5l-107.01-.06-.18-30.21,116.27.06c10.86.83,20.76,3.33,28.65,10.64,12.28,11.38,12.87,30.1,10.82,46.89-2.23,18.3-16.25,31.63-34.75,32.24l-26.16.87,56.72,44.52-59.22.36Z"/>
+              <polygon points="550.59 135.5 510.01 135.64 510.49 65.03 550.5 100.69 550.59 135.5"/>
+              <path d="M1016.74,25.78c-10.65-14.34-24.58-22.32-41.5-25.28l52.48-.21c35.86,39.07,33.99,99.36-4.47,135.3l-116.46-.12c-38.04-37.14-36.92-98.41.79-135.47l51.15.47c-14.63,2.98-27.39,9.31-37.5,20.6-27.69,30.17-22.8,78.26,10.46,102.11,21.11,15.13,47.94,14.23,68.61-.92,30.72-22.51,38.79-64.94,16.43-96.47Z"/>
+              <polygon points="997.74 41.57 965.63 96.25 935.09 41.57 997.74 41.57"/>
+              <polygon points="42.47 59.86 .81 12.1 .82 .5 42.79 .44 42.47 59.86"/>
+              <polygon points="299.77 51.2 299.73 79.66 244.55 79.61 217.62 79.65 202.43 62.36 162.35 15.44 162.5 .22 307.4 .22 307.35 30.37 204.22 30.4 204.26 51.25 299.77 51.2"/>
+              <polygon points="299.57 104.31 299.87 127.44 291.12 135.6 161.38 135.6 162.56 24.5 204.09 72.56 204.15 104.36 299.57 104.31"/>
+              <path d="M865.97.39l-2.47,135.17-52.36.07-93.02-97.69-29.59-31.6c-1.8-1.41-2.76-3.37-2.77-5.99l48.91-.14,87.54,96.53,2.18-96.3,41.58-.04Z"/>
+              <polygon points="723.81 135.13 683.97 135.56 686 14.72 724.83 55.81 723.81 135.13"/>
+            </g>
+          </svg>
+          <div class="mt-2 text-sm text-[#6b7280]">
             {{ authMode === 'forgot' ? '重置您的密码' : '登录后开始对话' }}
           </div>
         </div>
@@ -498,7 +523,7 @@ watch(
                 'h-9 rounded-lg px-3 text-sm font-medium transition-all duration-200 active:scale-95',
                 authMode === 'login' ? 'bg-white text-[#111827] shadow-sm' : 'text-[#6b7280] hover:text-[#111827]',
               ]"
-              @click="authMode = 'login'; authError = ''"
+              @click="authMode = 'login'; clearAllNotifications()"
             >
               登录
             </button>
@@ -508,7 +533,7 @@ watch(
                 'h-9 rounded-lg px-3 text-sm font-medium transition-all duration-200 active:scale-95',
                 authMode === 'register' ? 'bg-white text-[#111827] shadow-sm' : 'text-[#6b7280] hover:text-[#111827]',
               ]"
-              @click="authMode = 'register'; authError = ''"
+              @click="authMode = 'register'; clearAllNotifications()"
             >
               注册
             </button>
@@ -531,7 +556,7 @@ watch(
                 <button
                   type="button"
                   class="text-xs text-[#4b5563] hover:text-[#1f2937] hover:underline bg-transparent border-none p-0 cursor-pointer"
-                  @click="authMode = 'forgot'; authError = ''"
+                  @click="authMode = 'forgot'; clearAllNotifications()"
                 >
                   忘记密码？
                 </button>
@@ -571,10 +596,6 @@ watch(
             </label>
           </template>
 
-          <p v-if="authError" class="rounded-xl border border-[#efb3a7] bg-[#fff7ed] px-3 py-2 text-sm text-[#9a3412]">
-            {{ authError }}
-          </p>
-
           <button
             class="h-11 w-full rounded-xl border border-transparent bg-[#1f2937] px-4 text-sm font-semibold text-white transition-all duration-200 hover:bg-[#111827] active:scale-95 disabled:cursor-not-allowed disabled:border-[#d1d5db] disabled:bg-white disabled:text-[#9ca3af] disabled:active:scale-100"
             :disabled="authSubmitting"
@@ -587,7 +608,7 @@ watch(
             <button
               type="button"
               class="text-sm text-[#6b7280] hover:text-[#1f2937] bg-transparent border-none cursor-pointer active:scale-95 transition-all duration-200"
-              @click="authMode = 'login'; authError = ''"
+              @click="authMode = 'login'; clearAllNotifications()"
             >
               &larr; 返回登录
             </button>
@@ -614,18 +635,29 @@ watch(
         ]"
       >
         <div class="flex h-full w-56 flex-shrink-0 flex-col px-2.5 py-4">
-          <div class="mb-5 mt-2 flex items-center justify-start gap-2 pl-4 pr-2">
+          <div class="mb-5 mt-2 flex items-center justify-center gap-2 px-2">
             <button
               class="flex items-center gap-1 text-left"
               type="button"
               @click="closeSidebarOnMobile(); router.push({ name: 'overview' })"
             >
-              <span 
-                class="text-[23px] font-bold tracking-tight"
-                style="font-family: 'Source Han Serif SC', 'Source Han Serif CN', 'Noto Serif CJK SC', 'Songti SC', 'SimSun', serif;"
-              >
-                Learnova
-              </span>
+              <svg viewBox="0 0 1323.48 135.75" class="mx-auto h-8 w-auto max-w-[160px] text-[#1f2937] transition-colors duration-200" fill="currentColor" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                <g>
+                  <polygon points="1279.68 40.08 1232.46 87.28 1185.25 135.43 1131.31 135.41 1193.93 72.76 1267.42 .83 1323.47 .8 1323.48 135.55 1279.92 135.6 1279.68 40.08"/>
+                  <polygon points="451.56 40.12 361.23 135.37 306.24 135.42 368.3 71.12 435.62 .77 493.41 .76 493.42 135.55 451.82 135.64 451.56 40.12"/>
+                  <polygon points="1198.02 .16 1253.17 .21 1189.78 62.64 1117.2 135.37 1063.28 135.44 1064.43 .32 1106.58 .3 1106.4 93.64 1152.58 46.43 1198.02 .16"/>
+                  <polygon points="144.55 103.03 144.63 135.56 0 135.64 .71 20.55 42.79 68.96 42.84 103.05 144.55 103.03"/>
+                  <path d="M602.51,135.75l-43.8-36.52-45.14-39.11,103.94-.32c4.94-.02,9.32-3.36,9.35-8.24l.08-12.64c.03-4.78-4.54-8.5-9.56-8.5l-107.01-.06-.18-30.21,116.27.06c10.86.83,20.76,3.33,28.65,10.64,12.28,11.38,12.87,30.1,10.82,46.89-2.23,18.3-16.25,31.63-34.75,32.24l-26.16.87,56.72,44.52-59.22.36Z"/>
+                  <polygon points="550.59 135.5 510.01 135.64 510.49 65.03 550.5 100.69 550.59 135.5"/>
+                  <path d="M1016.74,25.78c-10.65-14.34-24.58-22.32-41.5-25.28l52.48-.21c35.86,39.07,33.99,99.36-4.47,135.3l-116.46-.12c-38.04-37.14-36.92-98.41.79-135.47l51.15.47c-14.63,2.98-27.39,9.31-37.5,20.6-27.69,30.17-22.8,78.26,10.46,102.11,21.11,15.13,47.94,14.23,68.61-.92,30.72-22.51,38.79-64.94,16.43-96.47Z"/>
+                  <polygon points="997.74 41.57 965.63 96.25 935.09 41.57 997.74 41.57"/>
+                  <polygon points="42.47 59.86 .81 12.1 .82 .5 42.79 .44 42.47 59.86"/>
+                  <polygon points="299.77 51.2 299.73 79.66 244.55 79.61 217.62 79.65 202.43 62.36 162.35 15.44 162.5 .22 307.4 .22 307.35 30.37 204.22 30.4 204.26 51.25 299.77 51.2"/>
+                  <polygon points="299.57 104.31 299.87 127.44 291.12 135.6 161.38 135.6 162.56 24.5 204.09 72.56 204.15 104.36 299.57 104.31"/>
+                  <path d="M865.97.39l-2.47,135.17-52.36.07-93.02-97.69-29.59-31.6c-1.8-1.41-2.76-3.37-2.77-5.99l48.91-.14,87.54,96.53,2.18-96.3,41.58-.04Z"/>
+                  <polygon points="723.81 135.13 683.97 135.56 686 14.72 724.83 55.81 723.81 135.13"/>
+                </g>
+              </svg>
             </button>
           </div>
 
@@ -643,11 +675,11 @@ watch(
             <svg class="h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
             </svg>
-            <span class="text-xs whitespace-nowrap">技能社区</span>
+            <span class="text-xs whitespace-nowrap font-hans">技能社区</span>
           </button>
 
           <div class="no-scrollbar flex-1 overflow-y-auto">
-            <div class="mb-2 pl-4 text-xs font-medium text-[#6b7280]">我的科目</div>
+            <div class="mb-2 pl-4 text-xs font-medium text-[#6b7280] font-serif-hans">我的科目</div>
             <div class="flex flex-col gap-1">
               <div
                 v-for="project in previewProjects"
@@ -698,7 +730,7 @@ watch(
               <!-- 最近会话列表 -->
               <template v-if="recentSessions.length > 0">
                 <div class="mx-4 my-2 border-t border-[#e5e7eb]/60" />
-                <div class="mb-2 pl-4 text-xs font-medium text-[#6b7280]">最近会话</div>
+                <div class="mb-2 pl-4 text-xs font-medium text-[#6b7280] font-serif-hans">最近会话</div>
                 <div class="flex flex-col gap-1">
                   <div
                     v-for="session in recentSessions"
@@ -847,8 +879,9 @@ watch(
               </svg>
             </button>
             
-            <!-- Skills 管理：整合为统一的单一按钮 -->
+            <!-- Skills 管理：整合为统一的单一按钮（概览页隐藏） -->
             <button
+              v-if="$route.name !== 'overview' && $route.name !== 'community'"
               class="flex h-8 items-center gap-1 rounded-full border border-[#d1d5db] bg-white px-3 text-xs font-semibold text-[#4b5563] transition-all duration-200 hover:bg-[#e5e7eb] active:scale-95"
               type="button"
               title="管理您的技能"
