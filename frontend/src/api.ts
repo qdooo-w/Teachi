@@ -881,8 +881,25 @@ export async function publishCommunitySkill(skillName: string): Promise<Communit
   })
 }
 
-export async function uploadCommunitySkillZip(file: File): Promise<CommunitySkillDetail> {
-  return request<CommunitySkillDetail>('/community/skills/upload', {
+export interface UserLibrarySkill {
+  id: string
+  user_uuid: string
+  name: string
+  display_name: string | null
+  description: string
+  readme_md: string
+  tags: string
+  version: string
+  changelog: string
+  community_skill_id: string | null
+  local_path: string
+  size_bytes: number
+  created_at: number
+  updated_at: number
+}
+
+export async function uploadLibrarySkillZip(file: File): Promise<UserLibrarySkill> {
+  return request<UserLibrarySkill>('/library/skills/upload', {
     method: 'POST',
     headers: {
       ...nonceHeaders(),

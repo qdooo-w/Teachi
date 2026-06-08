@@ -1,2 +1,1 @@
 export const COMMUNITY_PAGE_LIMIT = 20
-export const COMMUNITY_MAX_UPLOAD_BYTES = 40 * 1024 * 1024

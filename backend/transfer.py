@@ -2,9 +2,9 @@
 transfer.py - 大文件传输路由模块
 
 当前职责：
-1. 处理社区技能 zip 上传（原始二进制）
-2. 校验 zip 结构与内容白名单
-3. 解析 SKILL.md 并入库发布
+1. ZIP 技能包解析与校验（工具函数，供其他模块复用）
+2. ZIP 上传至个人仓库（library）
+3. 获取会话附件物理文件
 """
 
 from __future__ import annotations
@@ -18,9 +18,9 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
 
 from backend.auth import get_current_user, verify_nonce
+from backend.community.utils import directory_size
 from backend.config import (
     BASE_DIR,
     SKILL_TEXT_EXTENSIONS,
@@ -30,24 +30,14 @@ from backend.config import (
 )
 from backend.db import DatabaseFacade
 from backend.db_dep import get_db
-from backend.file import FileError
+from backend.file import FileError, LibraryFile
 from backend.skill_parser import SkillFields, SkillParseError, parse_skill_file
 
 
 router = APIRouter(tags=["transfer"])
 
 
-from backend.community.routes import CommunitySkillSummary, _to_summary
-from backend.community.utils import archive_root as _archive_root, resolve_archive_path as _resolve_archive_path
-
-
-def _directory_size(path: Path) -> int:
-    return sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
-
-
-def _community_archive_rel_path(skill_id: str, version: str) -> str:
-    return f"archived_skill/{skill_id}/{version}"
-
+# ── ZIP 校验与解析工具（可复用）──────────────────────────────────
 
 def _zip_validation_error(message: str, status_code: int = status.HTTP_422_UNPROCESSABLE_ENTITY) -> None:
     raise HTTPException(
@@ -56,12 +46,13 @@ def _zip_validation_error(message: str, status_code: int = status.HTTP_422_UNPRO
     )
 
 
-def _community_zip_size_label() -> str:
+def _zip_size_label() -> str:
     mb = SKILL_ZIP_MAX_BYTES / (1024 * 1024)
     return f"{mb:g} MB"
 
 
 def _zip_entry_parts(raw_name: str) -> tuple[str, ...]:
+    """解析 ZIP 条目路径，校验安全性。"""
     if not raw_name or "\x00" in raw_name:
         _zip_validation_error("Zip entry path is empty or contains NUL byte.")
     if raw_name.startswith("/") or raw_name.startswith("\\"):
@@ -79,6 +70,7 @@ def _is_zip_symlink(info: zipfile.ZipInfo) -> bool:
 
 
 def _validate_skill_zip_relpath(parts: tuple[str, ...]) -> tuple[str, ...]:
+    """校验技能 ZIP 内的文件路径：根文件仅限文本类型，子目录仅限资源目录。"""
     if parts == ("SKILL.md",):
         return parts
 
@@ -100,9 +92,14 @@ def _validate_skill_zip_relpath(parts: tuple[str, ...]) -> tuple[str, ...]:
     return (normalized_folder,) + parts[1:]
 
 
-def _validate_community_skill_zip(
+def validate_skill_zip(
     zip_file: zipfile.ZipFile,
 ) -> tuple[SkillFields, list[tuple[zipfile.ZipInfo, tuple[str, ...]]]]:
+    """校验技能 ZIP 包结构并解析 SKILL.md。
+
+    Returns:
+        (SkillFields, [(ZipInfo, normalized_rel_parts), ...])
+    """
     raw_entries = zip_file.infolist()
     if not raw_entries:
         _zip_validation_error("Zip file is empty.")
@@ -122,7 +119,7 @@ def _validate_community_skill_zip(
         total_uncompressed += int(info.file_size)
         if total_uncompressed > SKILL_ZIP_MAX_BYTES:
             _zip_validation_error(
-                f"Uncompressed zip content must not exceed {_community_zip_size_label()}.",
+                f"Uncompressed zip content must not exceed {_zip_size_label()}.",
                 status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             )
         file_entries.append((info, parts))
@@ -141,12 +138,15 @@ def _validate_community_skill_zip(
     normalized_entries: list[tuple[zipfile.ZipInfo, tuple[str, ...]]] = []
     seen_paths: set[tuple[str, ...]] = set()
     skill_md_info: zipfile.ZipInfo | None = None
+
     for _info, parts in dir_entries:
         rel_parts = parts[len(strip_root):] if strip_root else parts
         if not rel_parts:
             continue
         if len(rel_parts) < 1 or rel_parts[0] not in SKILL_ZIP_RESOURCE_DIR_ALIASES:
-            _zip_validation_error("Skill zip directories can only be reference(s)/, assets/, example(s)/, or template(s)/.")
+            _zip_validation_error(
+                "Skill zip directories can only be reference(s)/, assets/, example(s)/, or template(s)/."
+            )
 
     for info, parts in file_entries:
         rel_parts = parts[len(strip_root):] if strip_root else parts
@@ -184,11 +184,12 @@ def _validate_community_skill_zip(
     return fields, normalized_entries
 
 
-def _extract_community_skill_zip(
+def extract_skill_zip(
     zip_file: zipfile.ZipFile,
     entries: list[tuple[zipfile.ZipInfo, tuple[str, ...]]],
     target_dir: Path,
 ) -> None:
+    """将已校验的技能 ZIP 条目解压到目标目录。"""
     target_dir.mkdir(parents=True, exist_ok=False)
     for info, rel_parts in entries:
         target = (target_dir / Path(*rel_parts)).resolve()
@@ -200,12 +201,13 @@ def _extract_community_skill_zip(
 
 
 async def _read_limited_zip_body(request: Request) -> bytes:
+    """流式读取请求体，限制大小不超过 SKILL_ZIP_MAX_BYTES。"""
     content_length = request.headers.get("content-length")
     if content_length is not None:
         try:
             if int(content_length) > SKILL_ZIP_MAX_BYTES:
                 _zip_validation_error(
-                    f"Zip file must not exceed {_community_zip_size_label()}.",
+                    f"Zip file must not exceed {_zip_size_label()}.",
                     status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                 )
         except ValueError as e:
@@ -220,7 +222,7 @@ async def _read_limited_zip_body(request: Request) -> bytes:
         received += len(chunk)
         if received > SKILL_ZIP_MAX_BYTES:
             _zip_validation_error(
-                f"Zip file must not exceed {_community_zip_size_label()}.",
+                f"Zip file must not exceed {_zip_size_label()}.",
                 status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             )
         chunks.append(chunk)
@@ -231,33 +233,34 @@ async def _read_limited_zip_body(request: Request) -> bytes:
     return body
 
 
+# ── 路由端点 ──────────────────────────────────────────────────────
+
 @router.post(
-    "/community/skills/upload",
+    "/library/skills/upload",
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(verify_nonce)],
 )
-async def upload_community_skill_zip(
+async def upload_library_skill_zip(
     request: Request,
     current_user: dict[str, Any] = Depends(get_current_user),
     db: DatabaseFacade = Depends(get_db),
 ):
     """
-    通过上传 ZIP 压缩包来发布社区技能
-    
+    上传 ZIP 技能包到个人仓库（library）
+
     【数据流】
-    - 输入：ZIP 物理文件字节流。
-    - 校验：解析 ZIP 内部的 SKILL.md 前言配置，验证技能标识与内容安全性。
-    - 文件流：解压并将技能物理文件解压到归档路径 `archived_skill/{skill_id}/1.0.0/skill/`。
-    - 数据库流：
-      1. 在 community_skills 表中创建技能记录，并初始化 admin_uuids JSON 数组，双写管理员子表。
-      2. 在 community_skill_versions 表中创建 1.0.0 待审核版本记录。
-    - 异常流：若解压或写入数据库失败，回滚并清理物理目录。
-    
+    - 输入：ZIP 物理文件字节流
+    - 校验：解析 ZIP 内部的 SKILL.md frontmatter，验证结构与内容安全性
+    - 文件流：解压至 data/{user_uuid}/library/{library_id}/skill/
+    - 数据库流：在 user_library_skills 表中创建一条仓库记录
+    - 异常流：若校验或写入失败，清理已创建的物理目录
+
     【调用链】
-    - 客户端上传 -> upload_community_skill_zip()
+    - 客户端上传 -> upload_library_skill_zip()
     - 读取字节 -> _read_limited_zip_body()
-    - ZIP 验证与提取 -> _validate_community_skill_zip() & _extract_community_skill_zip()
-    - 数据库写入 -> db.community.create_skill() & db.community.create_version()
+    - ZIP 验证 -> validate_skill_zip()
+    - ZIP 解压 -> extract_skill_zip()
+    - 数据库写入 -> db.library.create()
     """
     content_type = (request.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
     if content_type and content_type not in SKILL_ZIP_ALLOWED_CONTENT_TYPES:
@@ -270,60 +273,55 @@ async def upload_community_skill_zip(
     if not zipfile.is_zipfile(BytesIO(body)):
         _zip_validation_error("Uploaded file must be a valid zip archive.")
 
-    owner_uuid = current_user["uuid"]
-    skill_id = str(uuid.uuid4())
-    version_id = str(uuid.uuid4())
-    version_str = "1.0.0"
-    archive_rel_path = _community_archive_rel_path(skill_id, version_str)
-    archive_dir = _resolve_archive_path(archive_rel_path) / "skill"
+    user_uuid = current_user["uuid"]
+    library_id = str(uuid.uuid4())
+    library_fs = LibraryFile(library_id=library_id, user_uuid=user_uuid, db_facade=db)
+    skill_dir = library_fs.base_path / "skill"
 
     try:
         with zipfile.ZipFile(BytesIO(body)) as zip_file:
-            fields, entries = _validate_community_skill_zip(zip_file)
-            _extract_community_skill_zip(zip_file, entries, archive_dir)
+            fields, entries = validate_skill_zip(zip_file)
+            extract_skill_zip(zip_file, entries, skill_dir)
 
-        import json
-        db.community.create_skill(
-            skill_id=skill_id,
-            owner_uuid=owner_uuid,
+        readme_path = skill_dir / "README.md"
+        readme_content = ""
+        if readme_path.is_file():
+            try:
+                readme_content = readme_path.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError):
+                readme_content = ""
+
+        record = db.library.create(
+            user_uuid=user_uuid,
             name=fields.name,
             display_name=fields.display_name,
             description=fields.description,
-            admin_uuids=json.dumps([owner_uuid])
-        )
-        readme_path = archive_dir / "README.md"
-        readme_content = readme_path.read_text(encoding="utf-8") if readme_path.is_file() else ""
-        db.community.create_version(
-            version_id=version_id,
-            skill_id=skill_id,
-            version=version_str,
             readme_md=readme_content,
-            changelog="Uploaded via zip",
             tags="[]",
-            archive_path=archive_rel_path,
-            size_bytes=_directory_size(archive_dir),
-            source="upload",
-            status="PENDING_OWNER",
-            submitted_by=owner_uuid
+            version="1.0.0",
+            changelog="Uploaded via zip",
+            community_skill_id=None,
+            local_path=f"data/{user_uuid}/library/{library_id}",
+            size_bytes=directory_size(skill_dir),
+            skill_id=library_id,
         )
-        record = db.community.get_skill(skill_id)
+        return record
+
     except HTTPException:
-        if archive_dir.parent.exists():
-            shutil.rmtree(archive_dir.parent, ignore_errors=True)
+        if library_fs.base_path.exists():
+            shutil.rmtree(library_fs.base_path, ignore_errors=True)
         raise
     except (zipfile.BadZipFile, FileError) as e:
-        if archive_dir.parent.exists():
-            shutil.rmtree(archive_dir.parent, ignore_errors=True)
+        if library_fs.base_path.exists():
+            shutil.rmtree(library_fs.base_path, ignore_errors=True)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": "ZIP_VALIDATION_ERROR", "message": str(e)},
         ) from e
     except Exception:
-        if archive_dir.parent.exists():
-            shutil.rmtree(archive_dir.parent, ignore_errors=True)
+        if library_fs.base_path.exists():
+            shutil.rmtree(library_fs.base_path, ignore_errors=True)
         raise
-
-    return _to_summary(record).model_dump()
 
 
 @router.get(
@@ -344,7 +342,6 @@ def get_session_attachment(
             detail={"code": "AUTH_TOKEN_INVALID", "message": "Invalid token"},
         )
 
-    # 校验会话是否存在且属于该用户
     session = db.sessions.get_for_user(sid=sid, user_uuid=user_uuid)
     if session is None:
         raise HTTPException(
@@ -352,7 +349,6 @@ def get_session_attachment(
             detail={"code": "RESOURCE_NOT_FOUND", "message": "Session not found"},
         )
 
-    # 校验附件是否存在且属于该用户、该会话
     attachment = db.attachments.get_for_user(attachment_id, user_uuid)
     if attachment is None or attachment["sid"] != sid:
         raise HTTPException(
@@ -372,4 +368,3 @@ def get_session_attachment(
         media_type=attachment["mime_type"],
         filename=attachment["original_filename"],
     )
-

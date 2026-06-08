@@ -8,11 +8,10 @@ import {
   getCommunitySkill,
   installCommunitySkill,
   deleteCommunitySkill,
-  uploadCommunitySkillZip,
   getCurrentUserId,
   getErrorMessage,
 } from '../api'
-import { COMMUNITY_MAX_UPLOAD_BYTES, COMMUNITY_PAGE_LIMIT } from '../config'
+import { COMMUNITY_PAGE_LIMIT } from '../config'
 import { useProjects } from '../composables/useProjects'
 
 const { projects, loadProjects } = useProjects()
@@ -26,7 +25,7 @@ const errorMsg = ref('')
 
 import { useCommunity } from '../composables/useCommunity'
 
-const { searchQuery: keyword, triggerSearch, showUploadModal } = useCommunity()
+const { searchQuery: keyword, triggerSearch } = useCommunity()
 const sort = ref<CommunitySort>('popular')
 const limit = COMMUNITY_PAGE_LIMIT
 const offset = ref(0)
@@ -38,38 +37,10 @@ const installingProject = ref(false)
 const selectedProjectId = ref('')
 const deleting = ref(false)
 const flashMsg = ref('')
-const uploadInput = ref<HTMLInputElement | null>(null)
-const uploadMsg = ref('')
-const uploadMsgKind = ref<'success' | 'error'>('success')
-
-// 批量上传相关
-interface UploadQueueItem {
-  id: string
-  file: File
-  status: 'pending' | 'uploading' | 'success' | 'error'
-  error?: string
-}
-
-// showUploadModal is imported from useCommunity
-const uploadQueue = ref<UploadQueueItem[]>([])
-const isDragOver = ref(false)
-const isBatchUploading = ref(false)
-
-const MAX_UPLOAD_ZIP_BYTES = COMMUNITY_MAX_UPLOAD_BYTES
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / limit)))
 const currentPage = computed(() => Math.floor(offset.value / limit) + 1)
 const isAuthor = computed(() => selected.value?.owner_uuid === currentUserId.value)
-
-const queueStats = computed(() => {
-  const total = uploadQueue.value.length
-  const success = uploadQueue.value.filter((item) => item.status === 'success').length
-  const error = uploadQueue.value.filter((item) => item.status === 'error').length
-  const uploading = uploadQueue.value.filter((item) => item.status === 'uploading').length
-  const pending = uploadQueue.value.filter((item) => item.status === 'pending').length
-  const progressPercent = total > 0 ? Math.round(((success + error) / total) * 100) : 0
-  return { total, success, error, uploading, pending, progressPercent }
-})
 
 function skillTitle(skill: { name: string; display_name?: string | null }): string {
   return skill.display_name || skill.name
@@ -161,104 +132,6 @@ async function doDelete(): Promise<void> {
   }
 }
 
-function openUploadPicker(): void {
-  uploadInput.value?.click()
-}
-
-function addFilesToQueue(files: FileList | null): void {
-  if (!files) return
-  for (let i = 0; i < files.length; i++) {
-    const file = files[i]
-    if (uploadQueue.value.some((item) => item.file.name === file.name && item.file.size === file.size)) {
-      continue
-    }
-    let status: 'pending' | 'error' = 'pending'
-    let error: string | undefined = undefined
-
-    if (!file.name.toLowerCase().endsWith('.zip')) {
-      status = 'error'
-      error = '只允许上传 zip 文件'
-    } else if (file.size > MAX_UPLOAD_ZIP_BYTES) {
-      status = 'error'
-      error = '文件大小不能超过 40MB'
-    }
-
-    uploadQueue.value.push({
-      id: Math.random().toString(36).substring(2, 9),
-      file,
-      status,
-      error,
-    })
-  }
-}
-
-function handleZipUpload(event: Event): void {
-  const input = event.target as HTMLInputElement
-  if (input.files) {
-    addFilesToQueue(input.files)
-  }
-  input.value = ''
-}
-
-async function startBatchUpload(): Promise<void> {
-  if (isBatchUploading.value) return
-  const pendingItems = uploadQueue.value.filter((item) => item.status === 'pending')
-  if (pendingItems.length === 0) return
-
-  isBatchUploading.value = true
-  for (const item of uploadQueue.value) {
-    if (item.status !== 'pending') continue
-    item.status = 'uploading'
-    try {
-      await uploadCommunitySkillZip(item.file)
-      item.status = 'success'
-    } catch (e) {
-      item.status = 'error'
-      item.error = getErrorMessage(e)
-    }
-  }
-  isBatchUploading.value = false
-}
-
-function removeQueueItem(id: string): void {
-  if (isBatchUploading.value) return
-  uploadQueue.value = uploadQueue.value.filter((item) => item.id !== id)
-}
-
-function clearQueue(): void {
-  if (isBatchUploading.value) return
-  uploadQueue.value = []
-}
-
-function closeUploadModal(): void {
-  if (isBatchUploading.value) {
-    if (!confirm('正在上传中，确定要关闭弹窗吗？未完成的上传任务将被取消。')) return
-  }
-  showUploadModal.value = false
-  uploadQueue.value = []
-  void load()
-}
-
-function handleDragOver(e: DragEvent): void {
-  e.preventDefault()
-  if (isBatchUploading.value) return
-  isDragOver.value = true
-}
-
-function handleDragLeave(e: DragEvent): void {
-  e.preventDefault()
-  isDragOver.value = false
-}
-
-function handleDrop(e: DragEvent): void {
-  e.preventDefault()
-  isDragOver.value = false
-  if (isBatchUploading.value) return
-  if (e.dataTransfer?.files) {
-    addFilesToQueue(e.dataTransfer.files)
-  }
-}
-
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
@@ -303,26 +176,6 @@ onMounted(() => {
     <!-- 搜索及上传控制栏 -->
     <div class="relative flex h-14 flex-shrink-0 items-center justify-between px-6 bg-transparent">
       <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center gap-3">
-        <input
-          ref="uploadInput"
-          class="hidden"
-          accept=".zip,application/zip,application/x-zip-compressed"
-          type="file"
-          multiple
-          @change="handleZipUpload"
-        />
-        <!-- 上传 ZIP 圆形按钮 -->
-        <button
-          class="flex h-9 w-9 items-center justify-center rounded-full hover:bg-[#e5e7eb] text-[#4b5563] transition-colors"
-          type="button"
-          title="上传 ZIP"
-          @click="showUploadModal = true"
-        >
-          <svg class="h-5 w-5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-          </svg>
-        </button>
-
         <!-- 居中搜索框 -->
         <div class="relative flex items-center bg-[#e5e7eb]/70 hover:bg-[#e5e7eb] focus-within:bg-white focus-within:ring-2 focus-within:ring-[#9ca3af]/20 transition-all rounded-2xl w-64 h-9">
           <div class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
@@ -379,18 +232,6 @@ onMounted(() => {
       >
         {{ errorMsg }}
       </p>
-      <p
-        v-if="uploadMsg"
-        :class="[
-          'mb-4 rounded-lg border px-3 py-2 text-sm',
-          uploadMsgKind === 'success'
-            ? 'border-[#bbf7d0] bg-[#f0fdf4] text-[#166534]'
-            : 'border-[#efb3a7] bg-[#fff7ed] text-[#9a3412]',
-        ]"
-      >
-        {{ uploadMsg }}
-      </p>
-
       <div v-if="loading" class="py-16 text-center text-sm text-[#9ca3af]">加载中...</div>
       <div v-else-if="skills.length === 0" class="py-16 text-center text-sm text-[#9ca3af]">
         还没有技能，去技能管理页发布第一个吧。
@@ -541,185 +382,5 @@ onMounted(() => {
       </div>
     </Transition>
 
-    <!-- 批量上传 ZIP 弹窗 -->
-    <!-- 批量上传 ZIP 弹窗 -->
-    <Transition name="dialog-fade" appear>
-      <div
-        v-if="showUploadModal"
-        class="fixed inset-0 z-[1000] flex items-center justify-center bg-black/40 backdrop-blur-sm"
-        @click.self="closeUploadModal"
-      >
-        <div class="modal-card flex h-[560px] w-[640px] max-w-[95vw] flex-col rounded-2xl bg-white shadow-xl overflow-hidden">
-          <!-- 头部 -->
-          <div class="flex h-14 flex-shrink-0 items-center justify-between px-5 bg-slate-50/50">
-            <div class="flex items-center gap-2">
-              <span class="font-semibold text-gray-800">批量上传技能 ZIP</span>
-              <span v-if="queueStats.total > 0" class="rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-semibold text-slate-600">
-                已选 {{ queueStats.total }}
-              </span>
-            </div>
-            <button
-              class="flex h-8 w-8 items-center justify-center rounded-full text-gray-400 hover:bg-gray-100 hover:text-gray-700 transition-all duration-200 active:scale-90"
-              type="button"
-              @click="closeUploadModal"
-            >
-              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-
-          <!-- 主体 -->
-          <div class="min-h-0 flex-1 overflow-y-auto p-5 flex flex-col gap-4">
-            <!-- 拖放区域 / 上传区域 -->
-            <div
-              :class="[
-                'flex flex-col items-center justify-center rounded-2xl p-6 text-center cursor-pointer transition-all duration-300 ease-out shadow-[inset_0_2px_4px_rgba(0,0,0,0.02)]',
-                isDragOver
-                  ? 'bg-slate-100/90 scale-[0.98] shadow-[inset_0_2px_4px_rgba(0,0,0,0.06)]'
-                  : 'bg-[#f8fafc] hover:bg-[#f1f5f9]/70 hover:scale-[0.99] hover:shadow-[inset_0_2px_4px_rgba(0,0,0,0.04)]'
-              ]"
-              @dragover="handleDragOver"
-              @dragleave="handleDragLeave"
-              @drop="handleDrop"
-              @click="openUploadPicker"
-            >
-              <div class="flex flex-col items-center gap-2">
-                <div
-                  class="p-3 bg-white rounded-full shadow-sm text-gray-400 transition-transform duration-300"
-                  :class="isDragOver ? 'scale-110 text-slate-600' : ''"
-                >
-                  <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                  </svg>
-                </div>
-                <div>
-                  <span class="text-sm font-medium text-gray-700">点击选择</span>
-                  <span class="text-sm text-gray-500"> 或拖入技能 ZIP 文件到这里</span>
-                </div>
-                <span class="text-xs text-gray-400">每个文件大小限制在 40MB 以内</span>
-              </div>
-            </div>
-
-            <!-- 进度条 -->
-            <div v-if="queueStats.total > 0 && (isBatchUploading || queueStats.success > 0 || queueStats.error > 0)" class="bg-[#f8fafc] rounded-2xl p-4 flex flex-col gap-2.5 shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
-              <div class="flex items-center justify-between text-xs text-gray-500 font-medium">
-                <span>上传进度：{{ queueStats.success + queueStats.error }} / {{ queueStats.total }}</span>
-                <span>{{ queueStats.progressPercent }}%</span>
-              </div>
-              <div class="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
-                <div
-                  class="h-full bg-slate-800 rounded-full transition-all duration-300 ease-out"
-                  :style="{ width: `${queueStats.progressPercent}%` }"
-                />
-              </div>
-              <div class="flex gap-4 text-[10px] text-gray-400 font-medium">
-                <span class="text-emerald-600">成功：{{ queueStats.success }}</span>
-                <span class="text-rose-500">失败：{{ queueStats.error }}</span>
-                <span v-if="queueStats.uploading > 0" class="text-slate-700 font-semibold animate-pulse">正在上传...</span>
-              </div>
-            </div>
-
-            <!-- 文件队列 -->
-            <div v-if="uploadQueue.length > 0" class="flex-1 min-h-0 flex flex-col gap-2">
-              <div class="flex justify-between items-center text-xs text-gray-500 font-medium">
-                <span>文件列表</span>
-                <button
-                  class="text-rose-500 hover:text-rose-600 hover:bg-rose-50/50 active:bg-rose-100/50 px-2 py-1 rounded-lg transition-all disabled:opacity-50 text-[11px] font-medium"
-                  :disabled="isBatchUploading"
-                  type="button"
-                  @click="clearQueue"
-                >
-                  清空队列
-                </button>
-              </div>
-              <div class="flex-1 min-h-0 overflow-y-auto rounded-2xl bg-slate-50/40 p-2 space-y-1.5 shadow-[inset_0_2px_4px_rgba(0,0,0,0.01)]">
-                <div
-                  v-for="item in uploadQueue"
-                  :key="item.id"
-                  :class="[
-                    'flex items-center justify-between py-2.5 px-3 text-xs gap-3 rounded-xl transition-all duration-200 shadow-[0_1px_2px_rgba(0,0,0,0.02)]',
-                    item.status === 'success' ? 'bg-emerald-50/40 text-emerald-800' :
-                    item.status === 'error' ? 'bg-rose-50/40 text-rose-800' :
-                    item.status === 'uploading' ? 'bg-amber-50/60 text-amber-800' :
-                    'bg-white hover:bg-gray-50/80 text-gray-700 hover:shadow-sm'
-                  ]"
-                >
-                  <div class="flex items-center gap-2 min-w-0 flex-1">
-                    <!-- 文件图标 / 状态指示符 -->
-                    <div class="flex-shrink-0">
-                      <svg v-if="item.status === 'pending'" class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                      </svg>
-                      <svg v-else-if="item.status === 'uploading'" class="w-4 h-4 text-amber-500 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.21 7.89" />
-                      </svg>
-                      <svg v-else-if="item.status === 'success'" class="w-4 h-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-                      </svg>
-                      <svg v-else-if="item.status === 'error'" class="w-4 h-4 text-rose-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-                      </svg>
-                    </div>
-                    <span
-                      class="truncate font-medium min-w-0"
-                      :class="item.status === 'success' ? 'text-emerald-900' : item.status === 'error' ? 'text-rose-900' : item.status === 'uploading' ? 'text-amber-900' : 'text-gray-700'"
-                      :title="item.file.name"
-                    >
-                      {{ item.file.name }}
-                    </span>
-                    <span
-                      class="text-[10px] flex-shrink-0 tabular-nums"
-                      :class="item.status === 'success' ? 'text-emerald-600/70' : item.status === 'error' ? 'text-rose-600/70' : item.status === 'uploading' ? 'text-amber-600/70' : 'text-gray-400'"
-                    >
-                      {{ formatBytes(item.file.size) }}
-                    </span>
-                  </div>
-
-                  <div class="flex items-center gap-2 flex-shrink-0">
-                    <span
-                      v-if="item.error"
-                      class="text-[10px] text-rose-600 bg-rose-50/60 rounded-lg px-2 py-0.5 truncate max-w-[150px]"
-                      :title="item.error"
-                    >
-                      {{ item.error }}
-                    </span>
-                    <button
-                      v-if="item.status === 'pending' || item.status === 'error'"
-                      class="p-1.5 text-gray-400 hover:text-rose-600 hover:bg-rose-50/50 rounded-lg transition-colors active:scale-95"
-                      :disabled="isBatchUploading"
-                      type="button"
-                      title="移除"
-                      @click="removeQueueItem(item.id)"
-                    >
-                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                      </svg>
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div v-else class="flex-1 flex flex-col items-center justify-center text-gray-400 text-xs py-10">
-              暂无待上传文件
-            </div>
-          </div>
-
-          <!-- 尾部操作 -->
-          <div class="flex-shrink-0 bg-slate-50/50 px-5 py-3.5 flex justify-end gap-2">
-            <button
-              class="rounded-xl bg-[#1f2937] hover:bg-[#111827] active:scale-[0.98] px-5 py-2.5 text-sm text-white font-semibold transition-all duration-200 disabled:bg-gray-100 disabled:text-gray-400 disabled:pointer-events-none shadow-sm hover:shadow-md flex items-center gap-1.5"
-              :disabled="isBatchUploading || queueStats.pending === 0"
-              type="button"
-              @click="startBatchUpload"
-            >
-              <span v-if="isBatchUploading" class="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-              {{ isBatchUploading ? '正在上传...' : '开始上传' }}
-            </button>
-          </div>
-        </div>
-      </div>
-    </Transition>
   </div>
 </template>
