@@ -20,6 +20,10 @@
   font-family: "Source Han Sans SC", "Noto Sans CJK SC", "Noto Sans SC", sans-serif;
 }
 
+.font-serif-hans {
+  font-family: "Source Han Serif SC", "Noto Serif CJK SC", "Noto Serif SC", serif;
+}
+
 html,
 body,
 #app {

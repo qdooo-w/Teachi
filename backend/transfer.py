@@ -295,7 +295,7 @@ async def upload_library_skill_zip(
             user_uuid=user_uuid,
             name=fields.name,
             display_name=fields.display_name,
-            description=fields.description,
+            description="",  # 不从 SKILL.md 提取，留给作者另行填写
             readme_md=readme_content,
             tags="[]",
             version="1.0.0",

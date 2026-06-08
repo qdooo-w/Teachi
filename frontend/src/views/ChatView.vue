@@ -75,7 +75,19 @@ const currentSession = ref<SessionItem | null>(null)
 const streaming = ref(false)
 const toolStatus = ref('')
 const draft = ref('')
-const messages = ref<DisplayMessage[]>([])
+// 滑动窗口：messageCache 存全量，renderedMessages 按需暴露可见切片
+const messageCache = ref<DisplayMessage[]>([])
+const renderStart = ref(0)          // messageCache 中第一个可见消息的下标
+const FOCUS_WINDOW = 20             // 焦点窗口大小
+const TAIL_ANCHOR = 20              // 底部始终保留条数
+const MAX_RENDER = FOCUS_WINDOW + TAIL_ANCHOR  // 最大 DOM 节点数
+const renderedMessages = computed<DisplayMessage[]>(() => {
+  const total = messageCache.value.length
+  if (total === 0) return []
+  const start = Math.min(renderStart.value, Math.max(0, total - 1))
+  return messageCache.value.slice(start, total)
+})
+// hiddenAboveCount 保留以备后续 spacer 实现：const hiddenAboveCount = computed(() => renderStart.value)
 const PAGE_LIMIT = 20
 const hasMore = ref(true)
 const loadingMore = ref(false)
@@ -562,6 +574,71 @@ async function removePendingAttachment(att: typeof pendingAttachments.value[0]):
   pendingAttachments.value = pendingAttachments.value.filter((item) => item.temp_id !== att.temp_id)
 }
 
+// ── 滑动窗口 ──────────────────────────────────────────────────────────────────
+
+/** 将下标对齐到最近一轮对话的起始（user 消息），不满足时向更早方向移动 */
+function alignToTurnStart(index: number): number {
+  const cache = messageCache.value
+  if (cache.length === 0) return 0
+  let i = Math.min(index, cache.length - 1)
+  // 如果当前位置是 assistant，往前找它的 user
+  if (cache[i]?.role === 'assistant') i = Math.max(0, i - 1)
+  // 确保现在指向 user（或第一条消息）
+  while (i > 0 && cache[i]?.role !== 'user') i--
+  return i
+}
+
+function findTopVisibleIndex(): number {
+  const container = chatContainer.value
+  if (!container) return renderStart.value
+  const containerTop = container.scrollTop
+  for (const el of container.querySelectorAll('[data-msg-index]')) {
+    const htmlEl = el as HTMLElement
+    if (htmlEl.offsetTop + htmlEl.offsetHeight > containerTop) {
+      return parseInt(htmlEl.getAttribute('data-msg-index') || '0')
+    }
+  }
+  return renderStart.value
+}
+
+/** 根据当前滚动位置重新计算渲染窗口，保持滚动锚定，且不对 user/assistant 拆轮 */
+function recalcWindow(): void {
+  const container = chatContainer.value
+  if (!container) return
+  const total = messageCache.value.length
+  if (total === 0) return
+
+  // 处于底部：窗口收束到末尾 MAX_RENDER 条，起始对齐到轮次
+  if (stickToBottom.value) {
+    renderStart.value = alignToTurnStart(Math.max(0, total - MAX_RENDER))
+    return
+  }
+
+  // 用户正在翻阅历史：以当前视口顶部消息为锚点
+  const rawAnchor = findTopVisibleIndex()
+  const halfFocus = Math.floor(FOCUS_WINDOW / 2)
+  let newStart = Math.max(0, rawAnchor - halfFocus)
+  // 不允许裁剪掉尾部锚定区
+  const maxStart = Math.max(0, total - TAIL_ANCHOR - FOCUS_WINDOW)
+  newStart = Math.min(newStart, maxStart)
+  // 对齐到轮次起始（user 消息），避免拆开 user/assistant 对
+  newStart = alignToTurnStart(newStart)
+
+  // 小幅调整不重算
+  if (Math.abs(newStart - renderStart.value) < 2) return
+
+  // 记录锚点以便恢复滚动位置（用对齐后的 start 对应的 user 消息）
+  const anchorIndex = alignToTurnStart(rawAnchor)
+  renderStart.value = newStart
+
+  nextTick(() => {
+    const target = container.querySelector(`[data-msg-index="${anchorIndex}"]`)
+    if (target instanceof HTMLElement) {
+      container.scrollTop = target.offsetTop
+    }
+  })
+}
+
 // ── 工具函数 ──────────────────────────────────────────────────────────────────
 function scrollToBottom(force = false): void {
   if (force) stickToBottom.value = true
@@ -569,6 +646,11 @@ function scrollToBottom(force = false): void {
     const container = chatContainer.value
     if (!container) return
     if (!stickToBottom.value) return
+    // 强制尾部锚定：窗口收束到末尾，起始对齐到轮次
+    const total = messageCache.value.length
+    if (total > MAX_RENDER) {
+      renderStart.value = alignToTurnStart(Math.max(0, total - MAX_RENDER))
+    }
     container.scrollTop = container.scrollHeight
   })
 }
@@ -581,9 +663,17 @@ function isChatAtBottom(): boolean {
 
 function handleChatScroll(): void {
   stickToBottom.value = isChatAtBottom()
-  
+
   const container = chatContainer.value
-  if (container && container.scrollTop <= 15) {
+  if (!container) return
+
+  // 滑动窗口重算（防抖由浏览器 scroll 事件频率自然保证）
+  if (!stickToBottom.value) {
+    recalcWindow()
+  }
+
+  // 触顶加载更多
+  if (container.scrollTop <= 15) {
     void loadMoreMessages()
   }
 }
@@ -614,8 +704,11 @@ async function loadMoreMessages(): Promise<void> {
 
     if (newMsgs.length > 0) {
       // 头部拼接
-      messages.value = [...newMsgs, ...messages.value]
+      const addedCount = newMsgs.length
+      messageCache.value = [...newMsgs, ...messageCache.value]
       currentOffset = nextOffset
+      // 新增的消息全部在最前面，renderStart 同步后移以保持视觉不动
+      renderStart.value += addedCount
 
       // 异步刷新版本地图
       await refreshVersionMap()
@@ -642,9 +735,10 @@ async function loadMessages(init = false): Promise<void> {
   if (init) {
     currentOffset = 0
     hasMore.value = true
+    renderStart.value = 0
   }
 
-  const fetchLimit = init ? PAGE_LIMIT : Math.max(messages.value.length, PAGE_LIMIT)
+  const fetchLimit = init ? PAGE_LIMIT : Math.max(messageCache.value.length, PAGE_LIMIT)
   const [msgs, atts] = await Promise.all([
     listDisplayMessages(currentSession.value.sid, fetchLimit, 0),
     listAttachments(currentSession.value.sid),
@@ -662,8 +756,15 @@ async function loadMessages(init = false): Promise<void> {
     loadAttachmentUrls(atts),
   ])
 
-  messages.value = msgs
+  messageCache.value = msgs
   sessionAttachments.value = atts
+
+  // 刷新后重算窗口：init 时从末尾对齐轮次，否则尽量保持当前位置
+  if (init) {
+    renderStart.value = alignToTurnStart(Math.max(0, msgs.length - MAX_RENDER))
+  } else if (renderStart.value >= msgs.length) {
+    renderStart.value = alignToTurnStart(Math.max(0, msgs.length - MAX_RENDER))
+  }
 
   try {
     const cacheKey = `chat_cache_${currentSession.value.sid}`
@@ -690,7 +791,7 @@ async function loadMessages(init = false): Promise<void> {
 }
 
 async function refreshVersionMap(targetMessages?: DisplayMessage[]): Promise<void> {
-  const msgs = targetMessages || messages.value
+  const msgs = targetMessages || messageCache.value
   // 收集 messages 中出现的所有 anchor，逐个拉取版本快照
   const anchors = new Set<string>()
   for (const m of msgs) {
@@ -741,10 +842,10 @@ async function regenerateMessage(message: DisplayMessage, newPrompt = ''): Promi
   toolStatus.value = ''
 
   // 找到当前活跃的 user 与 assistant：改 PROMPT 时把 user 气泡先乐观更新成新内容
-  const targetUser = messages.value.find(
+  const targetUser = messageCache.value.find(
     (m) => m.anchor_msg_id === anchor && m.role === 'user',
   )
-  const targetAssistant = messages.value.find(
+  const targetAssistant = messageCache.value.find(
     (m) => m.anchor_msg_id === anchor && m.role === 'assistant',
   )
   if (newPrompt && targetUser) {
@@ -818,7 +919,7 @@ function openEditPromptDialog(message: DisplayMessage): void {
 async function handleEditPromptSubmit(text: string): Promise<void> {
   const anchor = editDialogAnchor.value
   if (!anchor) return
-  const target = messages.value.find(
+  const target = messageCache.value.find(
     (m) => m.anchor_msg_id === anchor && m.role === 'user',
   )
   editDialogOpen.value = false
@@ -901,7 +1002,7 @@ function isAbortError(error: unknown): boolean {
 }
 
 function updateMessage(id: string, patch: Partial<DisplayMessage>): void {
-  const message = messages.value.find((item) => item.id === id)
+  const message = messageCache.value.find((item) => item.id === id)
   if (message) Object.assign(message, patch)
 }
 
@@ -958,7 +1059,7 @@ async function sendMessage(): Promise<void> {
   pendingAttachments.value = []
   errorMessage.value = ''
   toolStatus.value = ''
-  messages.value.push(userMessage, assistantMessage)
+  messageCache.value.push(userMessage, assistantMessage)
   streaming.value = true
   inflightUserPrompt.value = rawContent
 
@@ -973,7 +1074,7 @@ async function sendMessage(): Promise<void> {
       content,
       {
         onTextDelta(delta) {
-          const target = messages.value.find((message) => message.id === assistantId)
+          const target = messageCache.value.find((message) => message.id === assistantId)
           if (target) target.content += delta
           scrollToBottom()
         },
@@ -995,7 +1096,7 @@ async function sendMessage(): Promise<void> {
     if (done.error) {
       updateMessage(assistantId, {
         content:
-          messages.value.find((message) => message.id === assistantId)?.content || '生成失败。',
+          messageCache.value.find((message) => message.id === assistantId)?.content || '生成失败。',
       })
       errorMessage.value = done.error_code ? `${done.error_code}: ${done.error}` : done.error
       await loadMessages(false)
@@ -1008,8 +1109,8 @@ async function sendMessage(): Promise<void> {
     updateMessage(assistantId, {
       pending: false,
       content: isAbortError(error)
-        ? messages.value.find((message) => message.id === assistantId)?.content || '已停止生成。'
-        : messages.value.find((message) => message.id === assistantId)?.content || '生成失败。',
+        ? messageCache.value.find((message) => message.id === assistantId)?.content || '已停止生成。'
+        : messageCache.value.find((message) => message.id === assistantId)?.content || '生成失败。',
     })
     if (!isAbortError(error)) errorMessage.value = getErrorMessage(error)
     await loadMessages(false)
@@ -1279,8 +1380,9 @@ async function validateAndLoad(): Promise<void> {
     if (cachedData) {
       const parsed = JSON.parse(cachedData)
       if (parsed && Array.isArray(parsed.messages) && Array.isArray(parsed.attachments)) {
-        messages.value = parsed.messages
+        messageCache.value = parsed.messages
         sessionAttachments.value = parsed.attachments
+        renderStart.value = Math.max(0, parsed.messages.length - MAX_RENDER)
         // 异步加载缓存图片的 Blob URL，使用户能够瞬间看到图片而无卡顿
         void loadAttachmentUrls()
         // 瞬间定位到底部，避免首屏第一条消息跳动
@@ -1405,7 +1507,7 @@ watch(
     <div ref="chatContainer" class="absolute inset-0 overflow-y-auto px-4 pt-16 pb-5 md:px-6" @scroll.passive="handleChatScroll" @load.capture="handleImageLoad">
       <!-- 动态预留空间，使最后一条消息可滚动至浮动 composer 上方而不被永久遮挡 -->
       <div class="mx-auto flex max-w-3xl flex-col gap-5" :style="{ paddingBottom: `${composerHeight}px` }">
-        <div v-for="message in messages" :key="message.id" class="flex w-full flex-col">
+        <div v-for="(message, idx) in renderedMessages" :key="message.id" :data-msg-index="renderStart + idx" class="flex w-full flex-col">
           <div v-if="message.role === 'user'" class="group flex justify-end">
             <div class="flex max-w-[85%] flex-col items-end gap-1.5">
               <div v-if="getMessageImages(message).length > 0" class="flex flex-col gap-1.5 items-end">

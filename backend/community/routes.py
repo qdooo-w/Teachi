@@ -14,6 +14,7 @@ from backend.config import (
     PAGE_DEFAULT_LIMIT,
     PAGE_MAX_LIMIT,
     SORT_DEFAULT,
+    CommunitySkillSort,
 )
 from backend.community.utils import (
     resolve_db as _resolve_db,
@@ -48,7 +49,7 @@ class CommunitySkillListResponse(BaseModel):
     total: int
     limit: int
     offset: int
-    sort: Literal["popular", "newest"]
+    sort: CommunitySkillSort
 
 class InstallSkillRequest(BaseModel):
     target: Literal["user", "project", "library"] = "user"
@@ -138,16 +139,17 @@ def get_community_leaderboard(
 @router.get("/skills", response_model=CommunitySkillListResponse)
 def list_community_skills(
     keyword: str | None = Query(None, max_length=200),
-    tag: str | None = Query(None, max_length=50),
+    tag: list[str] = Query(default=[], max_length=50),
     limit: int = Query(PAGE_DEFAULT_LIMIT, ge=1, le=PAGE_MAX_LIMIT),
     offset: int = Query(0, ge=0),
-    sort: Literal["popular", "newest"] = Query(SORT_DEFAULT),
+    sort: CommunitySkillSort = Query(SORT_DEFAULT),
     _user: dict[str, Any] = Depends(get_current_user),
     db: DatabaseFacade = Depends(get_db),
 ):
     db = _resolve_db(db)
-    skills = db.community.list_skills(keyword=keyword, tag=tag, limit=limit, offset=offset, sort=sort)
-    total = db.community.count_skills(keyword=keyword, tag=tag)
+    tags = tag if tag else None
+    skills = db.community.list_skills(keyword=keyword, tags=tags, limit=limit, offset=offset, sort=sort)
+    total = db.community.count_skills(keyword=keyword, tags=tags)
     return CommunitySkillListResponse(
         skills=[_to_summary(s) for s in skills],
         total=total,
@@ -300,11 +302,11 @@ def list_comments(
     parent_id: str | None = Query(None),
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
-    _user: dict[str, Any] = Depends(get_current_user),
+    current_user: dict[str, Any] = Depends(get_current_user),
     db: DatabaseFacade = Depends(get_db),
 ):
     db = _resolve_db(db)
-    return db.community.list_comments(skill_id, parent_id, limit, offset)
+    return db.community.list_comments(skill_id, parent_id, limit, offset, current_user_uuid=current_user["uuid"])
 
 @router.post("/skills/{skill_id}/comments")
 def create_comment(

@@ -1101,32 +1101,40 @@ class CommunitySkillsFacade(_DataBase):
         self,
         *,
         keyword: str | None = None,
-        tag: str | None = None,
+        tags: list[str] | None = None,
         limit: int = 20,
         offset: int = 0,
         sort: str = "popular",
     ) -> list[dict]:
-        order_clause = "ORDER BY s.created_at DESC" if sort == "newest" else "ORDER BY s.downloads DESC, s.created_at DESC"
+        if sort == "newest":
+            order_clause = "ORDER BY s.created_at DESC"
+        elif sort == "most_liked":
+            order_clause = "ORDER BY s.likes DESC, s.created_at DESC"
+        else:
+            order_clause = "ORDER BY s.downloads DESC, s.created_at DESC"
         params: list = []
         where_parts: list = ["v.status = 'APPROVED'"]
-        
+        tag_joins: list[str] = []
+
         if keyword:
             like = f"%{keyword.strip()}%"
             where_parts.append("(s.name LIKE ? OR s.display_name LIKE ? OR s.description LIKE ?)")
             params.extend([like, like, like])
-            
-        if tag:
-            where_parts.append("json_each.value = ?")
-            params.append(tag)
-            
+
+        if tags:
+            for i, t in enumerate(tags):
+                alias = f"t{i}"
+                tag_joins.append(f"JOIN json_each(v.tags) AS {alias} ON {alias}.value = ?")
+                params.append(t.strip())
+
         where_clause = f"WHERE {' AND '.join(where_parts)}"
-        tag_join = ", json_each(v.tags)" if tag else ""
-        
+        tag_join_str = " ".join(tag_joins)
+
         sql = f"""
-            SELECT s.*, v.version, v.tags, v.size_bytes 
+            SELECT s.*, v.version, v.tags, v.size_bytes
             FROM community_skills s
             JOIN community_skill_versions v ON s.id = v.skill_id
-            {tag_join}
+            {tag_join_str}
             {where_clause}
             GROUP BY s.id
             {order_clause}
@@ -1138,25 +1146,29 @@ class CommunitySkillsFacade(_DataBase):
             cursor.execute(sql, params)
             return [dict(row) for row in cursor.fetchall()]
 
-    def count_skills(self, *, keyword: str | None = None, tag: str | None = None) -> int:
+    def count_skills(self, *, keyword: str | None = None, tags: list[str] | None = None) -> int:
         params: list = []
         where_parts: list = ["v.status = 'APPROVED'"]
+        tag_joins: list[str] = []
+
         if keyword:
             like = f"%{keyword.strip()}%"
             where_parts.append("(s.name LIKE ? OR s.display_name LIKE ? OR s.description LIKE ?)")
             params.extend([like, like, like])
-        if tag:
-            where_parts.append("json_each.value = ?")
-            params.append(tag)
+        if tags:
+            for i, t in enumerate(tags):
+                alias = f"t{i}"
+                tag_joins.append(f"JOIN json_each(v.tags) AS {alias} ON {alias}.value = ?")
+                params.append(t.strip())
 
         where_clause = f"WHERE {' AND '.join(where_parts)}"
-        tag_join = ", json_each(v.tags)" if tag else ""
+        tag_join_str = " ".join(tag_joins)
 
         sql = f"""
             SELECT COUNT(DISTINCT s.id) AS total
             FROM community_skills s
             JOIN community_skill_versions v ON s.id = v.skill_id
-            {tag_join}
+            {tag_join_str}
             {where_clause}
         """
         with self._cursor() as cursor:
@@ -1228,7 +1240,13 @@ class CommunitySkillsFacade(_DataBase):
                 """,
                 (comment_id, skill_id, user_uuid, content, parent_id, depth, reply_to_uuid, now_ts, now_ts)
             )
-            cursor.execute("SELECT * FROM community_skill_comments WHERE id = ?", (comment_id,))
+            cursor.execute(
+                """SELECT c.*, u.username
+                   FROM community_skill_comments c
+                   LEFT JOIN users u ON c.user_uuid = u.uuid
+                   WHERE c.id = ?""",
+                (comment_id,),
+            )
             return self._row_to_dict(cursor.fetchone())
 
     def create_report(self, *, report_id: str, comment_id: str, reporter_uuid: str, reason: str, detail: str = "") -> dict:
@@ -1360,12 +1378,25 @@ class CommunitySkillsFacade(_DataBase):
             )
             return cursor.rowcount > 0
 
-    def list_comments(self, skill_id: str, parent_id: str | None = None, limit: int = 50, offset: int = 0) -> list[dict]:
+    def list_comments(self, skill_id: str, parent_id: str | None = None, limit: int = 50, offset: int = 0, *, current_user_uuid: str | None = None) -> list[dict]:
         with self._cursor() as cursor:
+            base = """SELECT c.*, u.username,
+                             ru.username AS reply_to_username,
+                             CASE WHEN cl.user_uuid IS NOT NULL THEN 1 ELSE 0 END AS liked_by_me
+                      FROM community_skill_comments c
+                      LEFT JOIN users u ON c.user_uuid = u.uuid
+                      LEFT JOIN users ru ON c.reply_to_uuid = ru.uuid
+                      LEFT JOIN community_comment_likes cl ON cl.comment_id = c.id AND cl.user_uuid = ?"""
             if parent_id:
-                cursor.execute("SELECT * FROM community_skill_comments WHERE skill_id = ? AND parent_id = ? ORDER BY created_at ASC LIMIT ? OFFSET ?", (skill_id, parent_id, limit, offset))
+                cursor.execute(
+                    base + " WHERE c.skill_id = ? AND c.parent_id = ? ORDER BY c.created_at ASC LIMIT ? OFFSET ?",
+                    (current_user_uuid, skill_id, parent_id, limit, offset),
+                )
             else:
-                cursor.execute("SELECT * FROM community_skill_comments WHERE skill_id = ? AND parent_id IS NULL ORDER BY created_at DESC LIMIT ? OFFSET ?", (skill_id, limit, offset))
+                cursor.execute(
+                    base + " WHERE c.skill_id = ? AND c.parent_id IS NULL ORDER BY c.created_at DESC LIMIT ? OFFSET ?",
+                    (current_user_uuid, skill_id, limit, offset),
+                )
             return [dict(row) for row in cursor.fetchall()]
 
     def delete_comment(self, comment_id: str, user_uuid: str, *, is_admin: bool = False) -> bool:

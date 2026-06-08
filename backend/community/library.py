@@ -172,7 +172,7 @@ def collect_skill_to_library(
 
     # 从模板继承元数据，无模板时使用默认值
     display_name = template["display_name"] if template else fields.display_name
-    description = template["description"] if template else fields.description
+    description = template["description"] if template else ""  # 不从 SKILL.md 提取，留给作者另行填写
     readme_md = template["readme_md"] if template else (fields.body if fields.body else "")
     tags = template["tags"] if template else "[]"
 

@@ -28,6 +28,7 @@ PAGE_DEFAULT_LIMIT = _community.PAGE_DEFAULT_LIMIT
 PAGE_MAX_LIMIT = _community.PAGE_MAX_LIMIT
 SORT_DEFAULT = _community.SORT_DEFAULT
 SORTS = _community.SORTS
+CommunitySkillSort = _community.CommunitySkillSort
 
 LOOP_MAX_RETRIES = _loop.LOOP_MAX_RETRIES
 
@@ -106,5 +107,6 @@ __all__ = [
     "SKILL_ZIP_RESOURCE_DIR_ALIASES",
     "SORT_DEFAULT",
     "SORTS",
+    "CommunitySkillSort",
     "validate_skill_name",
 ]

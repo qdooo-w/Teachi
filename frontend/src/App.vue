@@ -636,7 +636,7 @@ watch(
               type="button"
               @click="closeSidebarOnMobile(); router.push({ name: 'overview' })"
             >
-              <svg viewBox="0 0 1323.48 135.75" class="mx-auto h-4 w-auto text-[#1f2937] transition-colors duration-200" fill="currentColor" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+              <svg viewBox="0 0 1323.48 135.75" class="mx-auto h-8 w-auto max-w-[160px] text-[#1f2937] transition-colors duration-200" fill="currentColor" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
                 <g>
                   <polygon points="1279.68 40.08 1232.46 87.28 1185.25 135.43 1131.31 135.41 1193.93 72.76 1267.42 .83 1323.47 .8 1323.48 135.55 1279.92 135.6 1279.68 40.08"/>
                   <polygon points="451.56 40.12 361.23 135.37 306.24 135.42 368.3 71.12 435.62 .77 493.41 .76 493.42 135.55 451.82 135.64 451.56 40.12"/>
@@ -670,11 +670,11 @@ watch(
             <svg class="h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
             </svg>
-            <span class="text-xs whitespace-nowrap">技能社区</span>
+            <span class="text-xs whitespace-nowrap font-hans">技能社区</span>
           </button>
 
           <div class="no-scrollbar flex-1 overflow-y-auto">
-            <div class="mb-2 pl-4 text-xs font-medium text-[#6b7280]">我的科目</div>
+            <div class="mb-2 pl-4 text-xs font-medium text-[#6b7280] font-serif-hans">我的科目</div>
             <div class="flex flex-col gap-1">
               <div
                 v-for="project in previewProjects"
@@ -725,7 +725,7 @@ watch(
               <!-- 最近会话列表 -->
               <template v-if="recentSessions.length > 0">
                 <div class="mx-4 my-2 border-t border-[#e5e7eb]/60" />
-                <div class="mb-2 pl-4 text-xs font-medium text-[#6b7280]">最近会话</div>
+                <div class="mb-2 pl-4 text-xs font-medium text-[#6b7280] font-serif-hans">最近会话</div>
                 <div class="flex flex-col gap-1">
                   <div
                     v-for="session in recentSessions"
@@ -874,8 +874,9 @@ watch(
               </svg>
             </button>
             
-            <!-- Skills 管理：整合为统一的单一按钮 -->
+            <!-- Skills 管理：整合为统一的单一按钮（概览页隐藏） -->
             <button
+              v-if="$route.name !== 'overview' && $route.name !== 'community'"
               class="flex h-8 items-center gap-1 rounded-full border border-[#d1d5db] bg-white px-3 text-xs font-semibold text-[#4b5563] transition-all duration-200 hover:bg-[#e5e7eb] active:scale-95"
               type="button"
               title="管理您的技能"
