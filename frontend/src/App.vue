@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import SkillManagerDialog from './components/SkillManagerDialog.vue'
+import ChatSkillSidebar from './components/ChatSkillSidebar.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
 import UserProfileDialog from './components/UserProfileDialog.vue'
 import RowMenu from './components/RowMenu.vue'
@@ -24,6 +25,7 @@ import { useProjects } from './composables/useProjects'
 import { useLayout } from './composables/useLayout'
 import { useProjectSkills } from './composables/useProjectSkills'
 import { useUserSkills } from './composables/useUserSkills'
+import { useChatSkillSidebar } from './composables/useChatSkillSidebar'
 import { PREVIEW_PROJECT_LIMIT, API_BASE_URL } from './config'
 import { useNotification } from './composables/useNotification'
 
@@ -148,6 +150,7 @@ watch(route, (to, from) => {
 
 const { projects, loadProjects, resetProjects, upsertProject, removeProject } = useProjects()
 const { sidebarOpen, isMobile, handleResize, closeSidebarOnMobile } = useLayout()
+const { chatSidebarOpen, editingSkill, toggleSidebar: toggleChatSidebar, closeEditor } = useChatSkillSidebar()
 
 // ── 全局捕获滚动，用于检测任何滚动区域是否向下滚动，控制顶栏半透明背景显隐 ───
 const hasScrolled = ref(false)
@@ -635,7 +638,13 @@ watch(
             : '-translate-x-full overflow-hidden border-none md:w-0 md:translate-x-0',
         ]"
       >
-        <div class="flex h-full w-56 flex-shrink-0 flex-col px-2.5 py-4">
+        <div
+          :class="[
+            'flex h-full w-56 flex-shrink-0 flex-col px-2.5 py-4',
+            'transition-opacity duration-150',
+            sidebarOpen ? 'opacity-100 delay-100' : 'opacity-0',
+          ]"
+        >
           <div class="mb-5 mt-2 flex items-center justify-center gap-2 px-2">
             <button
               class="flex items-center gap-1 text-left"
@@ -840,9 +849,11 @@ watch(
           <div
             class="flex min-w-0 items-center gap-3 overflow-hidden pointer-events-auto px-3 py-1 rounded-full transition-all duration-300 scale-90 origin-left"
             :class="[
-              hasScrolled || isMobile
-                ? 'bg-white/80 backdrop-blur-md border border-[#e5e7eb] shadow-sm'
-                : 'bg-transparent border border-transparent'
+              editingSkill
+                ? 'bg-transparent border border-transparent'
+                : hasScrolled || isMobile
+                  ? 'bg-white/80 backdrop-blur-md border border-[#e5e7eb] shadow-sm'
+                  : 'bg-transparent border border-transparent'
             ]"
           >
             <button
@@ -878,56 +889,6 @@ watch(
               </template>
             </div>
           </div>
-
-          <div
-            class="flex items-center gap-1.5 pointer-events-auto p-1 rounded-full transition-all duration-300 scale-90 origin-right"
-            :class="[
-              hasScrolled || isMobile
-                ? 'bg-white/80 backdrop-blur-md border border-[#e5e7eb] shadow-sm'
-                : 'bg-transparent border border-transparent'
-            ]"
-          >
-            <!-- 新建对话：仅保留一个加号 -->
-            <button
-              v-if="$route.name === 'chat'"
-              class="flex h-8 w-8 items-center justify-center rounded-full border border-[#d1d5db] bg-white text-[#4b5563] transition-all duration-200 hover:bg-[#e5e7eb] active:scale-95"
-              type="button"
-              title="新建对话"
-              @click="router.push({ name: 'subject', params: { pid: $route.params.pid } })"
-            >
-              <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-              </svg>
-            </button>
-            
-            <!-- 我的仓库：概览/社区页可见 -->
-            <button
-              v-if="$route.name === 'overview' || $route.name === 'community'"
-              class="flex h-8 items-center gap-1 rounded-full border border-[#d1d5db] bg-white px-3 text-xs font-semibold text-[#4b5563] transition-all duration-200 hover:bg-[#e5e7eb] active:scale-95"
-              type="button"
-              title="我的仓库"
-              @click="router.push({ name: 'library' })"
-            >
-              <svg class="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-6 4h4" />
-              </svg>
-              <span>仓库</span>
-            </button>
-
-            <!-- Skills 管理：整合为统一的单一按钮（概览页隐藏） -->
-            <button
-              v-if="$route.name !== 'overview' && $route.name !== 'community' && $route.name !== 'library'"
-              class="flex h-8 items-center gap-1 rounded-full border border-[#d1d5db] bg-white px-3 text-xs font-semibold text-[#4b5563] transition-all duration-200 hover:bg-[#e5e7eb] active:scale-95"
-              type="button"
-              title="管理您的技能"
-              @click="projectSkillSpace ? (showProjectSkillManager = true) : (showUserSkillManager = true)"
-            >
-              <svg class="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
-              </svg>
-              <span>Skills</span>
-            </button>
-          </div>
         </header>
         <!-- 全局错误提示已移至顶栏下方悬浮显示 -->
 
@@ -951,6 +912,60 @@ watch(
 
         </div>
       </section>
+
+      <!-- 会话技能侧边栏（仅 chat/subject 路由生效） -->
+      <ChatSkillSidebar v-if="$route.name === 'chat' || $route.name === 'subject'" />
+
+      <!-- 右上角固定按钮组（z-index 高于侧边栏） -->
+      <div v-if="$route.name === 'chat' || $route.name === 'subject'" class="fixed top-3 right-4 z-50 flex items-center gap-1.5">
+        <!-- 关闭技能编辑按钮（仅聊天页编辑时显示） -->
+        <button
+          v-if="editingSkill && $route.name === 'chat'"
+          class="flex h-8 w-8 items-center justify-center rounded-full border border-[#d1d5db] bg-white text-[#4b5563] transition-all duration-200 hover:bg-[#e5e7eb] active:scale-95"
+          type="button"
+          title="关闭编辑"
+          @click="closeEditor"
+        >
+          <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
+            <path d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+
+        <!-- 技能侧边栏切换按钮 -->
+        <button
+          class="flex h-8 w-8 items-center justify-center rounded-full border border-[#d1d5db] bg-white text-[#4b5563] transition-all duration-200 hover:bg-[#e5e7eb] active:scale-95"
+          type="button"
+          :title="chatSidebarOpen ? '收起技能面板' : '展开技能面板'"
+          @click="toggleChatSidebar"
+        >
+          <svg
+            class="h-4 w-4 transition-transform duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)]"
+            :class="chatSidebarOpen ? 'rotate-180' : 'rotate-0'"
+            aria-hidden="true"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            viewBox="0 0 24 24"
+          >
+            <path d="M15 18l-6-6 6-6" />
+          </svg>
+        </button>
+
+        <!-- 新建对话按钮（仅聊天页显示） -->
+        <button
+          v-if="$route.name === 'chat'"
+          class="flex h-8 w-8 items-center justify-center rounded-full border border-[#d1d5db] bg-white text-[#4b5563] transition-all duration-200 hover:bg-[#e5e7eb] active:scale-95"
+          type="button"
+          title="新建对话"
+          @click="router.push({ name: 'subject', params: { pid: $route.params.pid } })"
+        >
+          <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+          </svg>
+        </button>
+      </div>
     </section>
 
     <Transition name="dialog-fade" appear>

@@ -259,14 +259,13 @@ watch(keyword, () => {
       <!-- 上传 ZIP -->
       <div class="ml-auto">
         <button
-          class="flex h-8 items-center gap-1.5 rounded-full border border-[#d1d5db] bg-white px-3 text-xs font-semibold text-[#4b5563] transition-all duration-200 hover:bg-[#e5e7eb] active:scale-95"
+          class="flex h-8 w-8 items-center justify-center rounded-full bg-[#1f2937] text-white transition-all duration-200 hover:bg-[#111827] active:scale-95"
           type="button"
           @click="showUploadDialog = true"
         >
-          <svg class="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+          <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 16V4m0 0L8 8m4-4l4 4M4 18h16" />
           </svg>
-          <span>上传 ZIP</span>
         </button>
       </div>
     </div>

@@ -8,6 +8,7 @@ import EditPromptDialog from '../components/EditPromptDialog.vue'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
 import MediaPreviewDialog from '../components/MediaPreviewDialog.vue'
 import WindowManager from '../components/WindowManager.vue'
+import SkillEditorPanel from '../components/SkillEditorPanel.vue'
 import {
   deleteTurn,
   getErrorMessage,
@@ -35,6 +36,7 @@ import { useProjects } from '../composables/useProjects'
 import { useProjectSkills } from '../composables/useProjectSkills'
 import { useUserSkills } from '../composables/useUserSkills'
 import { usePreferences } from '../composables/usePreferences'
+import { useChatSkillSidebar } from '../composables/useChatSkillSidebar'
 import {
   CHAT_ATTACHMENT_MAX_BYTES,
   CHAT_COMPOSER_MAX_HEIGHT,
@@ -51,6 +53,7 @@ const route = useRoute()
 const router = useRouter()
 const { projects, loadProjects } = useProjects()
 const { preparing } = useAuth()
+const { editingSkill, closeEditor } = useChatSkillSidebar()
 
 import { useNotification } from '../composables/useNotification'
 const errorMessage = ref('')
@@ -1470,6 +1473,8 @@ onBeforeRouteLeave(() => {
 
 onBeforeRouteUpdate(() => {
   messagesLoaded.value = false
+  // 切换会话时关闭技能编辑框，避免状态残留到新会话
+  closeEditor()
 })
 
 watch(draft, () => { nextTick(autosizeComposer) })
@@ -1502,7 +1507,17 @@ watch(
 </script>
 
 <template>
-  <div class="absolute inset-0">
+  <!-- 技能内联编辑器 / 聊天内容切换（带滑入滑出动画） -->
+  <Transition name="skill-editor" mode="out-in">
+    <SkillEditorPanel
+      v-if="editingSkill"
+      key="editor"
+      :space="editingSkill.space"
+      :skill-name="editingSkill.name"
+      :display-name="editingSkill.displayName"
+      @close="closeEditor"
+    />
+    <div v-else key="chat" class="absolute inset-0">
     <!-- 消息滚动区铺满整个区域，消息可滚动到浮动 composer 之下（composer 叠在其上层） -->
     <div ref="chatContainer" class="absolute inset-0 overflow-y-auto px-4 pt-16 pb-5 md:px-6" @scroll.passive="handleChatScroll" @load.capture="handleImageLoad">
       <!-- 动态预留空间，使最后一条消息可滚动至浮动 composer 上方而不被永久遮挡 -->
@@ -1872,4 +1887,23 @@ watch(
       @update-rect="(rect) => updatePreviewRect(preview.id, rect)"
     />
   </div>
+  </Transition>
 </template>
+
+<style>
+/* 技能编辑器滑入/滑出动画：从左侧展开，向右收缩 */
+.skill-editor-enter-active {
+  transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.25s ease;
+}
+.skill-editor-leave-active {
+  transition: transform 0.25s cubic-bezier(0.4, 0, 1, 1), opacity 0.2s ease;
+}
+.skill-editor-enter-from {
+  transform: translateX(-100%);
+  opacity: 0;
+}
+.skill-editor-leave-to {
+  transform: translateX(100%);
+  opacity: 0;
+}
+</style>

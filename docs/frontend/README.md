@@ -34,9 +34,10 @@ frontend/
    │  ├─ useAuth.ts         token / bootstrapping / preparing / 登录 / 登出 / onTokenReady 钩子
    │  ├─ useCommunity.ts    社区搜索词、触发搜索、上传弹层状态（模块级单例）
    │  ├─ useLayout.ts       sidebarOpen / isMobile / handleResize / closeSidebarOnMobile
-   │  ├─ usePreferences.ts  发送键偏好（enter_mode）模块级单例，跨 SettingsDialog / ChatView 共享
-   │  ├─ useProjects.ts     模块级 projects 单例 + load/upsert/remove/prepend/reset，loadProjects 去重并发
-   │  └─ useProjectSkills.ts 每个 pid 的技能列表缓存 + refresh，跨 App.vue / ChatView 共享
+   │  ├─ usePreferences.ts      发送键偏好（enter_mode）模块级单例，跨 SettingsDialog / ChatView 共享
+   │  ├─ useProjects.ts         模块级 projects 单例 + load/upsert/remove/prepend/reset，loadProjects 去重并发
+   │  ├─ useProjectSkills.ts    每个 pid 的技能列表缓存 + refresh，跨 App.vue / ChatView 共享
+   │  └─ useChatSkillSidebar.ts 聊天页内联编辑状态单例（chatSidebarOpen / editingSkill），跨 App / ChatView / ChatSkillSidebar 共享
    ├─ views/
    │  ├─ OverviewView.vue   `/`：科目卡片总览 + 新建科目
    │  ├─ SubjectView.vue    `/projects/:pid`：该科目会话列表 + 首条消息创建会话
@@ -52,7 +53,9 @@ frontend/
    │  ├─ SettingsDialog.vue        设置中心对话框（模型配置、账号设置、偏好设置）
    │  ├─ SkillChips.vue            已选技能的 chip 行（发送时随消息带走）
    │  ├─ SkillManagerDialog.vue    用户级 / 项目级技能管理对话框（结构化表单 + 原始兜底）
-   │  └─ SkillPicker.vue           @ 触发的技能下拉选择器，支持搜索与键盘导航
+   │  ├─ SkillPicker.vue           @ 触发的技能下拉选择器，支持搜索与键盘导航
+   │  ├─ ChatSkillSidebar.vue      聊天页内联技能侧边栏（用户级 + 项目级技能列表）
+   │  └─ SkillEditorPanel.vue      技能内联编辑面板（文件树 + 结构化表单 / Markdown 编辑）
    └─ markdown/
       ├─ renderer.ts       markdown-it 单例 + KaTeX + 代码块 / 链接 / mermaid 自定义渲染 + DOMPurify
       ├─ highlight.ts      highlight.js 按需注册语言
@@ -75,10 +78,13 @@ main.ts
     ├─ skills.ts                     ── 依赖 api.ts 的通用文件 API
     └─ <RouterView>
         ├─ views/OverviewView.vue    ── useProjects / useLayout + Row/Rename/Confirm
-        ├─ views/SubjectView.vue     ── useProjects / useLayout + listSessions/createSession/...
+        ├─ views/SubjectView.vue     ── useProjects / useLayout + useChatSkillSidebar(editingSkill / closeEditor)
+                                       + SkillEditorPanel(内联编辑) + listSessions/createSession/...
         ├─ views/ChatView.vue        ── useAuth(preparing) + useProjects + usePreferences
+                                       + useChatSkillSidebar(editingSkill / closeEditor)
                                        + listSessions + sendChatMessage/stopChatGeneration
-                                       + SkillPicker/Chips + MediaPreviewDialog
+                                       + SkillPicker/Chips + SkillEditorPanel(内联编辑)
+                                       + MediaPreviewDialog
         └─ views/CommunityView.vue   ── useCommunity + 社区 skill 列表 / ZIP 上传 / 详情 / 安装 / 作者删除
 ```
 
@@ -102,6 +108,7 @@ main.ts
 - SubjectView 创建首条消息时跳转到 `/projects/:pid/sessions/:sid?initial=<text>`，ChatView 挂载后消费 `initial`、调 `router.replace` 去掉 query 再发送
 - `document.title` 由 `router.afterEach`（静态）+ SubjectView / ChatView 的 watcher（动态）合力设置
 - `App.vue` 的面包屑和 header 按钮按 `$route.name` 分支显示；项目技能按钮在 `route.params.pid` 存在时显示（subject 与 chat 两个视图都可用）
+- 右上角固定按钮组在 chat / subject 路由下均显示：技能侧边栏切换按钮（两个路由都可用）、关闭编辑按钮和新建对话按钮（仅 chat 路由可用）
 - 侧边栏标题区有「社区」入口，跳转到 `/community`
 
 ## 已完成的功能
@@ -186,6 +193,38 @@ type FileSpace =
 ```
 
 对应后端路径 `/users/{user_id}/files` 或 `/projects/{pid}/files`。
+
+### 5.5 聊天页内联技能编辑（ChatSkillSidebar + SkillEditorPanel）
+
+聊天页提供侧边栏 + 内联编辑器，无需离开会话即可快速查看和编辑技能。
+
+**状态管理**：`useChatSkillSidebar.ts` 模块级单例，维护 `chatSidebarOpen`（侧边栏开关）和 `editingSkill`（当前编辑的技能信息）。跨 App.vue / ChatView.vue / ChatSkillSidebar.vue 三个组件共享。
+
+**交互流程**：
+
+1. **打开侧边栏**：App.vue 顶栏右侧箭头按钮（chat / subject 路由均可用）→ `toggleSidebar()` → `ChatSkillSidebar` 从左侧推挤展开（`w-0` ↔ `w-[260px]`，300ms 过渡）
+2. **选择技能**：侧边栏展示用户级 / 项目级技能列表 → 点击某技能 → `openEditor(space, name, displayName)` → 设置 `editingSkill`
+3. **渲染编辑器**：ChatView / SubjectView 检测到 `editingSkill` 非 null → 渲染 `SkillEditorPanel`（带滑入动画），同时隐藏聊天/科目内容
+4. **关闭编辑器**：App.vue 顶栏 X 按钮（仅 chat 路由显示）→ 直接调用 `closeEditor()` → 内容滑回（带滑出动画）
+5. **切换会话自动关闭**：`onBeforeRouteUpdate` 钩子中调用 `closeEditor()`，确保切换会话时编辑状态不会残留
+
+**SkillEditorPanel 功能**：
+
+- 文件树浏览（与 SkillManagerDialog 共享逻辑）
+- SKILL.md 结构化表单编辑 / 其它文件 Markdown 或原始文本编辑
+- 新建文件 / 删除文件
+- 未保存修改检测（dirty 状态）+ 关闭前确认弹窗
+- Ctrl/Cmd+S 快捷保存
+- 无独立标题栏，关闭按钮统一由 App.vue 顶栏提供
+
+**动画效果**：
+
+| 动画 | 实现方式 | 时长 |
+|------|---------|------|
+| 侧边栏推挤展开/收起 | CSS `transition-all` + 宽度切换 | 300ms |
+| 编辑器从左侧滑入 | `<Transition name="skill-editor">` + `translateX(-100%→0)` | 300ms enter / 250ms leave |
+| 编辑器向右滑出 | 同上 + `translateX(0→100%)` | 250ms leave |
+| 聊天内容淡入 | Transition `mode="out-in"` 自动处理 | 与编辑器互补 |
 
 ### 6. 社区技能广场
 
