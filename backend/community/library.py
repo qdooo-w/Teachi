@@ -57,6 +57,17 @@ class InstallFromLibraryRequest(BaseModel):
     target: Literal["user", "project"] = "user"
     pid: str | None = None
 
+
+LibrarySkillSort = Literal["newest", "oldest", "name-asc", "name-desc"]
+
+
+class LibrarySkillListResponse(BaseModel):
+    skills: list[dict]
+    total: int
+    limit: int
+    offset: int
+    sort: str
+
 @router.get("/skills/parse-runtime")
 def parse_runtime_skill(
     skill_name: str,
@@ -205,11 +216,35 @@ def collect_skill_to_library(
 
 @router.get("/skills")
 def list_library_skills(
+    keyword: str | None = Query(None, max_length=200, description="搜索关键词（匹配名称/显示名/描述）"),
+    tag: list[str] = Query(default=[], max_length=50, description="标签筛选（可多选，AND 逻辑）"),
+    sort: LibrarySkillSort = Query("newest", description="排序方式"),
+    limit: int = Query(20, ge=1, le=100, description="每页数量"),
+    offset: int = Query(0, ge=0, description="起始偏移"),
     current_user: dict[str, Any] = Depends(get_current_user),
     db: DatabaseFacade = Depends(get_db),
 ):
+    """获取当前用户仓库技能列表，支持关键词/标签筛选、排序与分页"""
     db = _resolve_db(db)
-    return db.library.list_by_user(current_user["uuid"])
+    user_uuid = current_user["uuid"]
+
+    skills = db.library.list_by_user_filtered(
+        user_uuid=user_uuid,
+        keyword=keyword,
+        tags=tag if tag else None,
+        sort=sort,
+        limit=limit,
+        offset=offset,
+    )
+    total = db.library.count_by_user(user_uuid=user_uuid, keyword=keyword, tags=tag if tag else None)
+
+    return {
+        "skills": skills,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "sort": sort,
+    }
 
 @router.post("/skills/{library_id}/publish", dependencies=[Depends(verify_nonce)])
 def publish_from_library(

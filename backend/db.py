@@ -1505,11 +1505,74 @@ class UserLibrarySkillsFacade(_DataBase):
             )
             return self._row_to_dict(cursor.fetchone())
 
-    def list_by_user(self, user_uuid: str) -> list[dict]:
-        """获取该用户个人仓库下的所有技能列表"""
+    def list_by_user_filtered(
+        self,
+        user_uuid: str,
+        *,
+        keyword: str | None = None,
+        tags: list[str] | None = None,
+        sort: str = "newest",
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[dict]:
+        """获取用户仓库技能列表，支持关键词/标签筛选、排序与分页"""
+        where_clauses = ["user_uuid = ?"]
+        params: list[Any] = [user_uuid]
+
+        if keyword:
+            kw = f"%{keyword}%"
+            where_clauses.append("(name LIKE ? OR display_name LIKE ? OR description LIKE ?)")
+            params.extend([kw, kw, kw])
+
+        if tags:
+            for tag in tags:
+                where_clauses.append("tags LIKE ?")
+                params.append(f'%"{tag}"%')
+
+        where_sql = " AND ".join(where_clauses)
+
+        sort_map = {
+            "newest": "created_at DESC",
+            "oldest": "created_at ASC",
+            "name-asc": "name COLLATE NOCASE ASC",
+            "name-desc": "name COLLATE NOCASE DESC",
+        }
+        order_sql = sort_map.get(sort, "created_at DESC")
+
         with self._cursor() as cursor:
-            cursor.execute("SELECT * FROM user_library_skills WHERE user_uuid = ? ORDER BY created_at DESC", (user_uuid,))
+            cursor.execute(
+                f"SELECT * FROM user_library_skills WHERE {where_sql} ORDER BY {order_sql} LIMIT ? OFFSET ?",
+                params + [limit, offset],
+            )
             return [dict(row) for row in cursor.fetchall()]
+
+    def count_by_user(
+        self,
+        user_uuid: str,
+        *,
+        keyword: str | None = None,
+        tags: list[str] | None = None,
+    ) -> int:
+        """统计符合筛选条件的用户仓库技能总数"""
+        where_clauses = ["user_uuid = ?"]
+        params: list[Any] = [user_uuid]
+
+        if keyword:
+            kw = f"%{keyword}%"
+            where_clauses.append("(name LIKE ? OR display_name LIKE ? OR description LIKE ?)")
+            params.extend([kw, kw, kw])
+
+        if tags:
+            for tag in tags:
+                where_clauses.append("tags LIKE ?")
+                params.append(f'%"{tag}"%')
+
+        where_sql = " AND ".join(where_clauses)
+
+        with self._cursor() as cursor:
+            cursor.execute(f"SELECT COUNT(*) FROM user_library_skills WHERE {where_sql}", params)
+            row = cursor.fetchone()
+            return row[0] if row else 0
 
     def update_community_skill_id(self, library_id: str, community_skill_id: str) -> bool:
         """

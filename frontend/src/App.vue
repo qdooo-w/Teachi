@@ -124,10 +124,11 @@ async function handleSubmitAuth(): Promise<void> {
 const router = useRouter()
 const route = useRoute()
 
-// ── 路由层级深度：overview/community=0，subject=1，chat=2 ──────────────────
+// ── 路由层级深度：overview/community/library=0，subject=1，chat=2 ──────────────────
 const ROUTE_DEPTH: Record<string, number> = {
   overview: 0,
   community: 0,
+  library: 0,
   subject: 1,
   chat: 2,
 }
@@ -662,6 +663,23 @@ watch(
           </div>
 
           <button
+            class="mx-1 mb-1.5 flex h-8 items-center justify-start gap-1.5 rounded-xl pl-4 pr-2 text-left transition-all duration-200 active:scale-95"
+            :class="[
+              $route.name === 'library'
+                ? 'bg-[#1f2937] text-white font-medium shadow-sm'
+                : 'bg-[#f3f4f6]/80 text-[#4b5563] hover:bg-[#e5e7eb] hover:text-[#1f2937]'
+            ]"
+            type="button"
+            title="我的仓库"
+            @click="closeSidebarOnMobile(); router.push({ name: 'library' })"
+          >
+            <svg class="h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-6 4h4" />
+            </svg>
+            <span class="text-xs whitespace-nowrap font-hans">我的仓库</span>
+          </button>
+
+          <button
             class="mx-1 mb-3 flex h-8 items-center justify-start gap-1.5 rounded-xl pl-4 pr-2 text-left transition-all duration-200 active:scale-95"
             :class="[
               $route.name === 'community'
@@ -845,6 +863,9 @@ watch(
               <template v-else-if="$route.name === 'community'">
                 <span class="text-[#1f2937] font-semibold text-sm">技能社区</span>
               </template>
+              <template v-else-if="$route.name === 'library'">
+                <span class="text-[#1f2937] font-semibold text-sm">我的仓库</span>
+              </template>
               <template v-else-if="$route.name === 'subject' && subjectProject">
                 <span class="cursor-pointer text-[#9ca3af] hover:text-[#1f2937] transition-colors" @click="router.push({ name: 'overview' })">科目</span>
                 <span class="text-[#9ca3af]">/</span>
@@ -879,9 +900,23 @@ watch(
               </svg>
             </button>
             
+            <!-- 我的仓库：概览/社区页可见 -->
+            <button
+              v-if="$route.name === 'overview' || $route.name === 'community'"
+              class="flex h-8 items-center gap-1 rounded-full border border-[#d1d5db] bg-white px-3 text-xs font-semibold text-[#4b5563] transition-all duration-200 hover:bg-[#e5e7eb] active:scale-95"
+              type="button"
+              title="我的仓库"
+              @click="router.push({ name: 'library' })"
+            >
+              <svg class="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-6 4h4" />
+              </svg>
+              <span>仓库</span>
+            </button>
+
             <!-- Skills 管理：整合为统一的单一按钮（概览页隐藏） -->
             <button
-              v-if="$route.name !== 'overview' && $route.name !== 'community'"
+              v-if="$route.name !== 'overview' && $route.name !== 'community' && $route.name !== 'library'"
               class="flex h-8 items-center gap-1 rounded-full border border-[#d1d5db] bg-white px-3 text-xs font-semibold text-[#4b5563] transition-all duration-200 hover:bg-[#e5e7eb] active:scale-95"
               type="button"
               title="管理您的技能"

@@ -724,10 +724,13 @@ users (uuid)
 | 删除评论 | 评论操作菜单 | `DELETE /community/skills/{id}/comments/{cid}` | 确认删除 |
 | 评论点赞 | 评论操作按钮 | `POST /community/comments/{cid}/like` | 点击赞 |
 | 评论举报 | 评论操作按钮 | `POST /community/comments/{cid}/report` | 填写举报原因 |
-| 仓库列表 | `LibraryPanel.vue` (待建) | `GET /library/skills` | 打开仓库面板 |
+| 仓库列表 | `LibraryView.vue` | `GET /library/skills` | 打开仓库页面 / 筛选排序 |
+| 仓库详情 | `LibraryView.vue` 弹层 | `GET /library/skills/{id}` | 点击仓库卡片 |
+| 安装到运行层 | 详情弹层按钮 | `POST /library/skills/{id}/install` | 点击安装按钮 |
+| Fork 技能 | 详情弹层按钮 | `POST /library/skills/{id}/fork` | 点击 Fork 按钮 |
+| ZIP 上传 | `LibraryUploadDialog.vue` | `POST /library/skills/upload` | 点击「上传 ZIP」按钮 |
 | 模板匹配 | 收集面板 | `GET /library/skills/match-template?skill_name=xxx` | 收集前自动匹配 |
 | 收集技能 | `CollectPanel.vue` (待建) | `POST /library/skills/collect` | 确认收集 |
-| Fork 技能 | 仓库面板按钮 | `POST /library/skills/{id}/fork` | 修改后重新发布前 |
 | 发布表单 | `PublishPanel.vue` (待建) | `GET /library/skills/{id}/publish-form` | 打开发布面板 |
 | 发布提交 | `PublishPanel.vue` | `POST /library/skills/{id}/publish` | 填写版本号后提交 |
 | Owner审核 | `OwnerReviewPanel.vue` (待建) | `GET /owner/reviews` | 打开Owner审核面板 |
@@ -735,7 +738,6 @@ users (uuid)
 | Admin审核 | `AdminReviewPanel.vue` (待建) | `GET /admin/reviews` | 打开Admin审核面板 |
 | Admin审核操作 | 审核面板按钮 | `POST /admin/reviews/{id}/approve\|reject` | 审核决策 |
 | 排行榜 | `LeaderboardPanel.vue` (待建) | `GET /community/leaderboard` | 点击排行榜入口 |
-| 仓库文件编辑 | `LibraryFileEditor.vue` (待建) | `GET/PUT /library/skills/{id}/files` | 编辑仓库内文件 |
 | 用户搜索 | 贡献者添加弹层 | `GET /users/search?q=xxx` | 搜索用户 |
 | 贡献者管理 | 详情弹层设置 | `GET/POST/DELETE /community/skills/{id}/contributors` | 管理贡献者 |
 | 举报列表 | `AdminReportPanel.vue` (待建) | `GET /admin/community/reports` | 管理员查看举报 |
@@ -777,11 +779,17 @@ users (uuid)
 | 前端 | ZIP 上传 | ✅ |
 | 前端 | 点赞/评论/举报 UI | ✅ |
 
+### ✅ 已就位 (前端 — 仓库模块)
+
+| 组件 | 说明 |
+|---|---|
+| 仓库面板 | `LibraryView.vue` — 卡片网格列表 + 筛选/排序/分页 + 详情弹层（安装/Fork） |
+| ZIP 上传弹窗 | `LibraryUploadDialog.vue` — 批量拖拽上传 + 进度条 + 队列管理 |
+
 ### ❌ 缺失 (前端)
 
 | 组件 | 说明 |
 |---|---|
-| 仓库面板 | 用户个人技能仓库管理界面 |
 | 收集面板 | 运行层→仓库的收集表单 |
 | 发布面板 | 仓库→社区的发布表单 (版本号/changelog) |
 | Owner 审核面板 | 技能管理员审核界面 |

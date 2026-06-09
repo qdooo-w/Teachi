@@ -1062,6 +1062,63 @@ export async function uploadLibrarySkillZip(file: File): Promise<UserLibrarySkil
   })
 }
 
+export interface LibrarySkillListResponse {
+  skills: UserLibrarySkill[]
+  total: number
+  limit: number
+  offset: number
+  sort: string
+}
+
+export type LibrarySkillSort = 'newest' | 'oldest' | 'name-asc' | 'name-desc'
+
+/** 获取当前用户的仓库技能列表，支持筛选/排序/分页 */
+export async function listLibrarySkills(params: {
+  keyword?: string
+  tag?: string[]
+  sort?: LibrarySkillSort
+  limit?: number
+  offset?: number
+} = {}): Promise<LibrarySkillListResponse> {
+  const search = new URLSearchParams()
+  if (params.keyword) search.set('keyword', params.keyword)
+  if (params.tag && params.tag.length > 0) {
+    for (const t of params.tag) search.append('tag', t)
+  }
+  if (params.sort) search.set('sort', params.sort)
+  if (params.limit !== undefined) search.set('limit', String(params.limit))
+  if (params.offset !== undefined) search.set('offset', String(params.offset))
+  return request<LibrarySkillListResponse>(`/library/skills?${search.toString()}`)
+}
+
+/** 获取单条仓库技能详情 */
+export async function getLibrarySkill(libraryId: string): Promise<UserLibrarySkill> {
+  return request<UserLibrarySkill>(`/library/skills/${encodeURIComponent(libraryId)}`)
+}
+
+/** 将仓库技能安装到运行层 */
+export async function installLibrarySkill(
+  libraryId: string,
+  payload: { target: 'user' | 'project'; pid?: string | null },
+): Promise<{ name: string; target: string; installed: boolean }> {
+  return request<{ name: string; target: string; installed: boolean }>(
+    `/library/skills/${encodeURIComponent(libraryId)}/install`,
+    {
+      method: 'POST',
+      headers: nonceHeaders(),
+      body: JSON.stringify(payload),
+    },
+  )
+}
+
+/** Fork 仓库技能 */
+export async function forkLibrarySkill(libraryId: string): Promise<UserLibrarySkill> {
+  return request<UserLibrarySkill>(`/library/skills/${encodeURIComponent(libraryId)}/fork`, {
+    method: 'POST',
+    headers: nonceHeaders(),
+  })
+}
+
 // ─── 账号设置 ──────────────────────────────────────────────────────────────
 
 export interface AccountInfo {

@@ -14,6 +14,7 @@ from backend.db_dep import db, get_db
 from backend.logging import configure_logging
 from backend.loop import router as loop_router
 from backend.settings import router as settings_router
+from backend.transfer import router as transfer_router
 
 
 configure_logging(LOG_LEVEL)
@@ -77,6 +78,9 @@ app.include_router(library_router)
 # 社区审核。
 app.include_router(router_owner)
 app.include_router(router_admin)
+
+# ZIP 上传 + 附件获取。
+app.include_router(transfer_router)
 
 # 用户模型配置：创建/更新/激活/删除。
 app.include_router(settings_router)
