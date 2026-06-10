@@ -273,6 +273,7 @@ def install_community_skill(
                 tags=version_record["tags"],
                 version=version_record["version"],
                 changelog=version_record["changelog"],
+                source="community",
                 community_skill_id=skill_id,  # 有值表示来自社区
                 local_path=f"data/{user_uuid}/library/{library_id}",
                 size_bytes=version_record["size_bytes"],

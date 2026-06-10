@@ -868,6 +868,18 @@ export interface CommunitySkillVersion {
   status: string
   submitted_by: string
   created_at: number
+  skill_name?: string
+}
+
+export interface ReviewLog {
+  id: string
+  version_id: string
+  reviewer_uuid: string
+  action: string
+  from_status: string
+  to_status: string
+  note: string
+  created_at: number
 }
 
 export interface CommunityComment {
@@ -1032,6 +1044,44 @@ export async function getCommunityLeaderboard(limit = 10): Promise<CommunitySkil
   return response.skills
 }
 
+// ── 社区审核 ──────────────────────────────────────────────────────────────────
+
+export async function listOwnerReviews(): Promise<CommunitySkillVersion[]> {
+  return request<CommunitySkillVersion[]>('/owner/reviews')
+}
+
+export async function approveOwnerReview(versionId: string, note = ''): Promise<ReviewLog> {
+  return request<ReviewLog>(`/owner/reviews/${encodeURIComponent(versionId)}/approve`, {
+    method: 'POST',
+    body: JSON.stringify({ note }),
+  })
+}
+
+export async function rejectOwnerReview(versionId: string, note = ''): Promise<ReviewLog> {
+  return request<ReviewLog>(`/owner/reviews/${encodeURIComponent(versionId)}/reject`, {
+    method: 'POST',
+    body: JSON.stringify({ note }),
+  })
+}
+
+export async function listAdminReviews(): Promise<CommunitySkillVersion[]> {
+  return request<CommunitySkillVersion[]>('/admin/reviews')
+}
+
+export async function approveAdminReview(versionId: string, note = ''): Promise<ReviewLog> {
+  return request<ReviewLog>(`/admin/reviews/${encodeURIComponent(versionId)}/approve`, {
+    method: 'POST',
+    body: JSON.stringify({ note }),
+  })
+}
+
+export async function rejectAdminReview(versionId: string, note = ''): Promise<ReviewLog> {
+  return request<ReviewLog>(`/admin/reviews/${encodeURIComponent(versionId)}/reject`, {
+    method: 'POST',
+    body: JSON.stringify({ note }),
+  })
+}
+
 // ── 仓库技能 ──────────────────────────────────────────────────────────────────
 
 export interface UserLibrarySkill {
@@ -1044,6 +1094,7 @@ export interface UserLibrarySkill {
   tags: string
   version: string
   changelog: string
+  source: 'runtime' | 'zip' | 'community' | 'fork'
   community_skill_id: string | null
   local_path: string
   size_bytes: number
@@ -1096,6 +1147,30 @@ export async function getLibrarySkill(libraryId: string): Promise<UserLibrarySki
   return request<UserLibrarySkill>(`/library/skills/${encodeURIComponent(libraryId)}`)
 }
 
+export interface LibraryPublishForm {
+  library_skill: UserLibrarySkill
+  community_skill: CommunitySkillSummary | null
+  latest_approved_version: CommunitySkillVersion | null
+  suggested_version: string
+}
+
+/** 获取仓库技能发布到社区的表单预填数据 */
+export async function getLibraryPublishForm(libraryId: string): Promise<LibraryPublishForm> {
+  return request<LibraryPublishForm>(`/library/skills/${encodeURIComponent(libraryId)}/publish-form`)
+}
+
+/** 将仓库技能提交到社区审核流 */
+export async function publishLibrarySkill(
+  libraryId: string,
+  payload: { version: string; changelog: string },
+): Promise<CommunitySkillVersion> {
+  return request<CommunitySkillVersion>(`/library/skills/${encodeURIComponent(libraryId)}/publish`, {
+    method: 'POST',
+    headers: nonceHeaders(),
+    body: JSON.stringify(payload),
+  })
+}
+
 /** 将仓库技能安装到运行层 */
 export async function installLibrarySkill(
   libraryId: string,
@@ -1111,12 +1186,46 @@ export async function installLibrarySkill(
   )
 }
 
-/** Fork 仓库技能 */
-export async function forkLibrarySkill(libraryId: string): Promise<UserLibrarySkill> {
+/** Fork 仓库技能，可选覆盖元数据 */
+export async function forkLibrarySkill(
+  libraryId: string,
+  overrides?: { name?: string; display_name?: string; description?: string; readme_md?: string; tags?: string; version?: string },
+): Promise<UserLibrarySkill> {
   return request<UserLibrarySkill>(`/library/skills/${encodeURIComponent(libraryId)}/fork`, {
     method: 'POST',
-    headers: nonceHeaders(),
+    headers: { 'Content-Type': 'application/json', ...nonceHeaders() },
+    body: JSON.stringify(overrides ?? {}),
   })
+}
+
+/** 仓库技能文件列表条目 */
+export interface LibraryFileEntry {
+  name: string
+  rel_path: string
+  is_dir: boolean
+  size: number
+}
+
+/** 列出仓库技能的文件 */
+export async function listLibrarySkillFiles(
+  libraryId: string,
+  path: string = '.',
+): Promise<{ path: string; entries: LibraryFileEntry[] }> {
+  const params = new URLSearchParams({ path })
+  return request<{ path: string; entries: LibraryFileEntry[] }>(
+    `/library/skills/${encodeURIComponent(libraryId)}/files?${params}`,
+  )
+}
+
+/** 读取仓库技能的文件内容 */
+export async function readLibrarySkillFileContent(
+  libraryId: string,
+  path: string,
+): Promise<{ path: string; content: string }> {
+  const params = new URLSearchParams({ path })
+  return request<{ path: string; content: string }>(
+    `/library/skills/${encodeURIComponent(libraryId)}/files/content?${params}`,
+  )
 }
 
 /** 收集本地技能到仓库 */

@@ -5,7 +5,6 @@ import MessageContent from '../components/MessageContent.vue'
 import SkillPicker from '../components/SkillPicker.vue'
 import SkillChips from '../components/SkillChips.vue'
 import EditPromptDialog from '../components/EditPromptDialog.vue'
-import ConfirmDialog from '../components/ConfirmDialog.vue'
 import MediaPreviewDialog from '../components/MediaPreviewDialog.vue'
 import WindowManager from '../components/WindowManager.vue'
 import SkillEditorPanel from '../components/SkillEditorPanel.vue'
@@ -37,6 +36,7 @@ import { useProjectSkills } from '../composables/useProjectSkills'
 import { useUserSkills } from '../composables/useUserSkills'
 import { usePreferences } from '../composables/usePreferences'
 import { useChatSkillSidebar } from '../composables/useChatSkillSidebar'
+import { confirmDanger } from '../composables/useConfirmDialog'
 import {
   CHAT_ATTACHMENT_MAX_BYTES,
   CHAT_COMPOSER_MAX_HEIGHT,
@@ -119,12 +119,6 @@ const displayedPosByAnchor = ref<Record<string, number>>({})
 const editDialogOpen = ref(false)
 const editDialogAnchor = ref<string | null>(null)
 const editDialogInitial = ref('')
-
-// 删除回合确认弹窗
-const deleteDialogOpen = ref(false)
-const deleteDialogAnchor = ref<string | null>(null)
-const deleteSubmitting = ref(false)
-const deleteDialogError = ref('')
 
 // 媒体多开预览（最多 8 个）
 interface PreviewItem {
@@ -931,37 +925,22 @@ async function handleEditPromptSubmit(text: string): Promise<void> {
   if (target) await regenerateMessage(target, text)
 }
 
-function openDeleteTurnDialog(message: DisplayMessage): void {
+async function openDeleteTurnDialog(message: DisplayMessage): Promise<void> {
   if (streaming.value || !message.anchor_msg_id) return
-  deleteDialogAnchor.value = message.anchor_msg_id
-  deleteDialogError.value = ''
-  deleteDialogOpen.value = true
-}
-
-async function handleDeleteTurnConfirm(): Promise<void> {
-  const anchor = deleteDialogAnchor.value
-  if (!anchor) return
-  deleteSubmitting.value = true
-  deleteDialogError.value = ''
+  const anchor = message.anchor_msg_id
+  const confirmed = await confirmDanger({
+    title: '删除此回合',
+    message: '该回合当前活跃版本（user 与 assistant，含工具调用）将被永久删除。如果之前重放过，历史版本会保留。确定继续吗？',
+    confirmText: '删除',
+  })
+  if (!confirmed) return
   try {
     await deleteTurn(anchor)
-    // 关闭弹窗并清掉该 anchor 的客户端版本指针
-    deleteDialogOpen.value = false
-    deleteDialogAnchor.value = null
     delete displayedPosByAnchor.value[anchor]
     await loadMessages(true)
   } catch (error) {
-    deleteDialogError.value = getErrorMessage(error)
-  } finally {
-    deleteSubmitting.value = false
+    errorMessage.value = getErrorMessage(error)
   }
-}
-
-function handleDeleteTurnCancel(): void {
-  if (deleteSubmitting.value) return
-  deleteDialogOpen.value = false
-  deleteDialogAnchor.value = null
-  deleteDialogError.value = ''
 }
 
 async function switchVersion(anchor: string, direction: -1 | 1): Promise<void> {
@@ -1847,19 +1826,6 @@ watch(
       :submitting="streaming"
       @submit="handleEditPromptSubmit"
     />
-    <Transition name="dialog-fade" appear>
-      <ConfirmDialog
-        v-if="deleteDialogOpen"
-        title="删除此回合"
-        message="该回合当前活跃版本（user 与 assistant，含工具调用）将被永久删除。如果之前重放过，历史版本会保留。确定继续吗？"
-        confirm-text="删除"
-        danger
-        :submitting="deleteSubmitting"
-        :error="deleteDialogError"
-        @confirm="handleDeleteTurnConfirm"
-        @cancel="handleDeleteTurnCancel"
-      />
-    </Transition>
     <MediaPreviewDialog
       v-if="messagesLoaded"
       v-for="(preview, index) in activePreviews"

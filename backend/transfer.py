@@ -300,6 +300,7 @@ async def upload_library_skill_zip(
             tags="[]",
             version="1.0.0",
             changelog="Uploaded via zip",
+            source="zip",
             community_skill_id=None,
             local_path=f"data/{user_uuid}/library/{library_id}",
             size_bytes=directory_size(skill_dir),

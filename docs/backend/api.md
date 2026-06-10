@@ -4,6 +4,7 @@
 
 ## 近期变更
 
+- 2026-06-10：恢复 `user_library_skills.source` 字段（`runtime` / `zip` / `community` / `fork`），所有入库路径显式写入来源。Fork API 改为支持可选请求体覆盖元数据，version 默认继承而非重置。
 - 2026-06-09：仓库模块前后端贯通。① `GET /library/skills` 新增筛选/排序/分页支持；② 新增 `POST /library/skills/upload`（ZIP 上传至仓库），复用 `transfer.py` 内已有校验逻辑；③ 前端完成 `LibraryView.vue`（卡片网格 + 详情弹层 + 安装/Fork）+ `LibraryUploadDialog.vue`（批量拖拽上传）；④ `/library` 入口已加入顶部导航栏和侧栏。
 - 2026-06-08（续）：精简 `user_library_skills` 表，删除 `source` 字段，改用 `community_skill_id` 推断来源。新增模板匹配 API（`GET /library/skills/match-template`）和 Fork API（`POST /library/skills/{id}/fork`）。更新 Collect API 支持 `template_id` 参数。删除数据结构中的 `source` 字段。
 - 2026-06-08：补全社区生态缺失 API：排行榜（`GET /community/leaderboard`）、用户名搜索（`GET /users/search`）、贡献者管理（`GET/POST/DELETE /community/skills/{id}/contributors`）、举报列表（`GET /admin/community/reports`）、仓库文件编辑（`GET/PUT /library/skills/{id}/files`）。补充数据结构定义：`UserSummary`、`CommunitySkillVersion`、`CommunitySkillContributor`、`CommunityCommentReport`、`SkillReviewLog`、`UserLibrarySkill`、`FileListEntry`。
@@ -244,6 +245,7 @@ FastAPI 和后端当前可能返回两类错误体：
 | `tags` | string | 标签 JSON 数组 |
 | `version` | string | 当前版本号 |
 | `changelog` | string | 变更说明 |
+| `source` | string | 来源类型：`runtime`（运行层收集）/ `zip`（ZIP 上传）/ `community`（社区安装）/ `fork`（仓库复制） |
 | `community_skill_id` | string \| null | 关联的社区技能 ID（有值=来自社区，空=来自运行层收集） |
 | `local_path` | string | 本地文件路径 |
 | `size_bytes` | int | 文件大小 |
@@ -1660,7 +1662,7 @@ zip 约束：
 
 ### POST `/library/skills/{library_id}/fork`
 
-意义：Fork 仓库技能，创建新的副本。用于修改从社区安装的技能后重新发布。
+意义：Fork 仓库技能，创建新的副本。不经过运行层，直接从仓库层复制文件。
 
 认证：需要 `Authorization: Bearer <access_token>`，并携带 nonce 请求头。
 
@@ -1668,16 +1670,26 @@ zip 约束：
 
 | 名称 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `library_id` | string | 是 | 仓库技能 ID |
+| `library_id` | string | 是 | 源仓库技能 ID |
 
-请求体：无
+请求体（可选）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `name` | string | 否 | 技能标识名，不传则继承源记录 |
+| `display_name` | string | 否 | 显示名，不传则继承 |
+| `description` | string | 否 | 描述，不传则继承 |
+| `readme_md` | string | 否 | README，不传则继承 |
+| `tags` | string | 否 | 标签 JSON 数组，不传则继承 |
+| `version` | string | 否 | 版本号，不传则继承源记录版本 |
 
 **行为**：
 - 创建新的 `library_id`（新 UUID）
-- 复制 skill 文件夹
-- 继承原有元数据（name, display_name, description, tags, readme_md）
+- 复制 skill 文件夹：`library/{old_id}/skill/` → `library/{new_id}/skill/`
+- 元数据默认继承源记录，请求体中的字段可覆盖
+- version 默认继承（不重置），changelog 固定为 `"Fork"`
+- `source` 写入 `"fork"`
 - 保留 `community_skill_id` 关联
-- version 重置为 "1.0.0"，changelog 重置为 "Fork"
 
 成功返回：`200 OK`
 

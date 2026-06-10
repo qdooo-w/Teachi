@@ -7,6 +7,7 @@ import { useUserSkills } from '../composables/useUserSkills'
 import { useNotification } from '../composables/useNotification'
 import { getCurrentUserId, getErrorMessage } from '../api'
 import { deleteSkill, type SkillMeta } from '../skills'
+import { confirmDanger } from '../composables/useConfirmDialog'
 
 const route = useRoute()
 const { chatSidebarOpen, closeSidebar, openEditor } = useChatSkillSidebar()
@@ -52,9 +53,12 @@ function selectSkill(kind: 'user' | 'project', skill: SkillMeta): void {
 async function handleDeleteSkill(kind: 'user' | 'project', skill: SkillMeta): Promise<void> {
   const skillName = skill.name
   const displayName = skill.display_name || skill.name
-  if (!confirm(`确定要彻底删除技能「${displayName}」吗？`)) {
-    return
-  }
+  const confirmed = await confirmDanger({
+    title: '删除技能',
+    message: `确定要彻底删除技能「${displayName}」吗？此操作不可恢复。`,
+    confirmText: '删除',
+  })
+  if (!confirmed) return
 
   const userId = getCurrentUserId()
   let space: any = null

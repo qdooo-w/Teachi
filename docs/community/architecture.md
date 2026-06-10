@@ -105,11 +105,11 @@
 | 编号 | 流转 | 文件操作 | DB 操作 | 继承规则 |
 |---|---|---|---|---|
 | ① | **Publish** (仓库→社区) | 复制到 `archived_skill/{id}/{ver}/` | 新建 `community_skill_versions`；首次发布额外新建 `community_skills` + `community_skill_admins` | name/desc/tags/readme_md 继承自仓库；version/changelog 用户填写 |
-| ② | **Collect** (运行层→仓库) | 复制到 `library/{id}/skill/` + 创建 `README.md` | 新建 `user_library_skills` | name 从 SKILL.md 读取；其他元数据从模板继承（最佳匹配或用户选择）；readme_md 从模板继承或从零生成；version="1.0.0" 固定；community_skill_id=null |
+| ② | **Collect** (运行层→仓库) | 复制到 `library/{id}/skill/` + 创建 `README.md` | 新建 `user_library_skills`，`source="runtime"` | name 从 SKILL.md 读取；其他元数据从模板继承（最佳匹配或用户选择）；readme_md 从模板继承或从零生成；version="1.0.0" 固定；community_skill_id=null |
 | ③ | **Install from Library** (仓库→运行层) | 复制到 `skills/{name}/` | **无写入** | 全部继承，name 作为目录名 |
-| ④ | **Install to Library** (社区→仓库) | 复制到 `library/{version_id}/skill/` | 新建 `user_library_skills` | 全部继承自社区版本；`community_skill_id` 建立关联；复用 `version_id` 作为 `library_id` |
+| ④ | **Install to Library** (社区→仓库) | 复制到 `library/{version_id}/skill/` | 新建 `user_library_skills`，`source="community"` | 全部继承自社区版本；`community_skill_id` 建立关联；复用 `version_id` 作为 `library_id` |
 | ⑤ | **Install** (社区→运行层) | 复制到 `skills/{name}/` | 更新 `downloads` 计数 | 全部继承，name 作为目录名 |
-| ⑥ | **Fork** (仓库→仓库) | 复制到 `library/{new_id}/skill/` | 新建 `user_library_skills` | 继承原有元数据作为模板；新的 `library_id`；保留 `community_skill_id` 关联 |
+| ⑥ | **Fork** (仓库→仓库) | 复制到 `library/{new_id}/skill/` | 新建 `user_library_skills`，`source="fork"` | 元数据默认继承源记录，可通过请求体覆盖；version 继承（不重置）；保留 `community_skill_id` 关联 |
 
 ### UUID 复用规则
 

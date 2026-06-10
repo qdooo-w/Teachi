@@ -3,7 +3,6 @@ import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import RowMenu from '../components/RowMenu.vue'
 import RenameInline from '../components/RenameInline.vue'
-import ConfirmDialog from '../components/ConfirmDialog.vue'
 import SkillPicker from '../components/SkillPicker.vue'
 import SkillChips from '../components/SkillChips.vue'
 import SkillEditorPanel from '../components/SkillEditorPanel.vue'
@@ -33,6 +32,7 @@ import {
   PLACEHOLDERS,
 } from '../config'
 import { usePreferences } from '../composables/usePreferences'
+import { confirmDanger } from '../composables/useConfirmDialog'
 
 const route = useRoute()
 const router = useRouter()
@@ -341,9 +341,6 @@ async function loadProjectDesc(currentPid: string): Promise<void> {
 const openMenuKey = ref<string | null>(null)
 const renamingKey = ref<string | null>(null)
 const renameSubmitting = ref(false)
-const confirmDelete = ref<{ id: string; name: string } | null>(null)
-const deleteSubmitting = ref(false)
-const deleteError = ref('')
 
 function sessionKey(sid: string): string {
   return `session:${sid}`
@@ -462,31 +459,19 @@ async function submitSessionRename(session: SessionItem, nextName: string): Prom
   }
 }
 
-function askDeleteSession(session: SessionItem): void {
+async function askDeleteSession(session: SessionItem): Promise<void> {
   openMenuKey.value = null
-  deleteError.value = ''
-  confirmDelete.value = { id: session.sid, name: session.sessionname }
-}
-
-function cancelDelete(): void {
-  if (deleteSubmitting.value) return
-  confirmDelete.value = null
-  deleteError.value = ''
-}
-
-async function performDelete(): Promise<void> {
-  if (!confirmDelete.value || deleteSubmitting.value) return
-  const target = confirmDelete.value
-  deleteSubmitting.value = true
-  deleteError.value = ''
+  const confirmed = await confirmDanger({
+    title: '删除会话',
+    message: `确定删除「${session.sessionname}」？会话内所有消息会被一并删除，操作不可恢复。`,
+    confirmText: '删除',
+  })
+  if (!confirmed) return
   try {
-    await deleteSession(target.id)
-    sessions.value = sessions.value.filter((s) => s.sid !== target.id)
-    confirmDelete.value = null
+    await deleteSession(session.sid)
+    sessions.value = sessions.value.filter((s) => s.sid !== session.sid)
   } catch (error) {
-    deleteError.value = getErrorMessage(error)
-  } finally {
-    deleteSubmitting.value = false
+    errorMessage.value = getErrorMessage(error)
   }
 }
 
@@ -811,17 +796,6 @@ watch(
     </div>
   </Transition>
 
-  <Transition name="dialog-fade" appear>
-    <ConfirmDialog
-      v-if="confirmDelete"
-      :title="'删除会话'"
-      :message="`确定删除「${confirmDelete.name}」？会话内所有消息会被一并删除，操作不可恢复。`"
-      :error="deleteError"
-      :submitting="deleteSubmitting"
-      @confirm="performDelete"
-      @cancel="cancelDelete"
-    />
-  </Transition>
 </template>
 
 <style scoped>

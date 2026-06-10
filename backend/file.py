@@ -198,7 +198,7 @@ class SessionFile(FileBase):
 # 但操作面被严格收敛，不能逃出 skills/ 子目录、不能写非文本文件、不能超大。
 
 def _validate_skill_name(skill_name: str) -> None:
-    """校验 skill 名：kebab-case、长度 ≤64、不在保留词内。"""
+    """校验 skill 名：安全目录名、长度 ≤64、不在保留词内。"""
     if not isinstance(skill_name, str) or not skill_name:
         raise FileError("skill name must be a non-empty string")
     if err := validate_skill_name(skill_name):

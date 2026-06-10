@@ -4,7 +4,7 @@ import os
 from backend.config.env import env_int
 
 
-SKILL_NAME_PATTERN = r"^[\u4e00-\u9fa5a-zA-Z0-9]+(-[\u4e00-\u9fa5a-zA-Z0-9]+)*$"#技能名称的正则表达式模式，要求名称只能包含中文、字母、数字和连字符，且不能以连字符开头或结尾
+SKILL_NAME_PATTERN = r"^[\w-]+$"#技能名称的正则表达式模式，允许 Unicode 字母/数字、下划线和中划线
 SKILL_NAME_RE = re.compile(SKILL_NAME_PATTERN)
 SKILL_NAME_MAX = 64
 SKILL_RESERVED: frozenset[str] = frozenset({"anthropic", "claude","system"})#技能名称中禁止使用的保留词集合，目前包括 "anthropic" 和 "claude"，可能是为了避免与特定品牌或服务名称冲突
@@ -45,8 +45,8 @@ def validate_skill_name(name: str) -> str | None:
         return "名称不能为空"
     if len(name) > SKILL_NAME_MAX:
         return f"名称不能超过 {SKILL_NAME_MAX} 个字符"
-    if not SKILL_NAME_RE.match(name):
-        return "名称只能包含中文、字母、数字和连字符，且不能以连字符开头或结尾"
+    if not SKILL_NAME_RE.fullmatch(name) or not any(ch.isalnum() for ch in name):
+        return "名称只能包含中文、字母、数字、下划线和中划线，且至少包含一个中文、字母或数字"
     for reserved in SKILL_RESERVED:
         if reserved in name:
             return f"名称不能包含保留词 {reserved!r}"

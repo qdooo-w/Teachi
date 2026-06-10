@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { uploadLibrarySkillZip, getErrorMessage } from '../api'
+import { confirmWarning } from '../composables/useConfirmDialog'
 
 const emit = defineEmits<{
   close: []
@@ -105,9 +106,14 @@ function clearQueue(): void {
   uploadQueue.value = []
 }
 
-function close(): void {
+async function close(): Promise<void> {
   if (isBatchUploading.value) {
-    if (!confirm('正在上传中，确定要关闭吗？')) return
+    const confirmed = await confirmWarning({
+      title: '上传仍在进行',
+      message: '正在上传中，确定要关闭吗？',
+      confirmText: '关闭',
+    })
+    if (!confirmed) return
   }
   const hasFinished = uploadQueue.value.some((i) => i.status === 'success')
   uploadQueue.value = []

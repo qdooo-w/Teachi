@@ -173,7 +173,7 @@ Skill 在后端是 `skills/<name>/` 文件夹约定，核心入口为 `SKILL.md`
   - 新建文件只允许 `.md`、`.txt`、`.json`、`.yaml`、`.yml`，暂不支持嵌套目录
 - 右栏编辑器：
   - `SKILL.md` 使用结构化表单
-  - `name`（受限 `^[\u4e00-\u9fa5a-zA-Z0-9]+(-[\u4e00-\u9fa5a-zA-Z0-9]+)*$`，支持中文、大小写字母、数字和连字符，长度 ≤ 64，不含保留词 `anthropic` / `claude`）
+  - `name`（支持 Unicode 字母/数字、中文、下划线和中划线，至少包含一个字母/数字/中文，长度 ≤ 64，不含保留词 `anthropic` / `claude` / `system`）
   - `description`（≤ 1024）
   - `license`、`compatibility`（≤ 500）作为高级字段折叠
   - `body` 仅提示字符 / 行数，不做硬限制

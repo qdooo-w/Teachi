@@ -44,7 +44,7 @@ export interface SkillTreeEntry {
 export function validateSkillName(name: string): string | null {
   if (!name) return '名称不能为空'
   if (name.length > SKILL_NAME_MAX) return `名称不能超过 ${SKILL_NAME_MAX} 个字符`
-  if (!SKILL_NAME_PATTERN.test(name)) return '名称只能包含中文、字母、数字和连字符，且不能以连字符开头或结尾'
+  if (!SKILL_NAME_PATTERN.test(name)) return '名称只能包含中文、字母、数字、下划线和中划线，且至少包含一个中文、字母或数字'
   for (const reserved of SKILL_RESERVED) {
     if (name.includes(reserved)) return `名称不能包含保留词 "${reserved}"`
   }

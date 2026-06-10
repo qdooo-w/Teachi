@@ -194,7 +194,7 @@ async def write_skill_file(
     SKILL.md format (required for every skill):
 
         ---
-        name: <kebab-case skill name, matches folder name>
+        name: <skill name matching its folder name>
         description: <one-sentence trigger; tell the model WHEN to load this skill>
         ---
 
@@ -204,8 +204,8 @@ async def write_skill_file(
 
     Frontmatter rules:
       - `name` and `description` are required.
-      - `name` must match `^[a-z0-9]+(-[a-z0-9]+)*$`, length ≤ 64,
-        and must not be `anthropic` or `claude`.
+      - `name` may contain Unicode letters/numbers, underscores and hyphens,
+        length ≤ 64, and must not contain reserved words.
       - `description` should be a single-sentence trigger like
         "Use when the user asks for X" so the router model picks it correctly.
       - Optional fields: `license`, `compatibility` (each ≤ 500 chars).
@@ -222,7 +222,7 @@ async def write_skill_file(
       Body of SKILL.md should stay short; push detail into `references/`.
 
     Recommended workflow when creating a new skill:
-      1. Pick `skill_name` (kebab-case) and call it through `project-<skill_name>`
+      1. Pick `skill_name` and call it through `project-<skill_name>`
          or `user-<skill_name>`.
       2. Call this tool once with `file_path="SKILL.md"` and the full
          frontmatter + body.
@@ -620,4 +620,3 @@ async def view_attachment(
             return ToolReturn(return_value=description)
 
     return ToolReturn(return_value=f"错误：不支持的附件类型 {mime_type!r}。")
-

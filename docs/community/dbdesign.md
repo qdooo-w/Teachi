@@ -118,7 +118,7 @@ ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user';
 |---|---|---|---|
 | `id` | TEXT | PRIMARY KEY | 社区项目唯一 UUID（独立生成，不继承） |
 | `owner_uuid` | TEXT | NOT NULL, FK → `users(uuid)` ON DELETE CASCADE | 创建者（仅记录，权限判定用 `admin_uuids`） |
-| `name` | TEXT | NOT NULL, UNIQUE | 技能唯一标识名 (kebab-case) |
+| `name` | TEXT | NOT NULL, UNIQUE | 技能唯一标识名：支持 Unicode 字母/数字、中文、下划线和中划线，至少包含一个字母/数字/中文，长度 ≤ 64 |
 | `display_name` | TEXT | - | 友好展示名称 |
 | `description` | TEXT | NOT NULL | 一句话简短描述 |
 | `admin_uuids` | TEXT | NOT NULL, DEFAULT '[]' | Skill 管理员列表（JSON 数组）。**创建时自动将 `owner_uuid` 加入**，权限检查只查此字段 |
@@ -259,20 +259,21 @@ PENDING_OWNER ──(Owner 审核通过)──▶ PENDING_ADMIN ──(Admin 审
 |---|---|---|---|
 | `id` | TEXT | PRIMARY KEY | 仓库 skill UUID。本地创建时独立生成；从社区安装时**继承 `community_skill_versions.id`** |
 | `user_uuid` | TEXT | NOT NULL, FK → `users(uuid)` ON DELETE CASCADE | 拥有者 |
-| `name` | TEXT | NOT NULL | 技能标识名 (kebab-case) |
+| `name` | TEXT | NOT NULL | 技能标识名：支持 Unicode 字母/数字、中文、下划线和中划线，至少包含一个字母/数字/中文，长度 ≤ 64 |
 | `display_name` | TEXT | DEFAULT NULL | 友好展示名 |
 | `description` | TEXT | NOT NULL | 简短描述 |
 | `readme_md` | TEXT | DEFAULT '' | README 总介绍文档 |
 | `tags` | TEXT | NOT NULL, DEFAULT '[]' | 标签列表（JSON 数组），安装时从社区版本继承，收集时可套用模版 |
 | `version` | TEXT | NOT NULL | 版本号（上传时填写） |
 | `changelog` | TEXT | DEFAULT '' | 更新说明（上传时填写） |
+| `source` | TEXT | NOT NULL, DEFAULT 'runtime' | 来源类型：`runtime`（运行层收集）/ `zip`（ZIP 上传）/ `community`（社区安装）/ `fork`（仓库复制） |
 | `community_skill_id` | TEXT | DEFAULT NULL | 关联社区项目 ID（从社区安装时填写，本地创建为 NULL）。**有值表示来自社区，为空表示来自运行层收集** |
 | `local_path` | TEXT | NOT NULL | 本地物理存储路径（如 `data/{user_uuid}/library/{lib_skill_id}`） |
 | `size_bytes` | INTEGER | NOT NULL, DEFAULT 0 | 文件大小 |
 | `created_at` | REAL | NOT NULL | 创建/上传时间 |
 | `updated_at` | REAL | NOT NULL | 最后更新时间 |
 
-> **来源推断**：通过 `community_skill_id` 推断来源，不再使用 `source` 字段。
+> **来源记录**：`source` 字段显式记录入库方式，`community_skill_id` 记录社区关联。
 > **注意**：没有 `UNIQUE(user_uuid, name)` 约束——同一用户可以有多个同名 skill 条目（不同版本/不同次上传），每条都是独立实体。
 
 ---
@@ -351,7 +352,7 @@ admin_uuids 中的用户（含 owner）提交新版本
 ```
 1. 后端返回仓库 skill 数据预填表单
 2. 自动继承：name, display_name, description, tags, version, readme_md
-3. 用户补充：changelog, source (仅 fork 时)
+3. 用户补充：changelog
 4. 提交 → 后端：
    a. 创建 community_skill_versions（首次还创建 community_skills）
    b. 复制 data/{user}/library/{lib_id}/skill/ → archived_skill/{com_id}/{version}/skill/

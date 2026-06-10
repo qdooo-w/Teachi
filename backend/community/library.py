@@ -250,10 +250,108 @@ def collect_skill_to_library(
             tags=tags,
             version=version,
             changelog="Initial collect",
+            source="runtime",
             community_skill_id=None,  # 为空表示来自运行层
             local_path=f"data/{user_uuid}/library/{library_id}",
             size_bytes=_directory_size(dst_dir),
             skill_id=library_id
+        )
+        return record
+    except Exception as e:
+        if dst_dir.parent.exists():
+            shutil.rmtree(dst_dir.parent, ignore_errors=True)
+        raise HTTPException(status_code=500, detail={"code": "INTERNAL_ERROR", "message": str(e)})
+
+class ForkLibrarySkillRequest(BaseModel):
+    """Fork 时可选覆盖元数据，不传则继承源记录"""
+    name: str | None = Field(None, min_length=1, max_length=64)
+    display_name: str | None = None
+    description: str | None = None
+    readme_md: str | None = None
+    tags: str | None = None
+    version: str | None = Field(None, pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$")
+
+@router.post("/skills/{library_id}/fork", dependencies=[Depends(verify_nonce)])
+def fork_library_skill(
+    library_id: str,
+    payload: ForkLibrarySkillRequest | None = None,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
+):
+    """
+    Fork 操作：从仓库层复制一份技能到新仓库条目（不经过运行层）
+
+    【数据流】
+    - 输入：源仓库技能 ID (library_id)，可选覆盖元数据
+    - 文件流：library/{old_id}/skill/ -> 复制到 library/{new_id}/skill/
+    - 数据库流：继承源记录的元数据和 version，payload 中的字段优先覆盖
+
+    【调用链】
+    - 客户端请求 -> APIRouter -> fork_library_skill()
+    - 校验源记录归属 -> db.library.get_by_id()
+    - 文件复制 -> _copy_skill_dir()
+    - 创建数据库记录 -> db.library.create()
+    """
+    db = _resolve_db(db)
+    user_uuid = current_user["uuid"]
+
+    src_record = db.library.get_by_id(library_id)
+    if not src_record or src_record["user_uuid"] != user_uuid:
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "Library skill not found"})
+
+    src_dir = LibraryFile(library_id=library_id, user_uuid=user_uuid, db_facade=db).base_path / "skill"
+    if not src_dir.is_dir():
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "Library skill data missing"})
+
+    # payload 传入的字段覆盖源记录
+    p = payload or ForkLibrarySkillRequest()
+    name = p.name.strip() if p.name else src_record["name"]
+    display_name = p.display_name if p.display_name is not None else src_record["display_name"]
+    description = p.description if p.description is not None else src_record["description"]
+    readme_md = p.readme_md if p.readme_md is not None else src_record["readme_md"]
+    tags = p.tags if p.tags is not None else src_record["tags"]
+    version = p.version if p.version else src_record["version"]  # 版本号继承
+
+    new_id = str(uuid.uuid4())
+    dst_dir = LibraryFile(library_id=new_id, user_uuid=user_uuid, db_facade=db).base_path / "skill"
+
+    try:
+        _copy_skill_dir(src_dir, dst_dir)
+
+        # 如果 name 被修改，更新 SKILL.md 中的 name 字段
+        if name != src_record["name"]:
+            try:
+                skill_md_path = dst_dir / "SKILL.md"
+                if skill_md_path.is_file():
+                    import re
+                    content = skill_md_path.read_text(encoding="utf-8")
+                    parts = content.split("---", 2)
+                    if len(parts) >= 3:
+                        frontmatter = parts[1]
+                        updated, count = re.subn(r"(?m)^name:\s*.*$", f"name: {name}", frontmatter)
+                        if count == 0:
+                            frontmatter = f"name: {name}\n" + frontmatter
+                        else:
+                            frontmatter = updated
+                        parts[1] = frontmatter
+                        skill_md_path.write_text("---".join(parts), encoding="utf-8")
+            except Exception:
+                pass
+
+        record = db.library.create(
+            user_uuid=user_uuid,
+            name=name,
+            display_name=display_name,
+            description=description,
+            readme_md=readme_md,
+            tags=tags,
+            version=version,
+            changelog="Fork",
+            source="fork",
+            community_skill_id=src_record["community_skill_id"],
+            local_path=f"data/{user_uuid}/library/{new_id}",
+            size_bytes=_directory_size(dst_dir),
+            skill_id=new_id,
         )
         return record
     except Exception as e:

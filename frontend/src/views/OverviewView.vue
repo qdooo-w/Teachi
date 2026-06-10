@@ -3,7 +3,6 @@ import { ref, onMounted, nextTick, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import RowMenu from '../components/RowMenu.vue'
 import RenameInline from '../components/RenameInline.vue'
-import ConfirmDialog from '../components/ConfirmDialog.vue'
 import {
   createProject,
   deleteProject,
@@ -27,6 +26,7 @@ import {
   OVERVIEW_POST_COLLAPSE_DELAY_MS,
   OVERVIEW_SCROLL_END_EPSILON,
 } from '../config'
+import { confirmDanger } from '../composables/useConfirmDialog'
 
 const router = useRouter()
 const { projects, loadProjects, prependProject, upsertProject, removeProject } = useProjects()
@@ -218,9 +218,6 @@ async function handleCreateProject(): Promise<void> {
 const openMenuKey = ref<string | null>(null)
 const renamingKey = ref<string | null>(null)
 const renameSubmitting = ref(false)
-const confirmDelete = ref<{ id: string; name: string } | null>(null)
-const deleteSubmitting = ref(false)
-const deleteError = ref('')
 
 function cardKey(pid: string): string {
   return `card:project:${pid}`
@@ -256,29 +253,19 @@ async function submitProjectRename(project: ProjectItem, nextName: string): Prom
   }
 }
 
-function askDeleteProject(project: ProjectItem): void {
+async function askDeleteProject(project: ProjectItem): Promise<void> {
   openMenuKey.value = null
-  deleteError.value = ''
-  confirmDelete.value = { id: project.pid, name: project.projectname }
-}
-function cancelDelete(): void {
-  if (deleteSubmitting.value) return
-  confirmDelete.value = null
-  deleteError.value = ''
-}
-async function performDelete(): Promise<void> {
-  if (!confirmDelete.value || deleteSubmitting.value) return
-  const target = confirmDelete.value
-  deleteSubmitting.value = true
-  deleteError.value = ''
+  const confirmed = await confirmDanger({
+    title: '删除科目',
+    message: `确定删除「${project.projectname}」？该科目下的所有会话和消息也会被一并删除，操作不可恢复。`,
+    confirmText: '删除',
+  })
+  if (!confirmed) return
   try {
-    await deleteProject(target.id)
-    removeProject(target.id)
-    confirmDelete.value = null
+    await deleteProject(project.pid)
+    removeProject(project.pid)
   } catch (error) {
-    deleteError.value = getErrorMessage(error)
-  } finally {
-    deleteSubmitting.value = false
+    errorMessage.value = getErrorMessage(error)
   }
 }
 
@@ -639,17 +626,6 @@ onMounted(async () => {
       </div>
     </div>
 
-    <Transition name="dialog-fade" appear>
-      <ConfirmDialog
-        v-if="confirmDelete"
-        :title="'删除科目'"
-        :message="`确定删除「${confirmDelete.name}」？该科目下的所有会话和消息会被一并删除，操作不可恢复。`"
-        :error="deleteError"
-        :submitting="deleteSubmitting"
-        @confirm="performDelete"
-        @cancel="cancelDelete"
-      />
-    </Transition>
   </div>
 </template>
 

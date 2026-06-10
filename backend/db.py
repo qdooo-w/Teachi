@@ -1445,6 +1445,7 @@ class UserLibrarySkillsFacade(_DataBase):
         tags: str,
         version: str,
         changelog: str,
+        source: str = "runtime",
         community_skill_id: str | None,
         local_path: str,
         size_bytes: int,
@@ -1461,6 +1462,7 @@ class UserLibrarySkillsFacade(_DataBase):
             tags: 标签 JSON 数组
             version: 版本号
             changelog: 变更说明
+            source: 来源类型 (runtime / zip / community / fork)
             community_skill_id: 关联的社区技能 ID，为空表示来自运行层
             local_path: 本地文件路径
             size_bytes: 文件大小
@@ -1475,10 +1477,10 @@ class UserLibrarySkillsFacade(_DataBase):
             cursor.execute(
                 """
                 INSERT INTO user_library_skills
-                (id, user_uuid, name, display_name, description, readme_md, tags, version, changelog, community_skill_id, local_path, size_bytes, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, user_uuid, name, display_name, description, readme_md, tags, version, changelog, source, community_skill_id, local_path, size_bytes, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (skill_id, user_uuid, name, display_name, description, readme_md, tags, version, changelog, community_skill_id, local_path, size_bytes, now_ts, now_ts)
+                (skill_id, user_uuid, name, display_name, description, readme_md, tags, version, changelog, source, community_skill_id, local_path, size_bytes, now_ts, now_ts)
             )
         record = self.get_by_id(skill_id)
         if record is None:
@@ -2210,6 +2212,7 @@ class DatabaseFacade:
                 tags TEXT NOT NULL DEFAULT '[]',
                 version TEXT NOT NULL,
                 changelog TEXT DEFAULT '',
+                source TEXT NOT NULL DEFAULT 'runtime',
                 community_skill_id TEXT,
                 local_path TEXT NOT NULL,
                 size_bytes INTEGER NOT NULL DEFAULT 0,
@@ -2345,6 +2348,12 @@ class DatabaseFacade:
                 cursor.execute("ALTER TABLE user_model_configs ADD COLUMN presence_penalty REAL")
             if "response_format" not in mc_cols:
                 cursor.execute("ALTER TABLE user_model_configs ADD COLUMN response_format TEXT")
+
+            # user_library_skills.source — 记录技能来源
+            cursor.execute("PRAGMA table_info(user_library_skills)")
+            lib_cols = {row[1] for row in cursor.fetchall()}
+            if "source" not in lib_cols:
+                cursor.execute("ALTER TABLE user_library_skills ADD COLUMN source TEXT NOT NULL DEFAULT 'runtime'")
 
         logger.info("Database setup completed")
 

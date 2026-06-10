@@ -28,6 +28,7 @@ import { useUserSkills } from './composables/useUserSkills'
 import { useChatSkillSidebar } from './composables/useChatSkillSidebar'
 import { PREVIEW_PROJECT_LIMIT, API_BASE_URL } from './config'
 import { useNotification } from './composables/useNotification'
+import { confirmDanger, useConfirmDialog } from './composables/useConfirmDialog'
 
 // ── 认证（状态 / 行为均来自 composable，模板继续使用同名 ref） ───────────────
 const {
@@ -56,6 +57,11 @@ const {
   clearAllNotifications,
   toggleNotificationExpanded,
 } = useNotification()
+const {
+  confirmState,
+  resolveConfirm,
+  cancelConfirm,
+} = useConfirmDialog()
 
 // 监听旧的 errorMessage 变化以支持 legacy code
 watch(errorMessage, (newVal) => {
@@ -209,10 +215,6 @@ const openMenuKey = ref<string | null>(null)
 const renamingKey = ref<string | null>(null)
 const renameSubmitting = ref(false)
 
-const confirmDelete = ref<{ id: string; name: string } | null>(null)
-const deleteSubmitting = ref(false)
-const deleteError = ref('')
-
 function projectKey(_scope: 'sidebar', pid: string): string {
   return `sidebar:project:${pid}`
 }
@@ -248,47 +250,25 @@ async function submitProjectRename(project: ProjectItem, nextName: string): Prom
   }
 }
 
-function askDeleteProject(project: ProjectItem): void {
+async function askDeleteProject(project: ProjectItem): Promise<void> {
   openMenuKey.value = null
-  deleteError.value = ''
-  confirmDelete.value = { id: project.pid, name: project.projectname }
-}
-
-function cancelDelete(): void {
-  if (deleteSubmitting.value) return
-  confirmDelete.value = null
-  deleteError.value = ''
-}
-
-async function performDelete(): Promise<void> {
-  const target = confirmDelete.value
-  if (!target || deleteSubmitting.value) return
-
-  deleteSubmitting.value = true
-  deleteError.value = ''
+  const confirmed = await confirmDanger({
+    title: '删除科目',
+    message: `确定删除「${project.projectname}」？该科目下的所有会话和消息也会被一并删除，操作不可恢复。`,
+    confirmText: '删除',
+  })
+  if (!confirmed) return
   try {
-    await deleteProject(target.id)
+    await deleteProject(project.pid)
     // 如果正在查看被删除的项目或其会话，回到总览
-    if (route.params.pid === target.id) {
+    if (route.params.pid === project.pid) {
       await router.replace({ name: 'overview' })
     }
-    removeProject(target.id)
-    confirmDelete.value = null
+    removeProject(project.pid)
   } catch (error) {
-    deleteError.value = getErrorMessage(error)
-  } finally {
-    deleteSubmitting.value = false
+    showGlobalError('删除科目失败', getErrorMessage(error))
   }
 }
-
-const deleteDialogContent = computed(() => {
-  const target = confirmDelete.value
-  if (!target) return null
-  return {
-    title: '删除科目',
-    message: `确定删除「${target.name}」？该科目下的所有会话和消息也会被一并删除，操作不可恢复。`,
-  }
-})
 
 // ── Skill 管理对话框（用户级 / 项目级） ─────────────────────────────────────
 const showUserSkillManager = ref(false)
@@ -338,8 +318,6 @@ async function handleLogout(): Promise<void> {
   showSettingsDialog.value = false
   openMenuKey.value = null
   renamingKey.value = null
-  confirmDelete.value = null
-  deleteError.value = ''
   await router.replace({ name: 'overview' })
 }
 
@@ -992,15 +970,14 @@ watch(
     </Transition>
     <Transition name="dialog-fade" appear>
       <ConfirmDialog
-        v-if="confirmDelete && deleteDialogContent"
-        :title="deleteDialogContent.title"
-        :message="deleteDialogContent.message"
-        confirm-text="删除"
-        danger
-        :submitting="deleteSubmitting"
-        :error="deleteError"
-        @confirm="performDelete"
-        @cancel="cancelDelete"
+        v-if="confirmState.open"
+        :title="confirmState.title"
+        :message="confirmState.message"
+        :confirm-text="confirmState.confirmText"
+        :cancel-text="confirmState.cancelText"
+        :tone="confirmState.tone"
+        @confirm="resolveConfirm"
+        @cancel="cancelConfirm"
       />
     </Transition>
 

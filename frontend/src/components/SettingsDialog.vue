@@ -22,6 +22,7 @@ import {
   updatePreferences,
   getErrorMessage,
 } from '../api'
+import { confirmDanger } from '../composables/useConfirmDialog'
 import { usePreferences } from '../composables/usePreferences'
 
 const emit = defineEmits<{
@@ -80,8 +81,6 @@ const form = ref({
 const showAdvanced = ref(false)
 const showApiKey = ref(false)
 const apiKeyIsMasked = ref(false)
-const confirmDeleteId = ref<string | null>(null)
-const confirmDeleteName = ref('')
 const canSave = computed(() => form.value.config_name.trim().length > 0)
 
 // 视觉模型帮助 tooltip：用 Teleport 渲染到 body，避开所有 overflow 裁剪
@@ -161,13 +160,17 @@ async function handleActivate(config: ModelConfigItem): Promise<void> {
   catch (e) { errorMsg.value = getErrorMessage(e) }
 }
 
-function requestDelete(config: ModelConfigItem): void { confirmDeleteId.value = config.config_id; confirmDeleteName.value = config.config_name }
-function cancelDelete(): void { confirmDeleteId.value = null; confirmDeleteName.value = '' }
+async function requestDelete(config: ModelConfigItem): Promise<void> {
+  if (deleting.value) return
+  const confirmed = await confirmDanger({
+    title: '删除配置',
+    message: `确定删除「${config.config_name}」？此操作不可恢复。`,
+    confirmText: '删除',
+  })
+  if (!confirmed) return
 
-async function performDelete(): Promise<void> {
-  if (!confirmDeleteId.value) return
   deleting.value = true
-  try { await deleteModelConfig(confirmDeleteId.value); if (editingId.value === confirmDeleteId.value) editingId.value = null; await loadConfigs(); confirmDeleteId.value = null }
+  try { await deleteModelConfig(config.config_id); if (editingId.value === config.config_id) editingId.value = null; await loadConfigs() }
   catch (e) { errorMsg.value = getErrorMessage(e) }
   finally { deleting.value = false }
 }
@@ -600,27 +603,6 @@ onMounted(() => { loadConfigs(); loadAccountInfo(); loadPreferences() })
             </button>
           </Transition>
         </template>
-      </div>
-
-      <!-- 删除确认弹窗 -->
-      <div v-if="confirmDeleteId" class="absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-black/30">
-        <div class="relative w-80 rounded-2xl bg-white p-5 shadow-xl">
-          <button
-            type="button"
-            class="absolute top-4 right-4 text-[#9ca3af] hover:text-[#6b7280] transition-colors"
-            :disabled="deleting"
-            @click="cancelDelete"
-          >
-            <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-          <div class="mb-1 text-sm font-semibold text-[#1f2937]">删除配置</div>
-          <div class="mb-4 text-sm text-[#6b7280]">确定删除「{{ confirmDeleteName }}」？此操作不可恢复。</div>
-          <div class="flex justify-end">
-            <button class="h-8 rounded-xl bg-[#b91c1c] hover:bg-[#991b1b] px-4 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60" :disabled="deleting" @click="performDelete">{{ deleting ? '删除中...' : '删除' }}</button>
-          </div>
-        </div>
       </div>
     </div>
     <!-- 视觉模型 tooltip：Teleport 到 body 层，完全避开 overflow 裁剪 -->

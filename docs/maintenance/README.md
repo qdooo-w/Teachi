@@ -52,3 +52,32 @@ uv run python scripts/cleanup_orphans.py
 uv run python scripts/cleanup_orphans.py --strict
 ```
 *(注：`--strict` 会额外检查消息 ID 之间的软关联有效性)*
+
+---
+
+## 3. 设置社区管理员 (`scripts/set_admin.py`)
+
+**脚本位置**：`scripts/set_admin.py`
+
+### 功能描述
+根据用户邮箱在 SQLite 数据库中查找已有用户，并将 `users.role` 更新为 `admin`。社区管理员审核接口会读取该字段进行后端权限校验。
+
+### 运行方式
+使用默认 `DATABASE_PATH`：
+```bash
+uv run python scripts/set_admin.py user@example.com
+```
+
+指定数据库路径：
+```bash
+uv run python scripts/set_admin.py user@example.com --db data/project.db
+```
+
+### 输出与错误
+- 成功：输出用户 UUID、用户名、邮箱，以及角色变化。
+- 用户已是管理员：输出 `User is already admin`，退出码为 0。
+- 邮箱不存在或数据库路径不存在：输出错误信息，退出码为 1。
+
+### 注意事项
+- 参数必须是已经注册用户的邮箱。
+- 如果用户已经打开前端页面，更新后需要刷新页面，让前端重新通过 `/auth/me` 读取最新 `role`。

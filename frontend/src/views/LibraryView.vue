@@ -3,8 +3,11 @@ import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import {
   type UserLibrarySkill,
   type LibrarySkillSort,
+  type CommunitySkillSummary,
   listLibrarySkills,
   getLibrarySkill,
+  getLibraryPublishForm,
+  publishLibrarySkill,
   installLibrarySkill,
   getErrorMessage,
   getCurrentUserId,
@@ -13,15 +16,23 @@ import {
   matchLibrarySkillTemplate,
   parseRuntimeSkill,
   updateLibrarySkillMeta,
+  deleteLibrarySkill,
   bulkDeleteLibrarySkills,
+  forkLibrarySkill,
+  listCommunitySkills,
+  listLibrarySkillFiles,
+  readLibrarySkillFileContent,
+  type LibraryFileEntry,
 } from '../api'
-import { listSkills } from '../skills'
+import { listSkills, validateSkillName } from '../skills'
+import { renderMarkdown } from '../markdown/renderer'
 import { useProjects } from '../composables/useProjects'
 import { useNotification } from '../composables/useNotification'
 import { useUserSkills } from '../composables/useUserSkills'
 import LibraryUploadDialog from '../components/LibraryUploadDialog.vue'
 import SkillEditorPanel from '../components/SkillEditorPanel.vue'
 import { useChatSkillSidebar } from '../composables/useChatSkillSidebar'
+import { confirmDanger, confirmWarning } from '../composables/useConfirmDialog'
 
 const { projects, loadProjects } = useProjects()
 const { showError, showSuccess } = useNotification()
@@ -30,7 +41,7 @@ const { skills: userSkills, load: loadUserSkills } = useUserSkills()
 // ── 标签页系统 ──────────────────────────────────────────────────────────
 interface Tab {
   id: string
-  type: 'main' | 'skill' | 'import-console' | 'pending-import'
+  type: 'main' | 'skill' | 'import-console' | 'pending-import' | 'pending-publish'
   label: string
   skillId?: string
   pendingData?: {
@@ -42,9 +53,24 @@ interface Tab {
     formReadmeMd: string
     formTags: string[]
     formVersion: string
-    source: 'zip' | 'runtime'
+    source: 'zip' | 'runtime' | 'fork'
     templateMatched?: boolean
     matchedTemplate?: UserLibrarySkill | null
+  }
+  publishData?: {
+    libraryId: string
+    name: string
+    displayName: string
+    description: string
+    readmeMd: string
+    originalReadmeMd: string
+    tags: string[]
+    version: string
+    suggestedVersion: string
+    changelog: string
+    communitySkillId: string | null
+    trackedSkill: CommunitySkillSummary | null
+    referenceSkill: CommunitySkillSummary | null
   }
   lastAccessed: number
 }
@@ -96,6 +122,13 @@ const activeTab = computed(() => tabs.value.find((t) => t.id === activeTabId.val
 const currentPendingData = computed(() => {
   if (activeTab.value && activeTab.value.type === 'pending-import' && activeTab.value.pendingData) {
     return activeTab.value.pendingData
+  }
+  return null
+})
+
+const currentPublishData = computed(() => {
+  if (activeTab.value && activeTab.value.type === 'pending-publish' && activeTab.value.publishData) {
+    return activeTab.value.publishData
   }
   return null
 })
@@ -182,6 +215,11 @@ const projectExpanded = ref(true)
 
 const selectedSkillIds = ref<string[]>([])
 const selectedProjectIds = ref<string[]>([])
+
+// 多选时自动展开侧边栏
+watch(selectedSkillIds, (ids) => {
+  if (ids.length > 0) sidebarOpen.value = true
+})
 
 const projectSkillsMap = ref<Record<string, any[]>>({} )
 const expandedProjectPids = ref<Record<string, boolean>>({})
@@ -309,7 +347,12 @@ async function batchDeleteSkills(): Promise<void> {
   if (selectedSkillIds.value.length === 0) return
 
   const count = selectedSkillIds.value.length
-  if (!confirm(`确定删除选中的 ${count} 个技能？此操作不可撤销。`)) return
+  const confirmed = await confirmDanger({
+    title: '批量删除技能',
+    message: `确定删除选中的 ${count} 个技能？此操作不可撤销。`,
+    confirmText: '删除',
+  })
+  if (!confirmed) return
 
   deletingSkills.value = true
   try {
@@ -344,9 +387,26 @@ const currentPage = ref(1)
 // ── 详情状态 ────────────────────────────────────────────────────────────
 const detailSkill = ref<UserLibrarySkill | null>(null)
 const detailLoading = ref(false)
+const detailFiles = ref<LibraryFileEntry[]>([])
+const detailFilesLoading = ref(false)
+const selectedFileName = ref('SKILL.md')
+const selectedFileContent = ref('')
+const selectedFileLoading = ref(false)
+// 展开的文件夹路径集合
+const expandedDirs = ref<Set<string>>(new Set())
+// 子目录缓存：path -> entries
+const dirCache = ref<Map<string, LibraryFileEntry[]>>(new Map())
 const installing = ref(false)
 const installingProject = ref(false)
 const selectedProjectId = ref('')
+const deletingDetailSkill = ref(false)
+const openingPublish = ref(false)
+const publishingSelected = ref(false)
+const isPublishing = ref(false)
+const publishReferenceSearchText = ref('')
+const publishReferenceResults = ref<CommunitySkillSummary[]>([])
+const publishReferenceOpen = ref(false)
+const publishReferenceLoading = ref(false)
 
 // ── 上传弹窗 ────────────────────────────────────────────────────────────
 const showUploadDialog = ref(false)
@@ -407,14 +467,117 @@ async function load(): Promise<void> {
 // ── 详情加载 ────────────────────────────────────────────────────────────
 async function openDetail(id: string): Promise<void> {
   detailLoading.value = true
+  detailFiles.value = []
+  selectedFileName.value = 'SKILL.md'
+  selectedFileContent.value = ''
+  expandedDirs.value = new Set()
+  dirCache.value = new Map()
   try {
     detailSkill.value = await getLibrarySkill(id)
+    await loadRootFiles(id)
+    await loadFileContent(id, 'SKILL.md')
   } catch (e) {
     showError('加载详情失败', getErrorMessage(e))
   } finally {
     detailLoading.value = false
   }
 }
+
+async function loadRootFiles(libraryId: string): Promise<void> {
+  detailFilesLoading.value = true
+  try {
+    const res = await listLibrarySkillFiles(libraryId, '.')
+    // rel_path 格式为 "skill/xxx"，去掉 "skill/" 前缀用于 API 调用
+    detailFiles.value = res.entries
+      .filter((e) => e.name !== 'README.md')
+      .map((e) => ({ ...e, rel_path: e.rel_path.replace(/^skill\//, '') }))
+    dirCache.value.set('.', detailFiles.value)
+  } catch {
+    detailFiles.value = []
+  } finally {
+    detailFilesLoading.value = false
+  }
+}
+
+async function loadFileContent(libraryId: string, filePath: string): Promise<void> {
+  selectedFileName.value = filePath
+  selectedFileLoading.value = true
+  try {
+    const res = await readLibrarySkillFileContent(libraryId, filePath)
+    selectedFileContent.value = res.content
+  } catch {
+    selectedFileContent.value = ''
+  } finally {
+    selectedFileLoading.value = false
+  }
+}
+
+/** 排序：文件在前，文件夹在后 */
+function sortEntries(entries: LibraryFileEntry[]): LibraryFileEntry[] {
+  const files = entries.filter((e) => !e.is_dir)
+  const dirs = entries.filter((e) => e.is_dir)
+  return [...files, ...dirs]
+}
+
+async function toggleDir(dir: LibraryFileEntry): Promise<void> {
+  if (!detailSkill.value) return
+  const id = detailSkill.value.id
+
+  if (expandedDirs.value.has(dir.rel_path)) {
+    // 收起：移除该目录及其所有子目录的展开状态和缓存
+    const newExpanded = new Set(expandedDirs.value)
+    const newCache = new Map(dirCache.value)
+    for (const key of newExpanded) {
+      if (key === dir.rel_path || key.startsWith(dir.rel_path + '/')) {
+        newExpanded.delete(key)
+      }
+    }
+    for (const key of newCache.keys()) {
+      if (key === dir.rel_path || key.startsWith(dir.rel_path + '/')) {
+        newCache.delete(key)
+      }
+    }
+    expandedDirs.value = newExpanded
+    dirCache.value = newCache
+  } else {
+    // 展开：加载子目录内容
+    try {
+      const res = await listLibrarySkillFiles(id, dir.rel_path)
+      const entries = sortEntries(
+        res.entries.map((e) => ({ ...e, rel_path: e.rel_path.replace(/^skill\//, '') }))
+      )
+      const newCache = new Map(dirCache.value)
+      newCache.set(dir.rel_path, entries)
+      dirCache.value = newCache
+      const newExpanded = new Set(expandedDirs.value)
+      newExpanded.add(dir.rel_path)
+      expandedDirs.value = newExpanded
+    } catch {
+      // 静默失败
+    }
+  }
+}
+
+/** 递归渲染文件树 */
+interface FileTreeNode {
+  entry: LibraryFileEntry
+  depth: number
+}
+
+const fileTree = computed<FileTreeNode[]>(() => {
+  const result: FileTreeNode[] = []
+  function walk(entries: LibraryFileEntry[], depth: number) {
+    for (const entry of entries) {
+      result.push({ entry, depth })
+      if (entry.is_dir && expandedDirs.value.has(entry.rel_path)) {
+        const children = dirCache.value.get(entry.rel_path)
+        if (children) walk(children, depth + 1)
+      }
+    }
+  }
+  walk(sortEntries(detailFiles.value), 0)
+  return result
+})
 
 // ── 安装 ────────────────────────────────────────────────────────────────
 async function doInstall(): Promise<void> {
@@ -454,28 +617,52 @@ async function doInstallProject(): Promise<void> {
   }
 }
 
+// ── 删除单个仓库技能 ─────────────────────────────────────────────────────
+async function doDeleteDetailSkill(): Promise<void> {
+  if (!detailSkill.value) return
+  const skill = detailSkill.value
+  const confirmed = await confirmDanger({
+    title: '删除仓库技能',
+    message: `确定删除仓库中的 "${skillTitle(skill)}" 吗？此操作不可撤销。`,
+    confirmText: '删除',
+  })
+  if (!confirmed) return
+
+  deletingDetailSkill.value = true
+  try {
+    await deleteLibrarySkill(skill.id)
+    showSuccess(`已删除 "${skillTitle(skill)}"`)
+    selectedSkillIds.value = selectedSkillIds.value.filter((id) => id !== skill.id)
+    closeTab(`skill:${skill.id}`)
+    detailSkill.value = null
+    await load()
+  } catch (e) {
+    showError('删除技能失败', getErrorMessage(e))
+  } finally {
+    deletingDetailSkill.value = false
+  }
+}
+
 // ── Fork ────────────────────────────────────────────────────────────────
 function doFork(): void {
   if (!detailSkill.value) return
   const skill = detailSkill.value
-  const newTabId = `pending-import:${skill.name}:${Date.now()}-${Math.random().toString(36).substr(2, 5)}`
+  const newTabId = `pending-import:fork:${skill.id}:${Date.now()}`
 
   const originalDisplayName = skill.display_name || skill.name
-  let newDisplayName = ''
-  const suffixMatch = originalDisplayName.match(/ \(自定义版本 (\d+)\)$/)
-  if (suffixMatch) {
-    const nextNum = parseInt(suffixMatch[1], 10) + 1
-    newDisplayName = originalDisplayName.replace(/ \(自定义版本 (\d+)\)$/, ` (自定义版本 ${nextNum})`)
-  } else {
-    newDisplayName = `${originalDisplayName} (自定义版本 1)`
-  }
+  const baseName = originalDisplayName.replace(/ \(自定义版本.*\)$/, '')
+  const now = new Date()
+  const yy = String(now.getFullYear()).slice(-2)
+  const mm = String(now.getMonth() + 1).padStart(2, '0')
+  const dd = String(now.getDate()).padStart(2, '0')
+  const newDisplayName = `${baseName} (自定义版本 ${yy}${mm}${dd})`
 
   const newTab: Tab = {
     id: newTabId,
     type: 'pending-import',
     label: `复制：${skill.name}`,
     pendingData: {
-      libraryId: '', // 相当于新建，更新 version_id / skill_id
+      libraryId: skill.id, // 记录源 skill ID，保存时调 fork API
       name: skill.name,
       formName: skill.name,
       formDisplayName: newDisplayName,
@@ -483,8 +670,8 @@ function doFork(): void {
       formReadmeMd: skill.readme_md || '',
       formTags: parseTags(skill.tags),
       formVersion: skill.version || '1.0.0',
-      source: 'runtime',
-      templateMatched: false,
+      source: 'fork',
+      templateMatched: true,
       matchedTemplate: null,
     },
     lastAccessed: Date.now(),
@@ -493,6 +680,186 @@ function doFork(): void {
   tabs.value.push(newTab)
   saveTabs(tabs.value)
   activeTabId.value = newTabId
+}
+
+// ── 发布到社区 ──────────────────────────────────────────────────────────
+function buildPublishData(form: Awaited<ReturnType<typeof getLibraryPublishForm>>): NonNullable<Tab['publishData']> {
+  const skill = form.library_skill
+  const tracked = form.community_skill
+  return {
+    libraryId: skill.id,
+    name: skill.name,
+    displayName: skill.display_name || skill.name,
+    description: skill.description || '',
+    readmeMd: skill.readme_md || '',
+    originalReadmeMd: skill.readme_md || '',
+    tags: parseTags(skill.tags),
+    version: form.suggested_version || skill.version || '1.0.0',
+    suggestedVersion: form.suggested_version || '1.0.0',
+    changelog: '',
+    communitySkillId: tracked?.id ?? null,
+    trackedSkill: tracked,
+    referenceSkill: tracked,
+  }
+}
+
+async function openPublishTab(libraryId: string, activate = true): Promise<string | null> {
+  const existing = tabs.value.find((t) => t.type === 'pending-publish' && t.publishData?.libraryId === libraryId)
+  if (existing) {
+    if (activate) activeTabId.value = existing.id
+    return existing.id
+  }
+
+  openingPublish.value = true
+  try {
+    const form = await getLibraryPublishForm(libraryId)
+    const publishData = buildPublishData(form)
+    const newTabId = `pending-publish:${libraryId}:${Date.now()}`
+    const newTab: Tab = {
+      id: newTabId,
+      type: 'pending-publish',
+      label: `发布：${publishData.displayName || publishData.name}`,
+      publishData,
+      lastAccessed: Date.now(),
+    }
+    tabs.value.push(newTab)
+    saveTabs(tabs.value)
+    if (activate) activeTabId.value = newTabId
+    return newTabId
+  } catch (e) {
+    showError('加载发布表单失败', getErrorMessage(e))
+    return null
+  } finally {
+    openingPublish.value = false
+  }
+}
+
+async function openPublishForDetail(): Promise<void> {
+  if (!detailSkill.value) return
+  await openPublishTab(detailSkill.value.id)
+}
+
+async function batchOpenPublishTabs(): Promise<void> {
+  if (selectedSkillIds.value.length === 0) return
+  publishingSelected.value = true
+  try {
+    let firstTabId: string | null = null
+    for (const skillId of selectedSkillIds.value) {
+      const tabId = await openPublishTab(skillId, false)
+      if (!firstTabId) firstTabId = tabId
+    }
+    if (firstTabId) {
+      activeTabId.value = firstTabId
+      showSuccess(`已创建 ${selectedSkillIds.value.length} 个社区发布表单`)
+    }
+  } finally {
+    publishingSelected.value = false
+  }
+}
+
+async function searchPublishReferences(): Promise<void> {
+  const data = currentPublishData.value
+  if (!data) return
+  publishReferenceLoading.value = true
+  publishReferenceOpen.value = true
+  try {
+    const keywordText = publishReferenceSearchText.value.trim() || data.name
+    const res = await listCommunitySkills({ keyword: keywordText, limit: 8, offset: 0, sort: 'popular' })
+    publishReferenceResults.value = res.skills
+  } catch (e) {
+    showError('搜索社区技能失败', getErrorMessage(e))
+  } finally {
+    publishReferenceLoading.value = false
+  }
+}
+
+function selectPublishReference(skill: CommunitySkillSummary | null, tab: Tab): void {
+  if (!tab.publishData) return
+  tab.publishData.referenceSkill = skill
+  publishReferenceOpen.value = false
+  publishReferenceSearchText.value = ''
+  saveTabs(tabs.value)
+}
+
+function removePublishTag(tag: string, tab: Tab): void {
+  if (!tab.publishData) return
+  tab.publishData.tags = tab.publishData.tags.filter((t) => t !== tag)
+  saveTabs(tabs.value)
+}
+
+function addPublishTag(tab: Tab): void {
+  if (!tab.publishData) return
+  const t = tagText.value.trim()
+  if (t && !tab.publishData.tags.includes(t)) {
+    tab.publishData.tags.push(t)
+    saveTabs(tabs.value)
+  }
+  tagText.value = ''
+}
+
+async function submitPublish(tab: Tab): Promise<void> {
+  if (!tab.publishData) return
+  const data = tab.publishData
+  if (!data.name.trim()) {
+    showError('技能标识名不能为空')
+    return
+  }
+  const nameError = validateSkillName(data.name.trim())
+  if (nameError) {
+    showError(nameError)
+    return
+  }
+  if (!data.displayName.trim()) {
+    showError('显示名称不能为空')
+    return
+  }
+  if (!data.description.trim()) {
+    showError('简短描述不能为空')
+    return
+  }
+  if (!/^[0-9]+\.[0-9]+\.[0-9]+$/.test(data.version.trim())) {
+    showError('版本号格式必须为 X.Y.Z，例如 1.0.0')
+    return
+  }
+  if (!data.changelog.trim()) {
+    showError('请填写本次发布的变更说明')
+    return
+  }
+
+  isPublishing.value = true
+  try {
+    const updated = await updateLibrarySkillMeta(data.libraryId, {
+      name: data.name.trim(),
+      display_name: data.displayName.trim(),
+      description: data.description.trim(),
+      readme_md: data.readmeMd,
+      tags: JSON.stringify(data.tags),
+      version: data.version.trim(),
+    })
+    await publishLibrarySkill(data.libraryId, {
+      version: data.version.trim(),
+      changelog: data.changelog.trim(),
+    })
+    showSuccess('已提交到社区 Owner 审核')
+    closeTab(tab.id)
+    await load()
+    openSkillTab(updated)
+  } catch (e) {
+    showError('发布到社区失败', getErrorMessage(e))
+  } finally {
+    isPublishing.value = false
+  }
+}
+
+async function cancelPublish(tabId: string): Promise<void> {
+  const confirmed = await confirmWarning({
+    title: '放弃社区发布',
+    message: '是否确定放弃本次社区发布表单？已填写内容不会提交。',
+    confirmText: '放弃',
+  })
+  if (confirmed) {
+    closeTab(tabId)
+  }
 }
 
 // ── 标签筛选操作 ────────────────────────────────────────────────────────
@@ -846,8 +1213,9 @@ async function savePendingImport(tab: Tab): Promise<void> {
     showError('技能标识名不能为空')
     return
   }
-  if (!/^[a-zA-Z0-9_-]+$/.test(data.formName.trim())) {
-    showError('技能标识名只能包含字母、数字、下划线和中划线')
+  const nameError = validateSkillName(data.formName.trim())
+  if (nameError) {
+    showError(nameError)
     return
   }
   if (!data.formDisplayName.trim()) {
@@ -872,7 +1240,17 @@ async function savePendingImport(tab: Tab): Promise<void> {
     const tagsJson = JSON.stringify(data.formTags)
     let finalSkillId = ''
 
-    if (data.source === 'runtime') {
+    if (data.source === 'fork') {
+      const res = await forkLibrarySkill(data.libraryId, {
+        name: data.formName,
+        display_name: data.formDisplayName,
+        description: data.formDescription,
+        readme_md: data.formReadmeMd,
+        tags: tagsJson,
+        version: data.formVersion,
+      })
+      finalSkillId = res.id
+    } else if (data.source === 'runtime') {
       const res = await collectLibrarySkill({
         skill_name: data.name,
         name: data.formName,
@@ -914,8 +1292,13 @@ async function savePendingImport(tab: Tab): Promise<void> {
   }
 }
 
-function cancelPendingImport(tabId: string): void {
-  if (confirm('是否确定放弃导入该技能包？配置将不会被保存。')) {
+async function cancelPendingImport(tabId: string): Promise<void> {
+  const confirmed = await confirmWarning({
+    title: '放弃导入技能包',
+    message: '是否确定放弃导入该技能包？配置将不会被保存。',
+    confirmText: '放弃',
+  })
+  if (confirmed) {
     closeTab(tabId)
   }
 }
@@ -1047,6 +1430,11 @@ watch(activeTabId, async (newId) => {
             class="mr-1 h-1.5 w-1.5 rounded-full bg-purple-500 flex-shrink-0"
             title="待配置导入"
           ></span>
+          <span
+            v-else-if="tab.type === 'pending-publish'"
+            class="mr-1 h-1.5 w-1.5 rounded-full bg-emerald-500 flex-shrink-0"
+            title="待发布到社区"
+          ></span>
           <span class="max-w-[160px] truncate">{{ tab.label }}</span>
           <span
             v-if="tab.type !== 'main' && tab.type !== 'import-console'"
@@ -1122,6 +1510,14 @@ watch(activeTabId, async (newId) => {
               <span class="text-xs text-[#6b7280] font-hans">已选 {{ selectedSkillIds.length }} 个</span>
               <button
                 type="button"
+                :disabled="publishingSelected"
+                @click="batchOpenPublishTabs"
+                class="!text-xs text-emerald-600 hover:text-emerald-700 hover:underline font-hans disabled:opacity-40"
+              >
+                {{ publishingSelected ? '准备中...' : '上传到社区' }}
+              </button>
+              <button
+                type="button"
                 :disabled="deletingSkills"
                 @click="batchDeleteSkills"
                 class="!text-xs text-red-500 hover:text-red-700 hover:underline font-hans disabled:opacity-40"
@@ -1148,31 +1544,31 @@ watch(activeTabId, async (newId) => {
               仓库中还没有技能，从技能管理页收集或从社区安装吧。
             </div>
 
-            <div v-else class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+            <div v-else class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-3 xl:grid-cols-4 gap-4">
               <button
                 v-for="s in skills"
                 :key="s.id"
                 draggable="true"
                 @dragstart="onDragStart($event, s)"
-                class="flex w-full flex-col gap-2 rounded-xl bg-white p-3.5 text-left shadow-sm transition hover:bg-[#f9fafb] hover:shadow-md active:scale-[0.99] relative group cursor-grab"
+                class="flex w-full flex-col gap-3 rounded-xl bg-white p-5 text-left shadow-sm transition hover:bg-[#f9fafb] hover:shadow-md active:scale-[0.99] relative group cursor-grab"
                 type="button"
                 @click="openSkillTab(s)"
               >
                 <!-- 标题行 -->
                 <div class="flex items-start justify-between gap-2">
-                  <div class="flex items-center gap-1.5 min-w-0">
+                  <div class="flex items-center gap-2 min-w-0">
                     <!-- 批量选择 Checkbox -->
                     <input
                       type="checkbox"
                       :value="s.id"
                       v-model="selectedSkillIds"
                       @click.stop
-                      class="h-3.5 w-3.5 flex-shrink-0 rounded text-[#1f2937] focus:ring-[#1f2937]/20 border-gray-300 cursor-pointer"
+                      class="h-[18px] w-[18px] flex-shrink-0 rounded text-[#1f2937] focus:ring-[#1f2937]/20 border-gray-300 cursor-pointer"
                     />
                     <span class="truncate text-sm font-semibold text-[#1f2937]">{{ skillTitle(s) }}</span>
                   </div>
                   <span
-                    class="flex flex-shrink-0 items-center rounded-full px-2 py-0.5 text-[10px] whitespace-nowrap"
+                    class="flex flex-shrink-0 items-center rounded-full px-2 py-0.5 text-[11px] whitespace-nowrap"
                     :class="s.community_skill_id ? 'bg-blue-50 text-blue-600' : 'bg-[#f3f4f6] text-[#6b7280]'"
                   >
                     {{ sourceLabel(s) }}
@@ -1188,12 +1584,12 @@ watch(activeTabId, async (newId) => {
                 <div class="mt-auto flex items-center justify-between gap-2">
                   <div class="flex items-center gap-1.5 min-w-0 overflow-hidden">
                     <template v-for="tag in parseTags(s.tags).slice(0, 2)" :key="tag">
-                      <span class="rounded-sm bg-[#f3f4f6] px-1.5 py-0.5 text-[10px] text-[#9ca3af] truncate max-w-[60px]">
+                      <span class="rounded-sm bg-[#f3f4f6] px-1.5 py-0.5 text-[11px] text-[#9ca3af] truncate max-w-[80px]">
                         {{ tag }}
                       </span>
                     </template>
                   </div>
-                  <div class="flex flex-shrink-0 items-center gap-1.5 text-[10px] text-[#9ca3af] tabular-nums">
+                  <div class="flex flex-shrink-0 items-center gap-1.5 text-[11px] text-[#9ca3af] tabular-nums">
                     <span>v{{ s.version }}</span>
                     <span>·</span>
                     <span>{{ formatBytes(s.size_bytes) }}</span>
@@ -1523,10 +1919,10 @@ watch(activeTabId, async (newId) => {
                 <input
                   v-model="currentPendingData.formName"
                   type="text"
-                  placeholder="仅限字母、数字、下划线和中划线"
+                  placeholder="支持中文、字母、数字、下划线和中划线"
                   class="block w-full rounded-none border border-[#e5e7eb] bg-white px-3 py-2 text-xs text-[#1f2937] placeholder:text-[#9ca3af] outline-none focus:border-[#1f2937] focus:ring-1 focus:ring-[#1f2937]"
                 />
-                <span class="text-[10px] text-[#9ca3af] block mt-1">技能的唯一英文标识，将作为后端物理文件中的 SKILL.md name 配置项。</span>
+                <span class="text-[10px] text-[#9ca3af] block mt-1">技能的唯一标识，将作为后端物理文件中的 SKILL.md name 配置项。</span>
               </div>
 
               <!-- version (可编辑) -->
@@ -1630,6 +2026,229 @@ watch(activeTabId, async (newId) => {
             </div>
           </div>
         </template>
+
+        <!-- ── 待发布到社区表单标签页 ── -->
+        <template v-else-if="activeTab.type === 'pending-publish' && currentPublishData">
+          <div class="flex flex-shrink-0 items-center h-9 px-5 gap-2 bg-white font-hans">
+            <span class="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
+            <span class="!text-xs font-semibold text-[#1f2937]">发布到社区：{{ currentPublishData.displayName || currentPublishData.name }}</span>
+            <span class="!text-xs text-[#9ca3af]">
+              {{ currentPublishData.trackedSkill ? '发布为已追踪社区技能的新版本' : '发布为新的社区技能' }}
+            </span>
+            <div class="flex-1"></div>
+            <button
+              type="button"
+              @click="cancelPublish(activeTab.id)"
+              class="!text-xs text-red-500 hover:text-red-700 hover:underline"
+            >
+              放弃发布
+            </button>
+          </div>
+
+          <div class="relative flex-1 min-h-0 flex flex-col">
+            <div class="min-h-0 flex-1 overflow-y-auto px-6 py-6 pb-24 font-hans">
+              <div class="mb-5 rounded-none border border-emerald-100 bg-emerald-50/30 p-4">
+                <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                  <div class="min-w-0 space-y-2">
+                    <span class="text-xs font-semibold text-emerald-900 block">社区追踪</span>
+                    <div class="grid grid-cols-[76px_1fr] gap-x-3 gap-y-1 text-xs">
+                      <span class="text-[#9ca3af]">当前追踪</span>
+                      <span class="text-[#1f2937]">
+                        <template v-if="currentPublishData.trackedSkill">
+                          {{ currentPublishData.trackedSkill.display_name || currentPublishData.trackedSkill.name }}
+                        </template>
+                        <template v-else>
+                          无追踪，提交后将新建社区技能
+                        </template>
+                      </span>
+                      <span class="text-[#9ca3af]">版本 ID</span>
+                      <span class="truncate font-mono text-[11px] text-[#4b5563]">{{ currentPublishData.libraryId }}</span>
+                      <span class="text-[#9ca3af]">版本建议</span>
+                      <span class="text-[#1f2937]">v{{ currentPublishData.suggestedVersion }}</span>
+                    </div>
+                    <p class="text-[11px] leading-relaxed text-[#9ca3af]">
+                      当前仓库技能 ID 会作为社区版本 ID；同一仓库条目重复提交不会代表新的版本变动。需要真正发布新版本时，请先复制/Fork 生成新的仓库条目。
+                    </p>
+                  </div>
+
+                  <div class="w-full flex-shrink-0 lg:w-[300px]">
+                    <span class="mb-1.5 block text-[11px] font-semibold text-[#4b5563]">参考社区技能</span>
+                    <div class="relative flex gap-2">
+                      <input
+                        v-model="publishReferenceSearchText"
+                        class="h-8 min-w-0 flex-1 rounded-none border border-emerald-200 bg-white px-3 text-xs text-[#1f2937] placeholder:text-[#9ca3af] outline-none focus:border-emerald-600"
+                        placeholder="搜索社区技能作对照"
+                        @keydown.enter.prevent="searchPublishReferences"
+                      />
+                      <button
+                        type="button"
+                        :disabled="publishReferenceLoading"
+                        @click="searchPublishReferences"
+                        class="h-8 rounded-xl bg-emerald-600 px-3 text-xs font-medium text-white transition hover:bg-emerald-700 active:scale-95 disabled:opacity-40"
+                      >
+                        搜索
+                      </button>
+                      <div
+                        v-if="publishReferenceOpen"
+                        class="absolute right-0 top-full z-50 mt-1 max-h-64 w-full overflow-y-auto rounded-none border border-[#e5e7eb] bg-white py-1 shadow-lg"
+                      >
+                        <button
+                          type="button"
+                          class="block w-full px-3 py-1.5 text-left text-xs text-[#6b7280] hover:bg-emerald-50 hover:text-emerald-700"
+                          @click="selectPublishReference(null, activeTab)"
+                        >
+                          不选择参考技能
+                        </button>
+                        <div v-if="publishReferenceLoading" class="px-3 py-2 text-center text-xs text-[#9ca3af]">搜索中...</div>
+                        <div v-else-if="publishReferenceResults.length === 0" class="px-3 py-2 text-center text-xs text-[#9ca3af]">未找到社区技能</div>
+                        <template v-else>
+                          <button
+                            v-for="skill in publishReferenceResults"
+                            :key="skill.id"
+                            type="button"
+                            class="block w-full px-3 py-1.5 text-left text-xs text-[#374151] hover:bg-emerald-50 hover:text-emerald-700"
+                            @click="selectPublishReference(skill, activeTab)"
+                          >
+                            <span class="block truncate">{{ skill.display_name || skill.name }}</span>
+                            <span class="block truncate text-[10px] text-[#9ca3af]">{{ skill.name }}</span>
+                          </button>
+                        </template>
+                      </div>
+                    </div>
+                    <p class="mt-1 text-[10px] text-[#9ca3af]">
+                      参考选择只用于填写时对照，不会改变后端发布追踪。
+                    </p>
+                    <p v-if="currentPublishData.referenceSkill" class="mt-2 rounded-lg bg-white px-3 py-2 text-[11px] text-[#4b5563]">
+                      正在参考：{{ currentPublishData.referenceSkill.display_name || currentPublishData.referenceSkill.name }}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div class="space-y-6 w-full">
+                <div>
+                  <label class="block text-xs font-semibold text-[#4b5563] mb-1.5">技能标识名 (name) <span class="text-red-500">*</span></label>
+                  <input
+                    v-model="currentPublishData.name"
+                    type="text"
+                    placeholder="支持中文、字母、数字、下划线和中划线"
+                    class="block w-full rounded-none border border-[#e5e7eb] bg-white px-3 py-2 text-xs text-[#1f2937] placeholder:text-[#9ca3af] outline-none focus:border-[#1f2937] focus:ring-1 focus:ring-[#1f2937]"
+                  />
+                </div>
+
+                <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+                  <div>
+                    <label class="block text-xs font-semibold text-[#4b5563] mb-1.5">发布版本号 (version) <span class="text-red-500">*</span></label>
+                    <input
+                      v-model="currentPublishData.version"
+                      type="text"
+                      placeholder="格式如：1.0.0"
+                      class="block w-full rounded-none border border-[#e5e7eb] bg-white px-3 py-2 text-xs text-[#1f2937] placeholder:text-[#9ca3af] outline-none focus:border-[#1f2937] focus:ring-1 focus:ring-[#1f2937]"
+                    />
+                    <span class="text-[10px] text-[#9ca3af] block mt-1">请使用三位版本号规范；建议值来自最新已审核版本末位 +1。</span>
+                  </div>
+
+                  <div>
+                    <label class="block text-xs font-semibold text-[#4b5563] mb-1.5">显示名称 (display_name) <span class="text-red-500">*</span></label>
+                    <input
+                      v-model="currentPublishData.displayName"
+                      type="text"
+                      placeholder="如：中文翻译助手"
+                      class="block w-full rounded-none border border-[#e5e7eb] bg-white px-3 py-2 text-xs text-[#1f2937] placeholder:text-[#9ca3af] outline-none focus:border-[#1f2937] focus:ring-1 focus:ring-[#1f2937]"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label class="block text-xs font-semibold text-[#4b5563] mb-1.5">简短描述 (description) <span class="text-red-500">*</span></label>
+                  <textarea
+                    v-model="currentPublishData.description"
+                    rows="3"
+                    placeholder="面向社区用户的一句话简介，将显示在社区列表中。"
+                    class="block w-full rounded-none border border-[#e5e7eb] bg-white px-3 py-2 text-xs text-[#1f2937] placeholder:text-[#9ca3af] outline-none focus:border-[#1f2937] focus:ring-1 focus:ring-[#1f2937]"
+                  ></textarea>
+                </div>
+
+                <div>
+                  <label class="block text-xs font-semibold text-[#4b5563] mb-1.5">本次变更说明 (changelog) <span class="text-red-500">*</span></label>
+                  <textarea
+                    v-model="currentPublishData.changelog"
+                    rows="3"
+                    placeholder="说明这次发布新增、修正或调整了什么。"
+                    class="block w-full rounded-none border border-[#e5e7eb] bg-white px-3 py-2 text-xs text-[#1f2937] placeholder:text-[#9ca3af] outline-none focus:border-[#1f2937] focus:ring-1 focus:ring-[#1f2937]"
+                  ></textarea>
+                </div>
+
+                <div>
+                  <label class="block text-xs font-semibold text-[#4b5563] mb-1.5">标签 (tags)</label>
+                  <div class="flex flex-wrap items-center gap-1.5 p-2 rounded-none border border-[#e5e7eb] bg-white min-h-[38px] w-full">
+                    <span
+                      v-for="t in currentPublishData.tags"
+                      :key="t"
+                      class="inline-flex items-center gap-1 bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded text-xs"
+                    >
+                      {{ t }}
+                      <button type="button" @click="removePublishTag(t, activeTab)" class="text-emerald-400 hover:text-emerald-700 font-bold font-sans">×</button>
+                    </span>
+                    <input
+                      v-model="tagText"
+                      placeholder="输入标签并回车添加"
+                      @keydown.enter.prevent="addPublishTag(activeTab)"
+                      class="flex-1 min-w-[120px] bg-transparent border-0 outline-none text-xs py-0.5 text-[#1f2937] placeholder:text-[#9ca3af]"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <div class="mb-1.5 flex items-center gap-2">
+                    <label class="block text-xs font-semibold text-[#4b5563]">详细说明文档 (README.md)</label>
+                    <span
+                      v-if="currentPublishData.readmeMd !== currentPublishData.originalReadmeMd"
+                      class="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] text-emerald-700"
+                    >
+                      README 已修改，提交前会同步到仓库
+                    </span>
+                  </div>
+                  <div class="rounded-none border border-[#e5e7eb] bg-white overflow-hidden flex flex-col">
+                    <div class="flex bg-gray-50 border-b border-[#e5e7eb] px-3 py-1.5 justify-between items-center flex-shrink-0">
+                      <span class="text-[11px] font-semibold text-[#6b7280]">Markdown 编辑</span>
+                      <span class="text-[10px] text-[#9ca3af]">支持标准 Markdown 语法</span>
+                    </div>
+                    <textarea
+                      v-model="currentPublishData.readmeMd"
+                      rows="10"
+                      placeholder="请输入关于此技能的使用方法、AI 代理调用建议等详细文档..."
+                      class="block w-full border-0 bg-transparent px-4 py-3 text-xs text-[#374151] font-mono leading-relaxed outline-none resize-y min-h-[220px]"
+                    ></textarea>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="absolute bottom-6 right-6 flex items-center gap-3 z-30">
+              <button
+                type="button"
+                :disabled="isPublishing"
+                @click="cancelPublish(activeTab.id)"
+                class="h-9 rounded-xl border border-[#d1d5db] bg-white px-5 text-xs font-medium text-[#4b5563] transition hover:bg-[#f9fafb] active:scale-95 disabled:opacity-40"
+              >
+                放弃发布
+              </button>
+              <button
+                type="button"
+                :disabled="isPublishing"
+                @click="submitPublish(activeTab)"
+                class="h-9 rounded-xl bg-emerald-600 px-6 text-xs font-medium text-white transition hover:bg-emerald-700 active:scale-95 disabled:opacity-40 disabled:scale-100 flex items-center gap-1.5 shadow-sm shadow-emerald-200"
+              >
+                <svg v-if="isPublishing" class="animate-spin h-3.5 w-3.5" fill="none" viewBox="0 0 24 24">
+                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                提交发布审核
+              </button>
+            </div>
+          </div>
+        </template>
         
         <!-- ── 技能详情标签页 ── -->
         <template v-else-if="activeTab.type === 'skill'">
@@ -1643,6 +2262,25 @@ watch(activeTabId, async (newId) => {
             >
               {{ sourceLabel(detailSkill) }}
             </span>
+            <div class="flex-1"></div>
+            <button
+              v-if="detailSkill"
+              type="button"
+              :disabled="openingPublish"
+              @click="openPublishForDetail"
+              class="!text-xs text-emerald-600 hover:text-emerald-700 hover:underline disabled:opacity-40"
+            >
+              {{ openingPublish ? '准备中...' : '上传到社区' }}
+            </button>
+            <button
+              v-if="detailSkill"
+              type="button"
+              :disabled="deletingDetailSkill"
+              @click="doDeleteDetailSkill"
+              class="!text-xs text-red-500 hover:text-red-700 hover:underline disabled:opacity-40"
+            >
+              {{ deletingDetailSkill ? '删除中...' : '删除技能' }}
+            </button>
           </div>
           <!-- 内容 -->
           <div class="min-h-0 flex-1 overflow-y-auto px-5 py-4">
@@ -1652,23 +2290,30 @@ watch(activeTabId, async (newId) => {
             </div>
 
             <template v-else-if="detailSkill">
-              <div class="flex flex-col lg:flex-row h-full gap-4 items-start">
-                <!-- 左侧/主体：README 与描述 -->
-                <div class="flex-1 min-w-0 w-full bg-white rounded-xl border border-[#e5e7eb] p-6 flex flex-col">
-
-                  <p v-if="detailSkill.description" class="mb-4 rounded-lg bg-[#f9fafb] px-4 py-3 text-sm text-[#374151] leading-relaxed">
-                    {{ detailSkill.description }}
-                  </p>
-
-                  <div v-if="detailSkill.readme_md" class="mt-4 flex-1">
-                    <div class="mb-2 text-xs font-semibold text-[#9ca3af] uppercase tracking-wider">README</div>
-                    <div class="rounded-xl border border-[#e5e7eb] bg-[#fafafa] p-4 text-sm text-[#374151] leading-relaxed overflow-y-auto max-h-[400px]">
-                      <pre class="whitespace-pre-wrap font-sans text-sm text-[#374151]">{{ detailSkill.readme_md }}</pre>
-                    </div>
+              <div class="flex flex-col lg:flex-row gap-4">
+                <!-- 左侧/主体：描述与 README -->
+                <div class="flex-1 min-w-0 w-full flex flex-col gap-4">
+                  <div v-if="detailSkill.description">
+                    <span class="inline-block rounded-md bg-[#1f2937] px-2 py-0.5 text-[11px] font-semibold text-white mb-2">Description</span>
+                    <p class="text-sm text-[#374151] leading-relaxed">{{ detailSkill.description }}</p>
                   </div>
-                  <div v-else class="py-12 text-center text-sm text-[#9ca3af]">
-                    暂无 README 内容
+                  <div v-if="detailSkill.description && detailSkill.readme_md" class="border-t border-[#e5e7eb]"></div>
+                  <div v-if="detailSkill.readme_md" class="flex-1">
+                    <span class="inline-block rounded-md bg-[#1f2937] px-2 py-0.5 text-[11px] font-semibold text-white mb-2">README.md</span>
+                    <div class="markdown-body" v-html="renderMarkdown(detailSkill.readme_md)"></div>
                   </div>
+                  <div v-if="!detailSkill.description && !detailSkill.readme_md" class="py-12 text-center text-sm text-[#9ca3af]">
+                    暂无描述和 README 内容
+                  </div>
+
+                  <!-- 选中文件内容 -->
+                  <div v-if="selectedFileName" class="border-t border-[#e5e7eb] pt-4">
+                    <span class="inline-block rounded-md bg-[#1f2937] px-2 py-0.5 text-[11px] font-semibold text-white mb-2">{{ selectedFileName.split('/').pop() }}</span>
+                    <div v-if="selectedFileLoading" class="text-xs text-[#9ca3af] py-4">加载中…</div>
+                    <pre v-else-if="selectedFileContent" class="whitespace-pre-wrap font-sans text-sm text-[#374151] leading-relaxed bg-[#f9fafb] rounded-lg p-4 overflow-x-auto">{{ selectedFileContent }}</pre>
+                    <div v-else class="text-xs text-[#9ca3af] py-4">无法读取文件内容</div>
+                  </div>
+
                 </div>
 
                 <!-- 右侧：属性详情与操作 -->
@@ -1712,7 +2357,16 @@ watch(activeTabId, async (newId) => {
                   <!-- 操作区 -->
                   <div class="bg-white rounded-xl border border-[#e5e7eb] p-5 flex flex-col gap-3">
                     <button
-                      class="w-full rounded-xl bg-[#f3f4f6] py-2.5 text-sm text-[#374151] font-semibold transition-all duration-200 hover:bg-[#e5e7eb] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+                      class="w-full rounded-xl bg-emerald-600 py-2.5 text-sm text-white font-semibold transition-all duration-200 hover:bg-emerald-700 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+                      type="button"
+                      :disabled="openingPublish"
+                      @click="openPublishForDetail"
+                    >
+                      {{ openingPublish ? '准备发布...' : '上传到社区' }}
+                    </button>
+
+                    <button
+                      class="w-full rounded-xl bg-[#f3f4f6] py-2.5 text-sm text-[#374151] font-semibold transition-all duration-200 hover:bg-[#e5e7eb] active:scale-[0.98]"
                       type="button"
                       @click="doFork"
                     >
@@ -1744,14 +2398,64 @@ watch(activeTabId, async (newId) => {
                       </div>
                     </div>
 
-                    <button
-                      class="w-full h-9 rounded-xl bg-[#1f2937] text-xs text-white font-semibold transition-all duration-200 hover:bg-[#111827] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 mt-1"
-                      :disabled="installing"
-                      type="button"
-                      @click="doInstall"
-                    >
-                      {{ installing ? '安装中...' : '安装到用户级技能' }}
-                    </button>
+                    <div class="flex gap-2 mt-1">
+                      <button
+                        class="flex-1 h-9 rounded-xl bg-[#1f2937] text-xs text-white font-semibold transition-all duration-200 hover:bg-[#111827] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+                        :disabled="installing"
+                        type="button"
+                        @click="doInstall"
+                      >
+                        {{ installing ? '安装中...' : '安装到用户级' }}
+                      </button>
+
+                      <button
+                        class="h-9 rounded-xl bg-red-600 text-xs text-white font-semibold transition-all duration-200 hover:bg-red-700 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 px-3"
+                        :disabled="deletingDetailSkill"
+                        type="button"
+                        @click="doDeleteDetailSkill"
+                      >
+                      {{ deletingDetailSkill ? '删除中...' : '删除技能' }}
+	                    </button>
+	                  </div>
+	                </div>
+
+	                  <!-- 文件结构 -->
+	                  <div class="bg-white rounded-xl border border-[#e5e7eb] p-5">
+                    <h3 class="text-sm font-semibold text-[#1f2937] mb-3">文件结构</h3>
+                    <div v-if="detailFilesLoading" class="text-xs text-[#9ca3af] py-2">加载中…</div>
+                    <div v-else-if="fileTree.length === 0" class="text-xs text-[#9ca3af] py-2">暂无文件</div>
+                    <div v-else class="flex flex-col gap-0.5">
+                      <template v-for="node in fileTree" :key="node.entry.rel_path">
+                        <!-- 文件夹 -->
+                        <button
+                          v-if="node.entry.is_dir"
+                          class="flex items-center gap-1.5 text-xs py-0.5 text-left w-full rounded px-1 transition-colors text-[#374151] hover:bg-[#f3f4f6] cursor-pointer"
+                          :style="{ paddingLeft: `${node.depth * 16 + 4}px` }"
+                          type="button"
+                          @click="toggleDir(node.entry)"
+                        >
+                          <span class="text-[10px] w-3 text-center">{{ expandedDirs.has(node.entry.rel_path) ? '▼' : '▶' }}</span>
+                          <span>📁</span>
+                          <span class="truncate font-medium">{{ node.entry.name }}</span>
+                        </button>
+                        <!-- 文件 -->
+                        <button
+                          v-else
+                          class="flex items-center gap-1.5 text-xs py-0.5 text-left w-full rounded px-1 transition-colors"
+                          :style="{ paddingLeft: `${node.depth * 16 + 4}px` }"
+                          :class="selectedFileName === node.entry.rel_path
+                            ? 'bg-[#e5e7eb] text-[#1f2937]'
+                            : 'text-[#374151] hover:bg-[#f3f4f6] cursor-pointer'"
+                          type="button"
+                          @click="loadFileContent(detailSkill!.id, node.entry.rel_path)"
+                        >
+                          <span class="w-3"></span>
+                          <span>📄</span>
+                          <span class="truncate">{{ node.entry.name }}</span>
+                          <span class="ml-auto text-[10px] text-[#9ca3af]">{{ formatBytes(node.entry.size) }}</span>
+                        </button>
+                      </template>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1784,11 +2488,64 @@ watch(activeTabId, async (newId) => {
       <div class="flex h-full w-56 flex-shrink-0 flex-col overflow-hidden">
         <!-- 侧边栏标题栏 -->
         <div class="flex h-14 flex-shrink-0 items-center justify-between px-4 border-b border-[#e5e7eb]">
-          <span class="text-sm font-semibold text-[#1f2937]">技能与项目</span>
+          <span class="text-sm font-semibold text-[#1f2937]">
+            {{ selectedSkillIds.length > 0 ? `已选 ${selectedSkillIds.length} 个` : '技能与项目' }}
+          </span>
+          <button
+            v-if="selectedSkillIds.length > 0"
+            type="button"
+            class="text-[11px] text-[#6b7280] hover:text-[#1f2937] transition-colors"
+            @click="selectedSkillIds = []"
+          >
+            清除
+          </button>
         </div>
 
         <!-- 侧边栏滚动列表 -->
         <div class="flex-1 overflow-y-auto px-3 py-4 space-y-4">
+
+          <!-- 多选模式：已选技能列表 + 批量操作 -->
+          <template v-if="selectedSkillIds.length > 0">
+            <div class="space-y-1">
+              <div
+                v-for="sid in selectedSkillIds"
+                :key="sid"
+                class="flex items-center gap-2 text-xs text-[#374151] py-1 px-2 rounded-lg hover:bg-[#f3f4f6]"
+              >
+                <span class="flex-1 truncate">{{ skills.find(s => s.id === sid)?.display_name || skills.find(s => s.id === sid)?.name || sid.slice(0, 8) }}</span>
+                <button
+                  type="button"
+                  class="text-[#9ca3af] hover:text-red-500 transition-colors flex-shrink-0"
+                  @click="selectedSkillIds = selectedSkillIds.filter(id => id !== sid)"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+
+            <div class="h-px bg-[#e5e7eb]/60" />
+
+            <div class="space-y-2">
+              <button
+                type="button"
+                :disabled="publishingSelected"
+                class="w-full h-8 rounded-xl bg-[#f3f4f6] text-xs text-[#374151] font-semibold transition-all duration-200 hover:bg-[#e5e7eb] active:scale-[0.98] disabled:opacity-40"
+                @click="batchOpenPublishTabs"
+              >
+                {{ publishingSelected ? '准备中...' : '批量发布到社区' }}
+              </button>
+              <button
+                type="button"
+                :disabled="deletingSkills"
+                class="w-full h-8 rounded-xl border border-red-200 bg-white text-xs text-red-500 font-semibold transition-all duration-200 hover:bg-red-50 active:scale-[0.98] disabled:opacity-40"
+                @click="batchDeleteSkills"
+              >
+                {{ deletingSkills ? '删除中...' : '批量删除' }}
+              </button>
+            </div>
+
+            <div class="h-px bg-[#e5e7eb]/60" />
+          </template>
           <!-- 用户级技能列表（默认展开） -->
           <div>
             <button
