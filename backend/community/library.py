@@ -55,9 +55,6 @@ class CollectSkillRequest(BaseModel):
     readme_md: str | None = None
     tags: str | None = None
     version: str | None = Field(None, pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$")
-    license: str | None = None
-    compatibility: str | None = None
-    changelog: str | None = None
 
 class UpdateLibrarySkillMetaRequest(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=64)
@@ -66,9 +63,6 @@ class UpdateLibrarySkillMetaRequest(BaseModel):
     readme_md: str | None = None
     tags: str | None = None
     version: str | None = Field(None, pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$")
-    license: str | None = None
-    compatibility: str | None = None
-    changelog: str | None = None
 
 class PublishFromLibraryRequest(BaseModel):
     version: str = Field(..., pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$")
@@ -121,13 +115,9 @@ def parse_runtime_skill(
     # Check if we already have this in library
     latest_lib = db.library.get_latest_by_name(user_uuid=current_user["uuid"], name=skill_name)
 
-    # Check if there is a matching community skill
-    community_skill = db.community.get_skill_by_name(skill_name)
-
     return {
         "frontmatter": asdict(fields),
-        "latest_in_library": latest_lib,
-        "community_skill": community_skill
+        "latest_in_library": latest_lib
     }
 
 
@@ -245,20 +235,6 @@ def collect_skill_to_library(
                             frontmatter = f"version: {payload.version.strip()}\n" + frontmatter
                         else:
                             frontmatter = updated
-                    # 修改 license
-                    if payload.license and payload.license.strip():
-                        updated, count = re.subn(r"(?m)^license:\s*.*$", f"license: {payload.license.strip()}", frontmatter)
-                        if count == 0:
-                            frontmatter = f"license: {payload.license.strip()}\n" + frontmatter
-                        else:
-                            frontmatter = updated
-                    # 修改 compatibility
-                    if payload.compatibility and payload.compatibility.strip():
-                        updated, count = re.subn(r"(?m)^compatibility:\s*.*$", f"compatibility: {payload.compatibility.strip()}", frontmatter)
-                        if count == 0:
-                            frontmatter = f"compatibility: {payload.compatibility.strip()}\n" + frontmatter
-                        else:
-                            frontmatter = updated
                     parts[1] = frontmatter
                     new_content = "---".join(parts)
                     skill_md_path.write_text(new_content, encoding="utf-8")
@@ -273,7 +249,7 @@ def collect_skill_to_library(
             readme_md=readme_md,
             tags=tags,
             version=version,
-            changelog=payload.changelog.strip() if (payload.changelog and payload.changelog.strip()) else "Initial collect",
+            changelog="Initial collect",
             community_skill_id=None,  # 为空表示来自运行层
             local_path=f"data/{user_uuid}/library/{library_id}",
             size_bytes=_directory_size(dst_dir),
@@ -598,10 +574,9 @@ def update_library_skill_meta(
         readme_md=payload.readme_md,
         tags=payload.tags,
         version=payload.version,
-        changelog=payload.changelog,
     )
 
-    if payload.name or payload.version or payload.license or payload.compatibility:
+    if payload.name or payload.version:
         library_fs = LibraryFile(library_id=library_id, user_uuid=user_uuid, db_facade=db)
         try:
             skill_md_content = library_fs.read_file("skill/SKILL.md")
@@ -621,20 +596,6 @@ def update_library_skill_meta(
                     updated, count = re.subn(r"(?m)^version:\s*.*$", f"version: {payload.version.strip()}", frontmatter)
                     if count == 0:
                         frontmatter = f"version: {payload.version.strip()}\n" + frontmatter
-                    else:
-                        frontmatter = updated
-                # 修改 license
-                if payload.license and payload.license.strip():
-                    updated, count = re.subn(r"(?m)^license:\s*.*$", f"license: {payload.license.strip()}", frontmatter)
-                    if count == 0:
-                        frontmatter = f"license: {payload.license.strip()}\n" + frontmatter
-                    else:
-                        frontmatter = updated
-                # 修改 compatibility
-                if payload.compatibility and payload.compatibility.strip():
-                    updated, count = re.subn(r"(?m)^compatibility:\s*.*$", f"compatibility: {payload.compatibility.strip()}", frontmatter)
-                    if count == 0:
-                        frontmatter = f"compatibility: {payload.compatibility.strip()}\n" + frontmatter
                     else:
                         frontmatter = updated
                 parts[1] = frontmatter

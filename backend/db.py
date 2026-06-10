@@ -1348,16 +1348,7 @@ class CommunitySkillsFacade(_DataBase):
 
     def list_versions(self, skill_id: str) -> list[dict]:
         with self._cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT v.*, u.username as submitted_by_username 
-                FROM community_skill_versions v
-                LEFT JOIN users u ON v.submitted_by = u.uuid
-                WHERE v.skill_id = ? AND v.status = 'APPROVED'
-                ORDER BY v.created_at DESC
-                """,
-                (skill_id,)
-            )
+            cursor.execute("SELECT * FROM community_skill_versions WHERE skill_id = ? AND status = 'APPROVED' ORDER BY created_at DESC", (skill_id,))
             return [dict(row) for row in cursor.fetchall()]
 
     def get_contributors(self, skill_id: str) -> list[dict]:
@@ -1613,7 +1604,6 @@ class UserLibrarySkillsFacade(_DataBase):
         readme_md: str | None = None,
         tags: str | None = None,
         version: str | None = None,
-        changelog: str | None = None,
     ) -> bool:
         """更新个人仓库技能的展示元数据。
         
@@ -1639,9 +1629,6 @@ class UserLibrarySkillsFacade(_DataBase):
         if version is not None:
             updates.append("version = ?")
             params.append(version)
-        if changelog is not None:
-            updates.append("changelog = ?")
-            params.append(changelog)
             
         if not updates:
             return False

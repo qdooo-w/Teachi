@@ -1,4 +1,4 @@
-﻿"""社区功能测试公共工具：每个测试用独立 sqlite + 独立 data 目录。
+"""社区功能测试公共工具：每个测试用独立 sqlite + 独立 data 目录。
 通过 monkeypatch 把 backend.community.db 与 backend.config.BASE_DIR 切换到 tmp 路径，避免污染开发数据库。"""
 from __future__ import annotations
 

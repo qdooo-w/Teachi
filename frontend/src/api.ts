@@ -867,7 +867,6 @@ export interface CommunitySkillVersion {
   downloads: number
   status: string
   submitted_by: string
-  submitted_by_username?: string
   created_at: number
 }
 
@@ -1130,9 +1129,6 @@ export async function collectLibrarySkill(payload: {
   readme_md?: string | null
   tags?: string | null
   version?: string | null
-  license?: string | null
-  compatibility?: string | null
-  changelog?: string | null
 }): Promise<UserLibrarySkill> {
   return request<UserLibrarySkill>('/library/skills/collect', {
     method: 'POST',
@@ -1155,9 +1151,8 @@ export async function matchLibrarySkillTemplate(skillName: string): Promise<{
 export async function parseRuntimeSkill(skillName: string): Promise<{
   frontmatter: any
   latest_in_library: UserLibrarySkill | null
-  community_skill: any | null
 }> {
-  return request<{ frontmatter: any; latest_in_library: UserLibrarySkill | null; community_skill: any | null }>(
+  return request<{ frontmatter: any; latest_in_library: UserLibrarySkill | null }>(
     `/library/skills/parse-runtime?skill_name=${encodeURIComponent(skillName)}`
   )
 }
@@ -1172,9 +1167,6 @@ export async function updateLibrarySkillMeta(
     readme_md?: string | null
     tags?: string | null
     version?: string | null
-    license?: string | null
-    compatibility?: string | null
-    changelog?: string | null
   }
 ): Promise<UserLibrarySkill> {
   return request<UserLibrarySkill>(`/library/skills/${encodeURIComponent(libraryId)}/meta`, {

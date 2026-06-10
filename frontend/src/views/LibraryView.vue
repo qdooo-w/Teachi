@@ -10,10 +10,10 @@ import {
   getCurrentUserId,
   uploadLibrarySkillZip,
   collectLibrarySkill,
+  matchLibrarySkillTemplate,
   parseRuntimeSkill,
   updateLibrarySkillMeta,
   bulkDeleteLibrarySkills,
-  listCommunityVersions,
 } from '../api'
 import { listSkills } from '../skills'
 import { useProjects } from '../composables/useProjects'
@@ -42,15 +42,9 @@ interface Tab {
     formReadmeMd: string
     formTags: string[]
     formVersion: string
-    formLicense: string
-    formCompatibility: string
-    formChangelog: string
     source: 'zip' | 'runtime'
     templateMatched?: boolean
     matchedTemplate?: UserLibrarySkill | null
-    communitySkill?: any | null
-    communityVersions?: any[]
-    loadingVersions?: boolean
   }
   lastAccessed: number
 }
@@ -100,25 +94,10 @@ const activeTabId = ref(tabs.value[0]?.id ?? 'main')
 const activeTab = computed(() => tabs.value.find((t) => t.id === activeTabId.value) ?? tabs.value[0])
 
 const currentPendingData = computed(() => {
-  return activeTab.value.pendingData || {
-    libraryId: '',
-    name: '',
-    formName: '',
-    formDisplayName: '',
-    formDescription: '',
-    formReadmeMd: '',
-    formTags: [],
-    formVersion: '1.0.0',
-    formLicense: '',
-    formCompatibility: '',
-    formChangelog: '',
-    source: 'runtime' as const,
-    templateMatched: false,
-    matchedTemplate: null,
-    communitySkill: null,
-    communityVersions: [],
-    loadingVersions: false,
+  if (activeTab.value && activeTab.value.type === 'pending-import' && activeTab.value.pendingData) {
+    return activeTab.value.pendingData
   }
+  return null
 })
 
 
@@ -504,15 +483,9 @@ function doFork(): void {
       formReadmeMd: skill.readme_md || '',
       formTags: parseTags(skill.tags),
       formVersion: skill.version || '1.0.0',
-      formLicense: '',
-      formCompatibility: '',
-      formChangelog: '',
       source: 'runtime',
-      templateMatched: true,
+      templateMatched: false,
       matchedTemplate: null,
-      communitySkill: skill.community_skill_id ? { id: skill.community_skill_id } : null,
-      communityVersions: [],
-      loadingVersions: false,
     },
     lastAccessed: Date.now(),
   }
@@ -617,12 +590,6 @@ interface ImportQueueItem {
     name: string
     displayName: string
     readmeMd: string
-    description?: string
-    version?: string
-    license?: string
-    compatibility?: string
-    tags?: string[]
-    communitySkill?: any | null
   }
 }
 
@@ -734,53 +701,19 @@ async function processQueue(): Promise<void> {
         if (item.source === 'zip' && item.file) {
           const res = await uploadLibrarySkillZip(item.file)
           item.status = 'success'
-          
-          let parsedTags: string[] = []
-          if (res.tags) {
-            try {
-              parsedTags = typeof res.tags === 'string' ? JSON.parse(res.tags) : (Array.isArray(res.tags) ? res.tags : [])
-            } catch {
-              parsedTags = []
-            }
-          }
-
           item.parsedData = {
             libraryId: res.id,
             name: res.name,
             displayName: res.display_name || res.name,
             readmeMd: res.readme_md || '',
-            description: res.description || '',
-            version: res.version || '1.0.0',
-            license: '',
-            compatibility: '',
-            tags: parsedTags,
-            communitySkill: null,
           }
         } else if (item.source === 'runtime') {
           const res = await parseRuntimeSkill(item.name)
           item.status = 'success'
-
-          let parsedTags: string[] = []
-          if (res.frontmatter.tags) {
-            try {
-              parsedTags = typeof res.frontmatter.tags === 'string' 
-                ? JSON.parse(res.frontmatter.tags) 
-                : (Array.isArray(res.frontmatter.tags) ? res.frontmatter.tags : [res.frontmatter.tags])
-            } catch {
-              parsedTags = [res.frontmatter.tags]
-            }
-          }
-
           item.parsedData = {
             name: res.frontmatter.name,
             displayName: res.frontmatter.display_name || res.frontmatter.name,
             readmeMd: res.frontmatter.body || '',
-            description: res.frontmatter.description || '',
-            version: res.frontmatter.version || '1.0.0',
-            license: res.frontmatter.license || '',
-            compatibility: res.frontmatter.compatibility || '',
-            tags: parsedTags,
-            communitySkill: res.community_skill,
           }
         }
       } catch (err) {
@@ -815,19 +748,13 @@ function startQueueImport(): void {
         name: data.name,
         formName: data.name,
         formDisplayName: data.displayName || data.name,
-        formDescription: data.description || '',
+        formDescription: '',
         formReadmeMd: data.readmeMd || '',
-        formTags: data.tags || [],
-        formVersion: data.version || '1.0.0',
-        formLicense: data.license || '',
-        formCompatibility: data.compatibility || '',
-        formChangelog: '',
+        formTags: [],
+        formVersion: '1.0.0',
         source: item.source,
-        templateMatched: true, // Mark true to skip automatic template lookup
+        templateMatched: false,
         matchedTemplate: null,
-        communitySkill: data.communitySkill || null,
-        communityVersions: [],
-        loadingVersions: false,
       },
       lastAccessed: Date.now(),
     }
@@ -840,18 +767,61 @@ function startQueueImport(): void {
   
   if (firstNewTabId) {
     activeTabId.value = firstNewTabId
-    
-    // Automatically trigger version history loading if active tab is the new one
-    const tab = tabs.value.find((t) => t.id === firstNewTabId)
-    if (tab && tab.pendingData?.communitySkill) {
-      void loadCommunityVersionsForTab(tab)
-    }
   }
 }
 
 // ── 待导入表单状态与模板应用 ──────────────────────────────────────────────
 const tagText = ref('')
+const formTemplateSearchText = ref('')
+const formTemplateSearchOpen = ref(false)
 const isSavingPending = ref(false)
+
+const filteredTemplates = computed(() => {
+  const kw = formTemplateSearchText.value.toLowerCase().trim()
+  if (!kw) return skills.value.slice(0, 10)
+  return skills.value.filter(
+    (s) =>
+      s.name.toLowerCase().includes(kw) ||
+      (s.display_name && s.display_name.toLowerCase().includes(kw))
+  )
+})
+
+async function fetchMatchedTemplate(skillName: string, tab: Tab): Promise<void> {
+  if (!tab.pendingData) return
+  try {
+    const res = await matchLibrarySkillTemplate(skillName)
+    tab.pendingData.matchedTemplate = res.matched
+    if (res.matched) {
+      applyTemplateToTab(res.matched, tab)
+    }
+  } catch {
+    tab.pendingData.matchedTemplate = null
+  }
+}
+
+function applyTemplateToTab(tmpl: UserLibrarySkill | null, tab: Tab): void {
+  if (!tmpl || !tab.pendingData) return
+  tab.pendingData.formDisplayName = tmpl.display_name || tmpl.name
+  tab.pendingData.formDescription = tmpl.description || ''
+  tab.pendingData.formReadmeMd = tmpl.readme_md || ''
+  if (tmpl.version) {
+    tab.pendingData.formVersion = tmpl.version
+  }
+  
+  if (tmpl.tags) {
+    try {
+      const parsed = JSON.parse(tmpl.tags)
+      tab.pendingData.formTags = Array.isArray(parsed) ? parsed : []
+    } catch {
+      tab.pendingData.formTags = []
+    }
+  } else {
+    tab.pendingData.formTags = []
+  }
+  tab.pendingData.matchedTemplate = tmpl
+  saveTabs(tabs.value)
+  showSuccess(`已成功为「${tab.pendingData.name}」应用模板「${tmpl.display_name || tmpl.name}」`)
+}
 
 function addFormTag(tag: string, tab: Tab): void {
   const t = tag.trim()
@@ -896,10 +866,6 @@ async function savePendingImport(tab: Tab): Promise<void> {
     showError('版本号格式必须为 X.Y.Z (例如 1.0.0)')
     return
   }
-  if (!data.formChangelog.trim()) {
-    showError('更新日志（changelog）不能为空')
-    return
-  }
 
   isSavingPending.value = true
   try {
@@ -915,9 +881,6 @@ async function savePendingImport(tab: Tab): Promise<void> {
         readme_md: data.formReadmeMd,
         tags: tagsJson,
         version: data.formVersion,
-        license: data.formLicense,
-        compatibility: data.formCompatibility,
-        changelog: data.formChangelog,
       })
       finalSkillId = res.id
     } else {
@@ -929,9 +892,6 @@ async function savePendingImport(tab: Tab): Promise<void> {
         readme_md: data.formReadmeMd,
         tags: tagsJson,
         version: data.formVersion,
-        license: data.formLicense,
-        compatibility: data.formCompatibility,
-        changelog: data.formChangelog,
       })
       finalSkillId = res.id
     }
@@ -960,21 +920,6 @@ function cancelPendingImport(tabId: string): void {
   }
 }
 
-async function loadCommunityVersionsForTab(tab: Tab): Promise<void> {
-  if (!tab.pendingData || !tab.pendingData.communitySkill) return
-  tab.pendingData.loadingVersions = true
-  try {
-    const versions = await listCommunityVersions(tab.pendingData.communitySkill.id)
-    tab.pendingData.communityVersions = versions
-  } catch (err) {
-    showError('获取社区版本历程失败', getErrorMessage(err))
-    tab.pendingData.communityVersions = []
-  } finally {
-    tab.pendingData.loadingVersions = false
-    saveTabs(tabs.value)
-  }
-}
-
 // 关键词变化时回到第一页并重新加载
 watch(keyword, () => {
   if (activeTabId.value !== 'main') {
@@ -996,9 +941,11 @@ watch(activeTabId, async (newId) => {
     selectedProjectId.value = ''
     await openDetail(tab.skillId)
   } else if (tab?.type === 'pending-import' && tab.pendingData) {
-    const pData = tab.pendingData
-    if (pData.communitySkill && (!pData.communityVersions || pData.communityVersions.length === 0) && !pData.loadingVersions) {
-      void loadCommunityVersionsForTab(tab)
+    const pData = currentPendingData.value
+    if (pData && !pData.templateMatched) {
+      pData.templateMatched = true
+      saveTabs(tabs.value)
+      await fetchMatchedTemplate(pData.name, tab)
     }
   }
 })
@@ -1415,7 +1362,7 @@ watch(activeTabId, async (newId) => {
                     type="button"
                     @click="startQueueImport"
                     :disabled="isUploading || !importQueue.some(q => q.status === 'success')"
-                    class="h-7 px-3 rounded-xl bg-[#1f2937] text-[10px] font-medium text-white transition hover:bg-neutral-800 active:scale-95 disabled:opacity-40 shadow-sm shadow-neutral-100 flex items-center gap-1"
+                    class="h-7 px-3 rounded-xl bg-purple-600 text-[10px] font-medium text-white transition hover:bg-purple-700 active:scale-95 disabled:opacity-40 shadow-sm shadow-purple-100 flex items-center gap-1"
                   >
                     <svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
@@ -1489,6 +1436,7 @@ watch(activeTabId, async (newId) => {
           </div>
         </template>
 
+        <!-- ── 待配置技能表单标签页 ── -->
         <template v-else-if="activeTab.type === 'pending-import' && currentPendingData">
           <!-- 顶部栏：标题 + 来源 + 放弃按钮 -->
           <div class="flex flex-shrink-0 items-center h-9 px-5 gap-2 bg-white font-hans">
@@ -1510,200 +1458,151 @@ watch(activeTabId, async (newId) => {
           <div class="relative flex-1 min-h-0 flex flex-col">
             <div class="min-h-0 flex-1 flex flex-col overflow-y-auto px-6 py-6 font-hans pb-24">
 
-              <!-- 1. 已有技能在社区的版本历程 -->
-              <div v-if="currentPendingData.communitySkill" class="mb-6 rounded-2xl border border-slate-200/80 bg-slate-50/60 p-5 font-hans">
-                <div class="flex items-center justify-between mb-3.5">
-                  <div class="flex items-center gap-2">
-                    <span class="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                    <span class="text-xs font-semibold text-slate-700">关联社区技能版本历程</span>
-                    <span class="text-[10px] bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full font-mono">
-                      ID: {{ currentPendingData.communitySkill.id }}
-                    </span>
-                  </div>
-                </div>
-
-                <!-- 加载状态 -->
-                <div v-if="currentPendingData.loadingVersions" class="flex items-center justify-center py-4 text-xs text-slate-400 gap-2">
-                  <svg class="animate-spin h-3.5 w-3.5 text-slate-500" fill="none" viewBox="0 0 24 24">
-                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                  正在获取社区发布历史...
-                </div>
-
-                <!-- 无历史版本 -->
-                <div v-else-if="!currentPendingData.communityVersions || currentPendingData.communityVersions.length === 0" class="text-xs text-slate-400 py-2 text-center">
-                  暂无已审核通过的社区历史版本记录。
-                </div>
-
-                <!-- 版本历史卡片列表 -->
-                <div v-else class="flex flex-col gap-2.5 max-h-[180px] overflow-y-auto pr-1">
-                  <div 
-                    v-for="v in currentPendingData.communityVersions" 
-                    :key="v.id" 
-                    class="flex flex-col border-b border-slate-100 last:border-b-0 pb-2.5 last:pb-0 gap-1"
-                  >
-                    <div class="flex items-center gap-2">
-                      <span class="text-xs font-bold text-slate-800 bg-slate-100 px-1.5 py-0.5 rounded">v{{ v.version }}</span>
-                      <span class="text-[10px] text-slate-500 font-medium">
-                        由 @{{ v.submitted_by_username || v.submitted_by }} 提交
-                      </span>
-                      <span class="text-[10px] text-slate-400">
-                        {{ new Date(v.created_at * 1000).toLocaleDateString() }}
-                      </span>
-                    </div>
-                    <p v-if="v.changelog" class="text-xs text-slate-500 pl-0.5 line-clamp-2 leading-relaxed">
-                      {{ v.changelog }}
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              <!-- 无社区绑定提示 -->
-              <div v-else class="mb-6 rounded-2xl border border-[#e5e7eb] bg-white p-4 font-hans flex items-center gap-3">
-                <span class="flex h-8 w-8 items-center justify-center rounded-full bg-orange-50 text-orange-600 flex-shrink-0">
-                  <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                </span>
+            <!-- 1. 模板填充栏 (Template Loader) -->
+            <div class="mb-5 rounded-none border border-purple-100 bg-purple-50/20 p-4">
+              <div class="flex flex-col md:flex-row md:items-center justify-between gap-3">
                 <div class="min-w-0">
-                  <span class="text-xs font-semibold text-[#1f2937] block">全新本地技能</span>
-                  <span class="text-[11px] text-[#9ca3af] block mt-0.5">该技能尚未在社区发布上架。导入仓库后，您可以通过“发布到社区”功能进行首次发布。</span>
-                </div>
-              </div>
-
-              <!-- 当前配置版本展示 -->
-              <div class="mb-5 flex items-center justify-between bg-white border border-[#e5e7eb] px-4 py-2.5 rounded-2xl shadow-sm">
-                <div class="flex items-center gap-2">
-                  <span class="h-2 w-2 rounded-full bg-purple-500 animate-pulse"></span>
-                  <span class="text-xs font-semibold text-[#1f2937]">当前正在配置的版本：</span>
-                </div>
-                <span class="text-xs font-bold bg-purple-50 text-purple-700 px-3 py-0.5 rounded-full font-mono">
-                  v{{ currentPendingData.formVersion || '1.0.0' }}
-                </span>
-              </div>
-
-              <!-- 2. 表单字段 - 单栏流式布局 -->
-              <div class="space-y-5 w-full">
-                <!-- name (可编辑) -->
-                <div>
-                  <label class="block text-xs font-semibold text-[#4b5563] mb-1.5">技能标识名 (name) <span class="text-red-500">*</span></label>
-                  <input
-                    v-model="currentPendingData.formName"
-                    type="text"
-                    placeholder="仅限字母、数字、下划线和中划线"
-                    class="block w-full rounded-xl border border-[#e5e7eb] bg-white px-3 py-2 text-xs text-[#1f2937] placeholder:text-[#9ca3af] outline-none focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20 transition-all"
-                  />
-                  <span class="text-[10px] text-[#9ca3af] block mt-1">技能的唯一英文标识，将作为后端物理文件中的 SKILL.md name 配置项。</span>
+                  <span class="text-xs font-semibold text-purple-900 block">应用已有技能作为配置模板</span>
+                  <span v-if="currentPendingData.matchedTemplate" class="text-[11px] text-purple-600 block mt-0.5">
+                    💡 已为您自动匹配并应用同名模板「{{ currentPendingData.matchedTemplate.display_name || currentPendingData.matchedTemplate.name }}」的数据。
+                  </span>
+                  <span v-else class="text-[11px] text-[#9ca3af] block mt-0.5">
+                    未发现同名模板。您可以选择下拉框中的其他技能来填充。
+                  </span>
                 </div>
 
-                <!-- version (可编辑) -->
-                <div>
-                  <label class="block text-xs font-semibold text-[#4b5563] mb-1.5">版本号 (version) <span class="text-red-500">*</span></label>
-                  <input
-                    v-model="currentPendingData.formVersion"
-                    type="text"
-                    placeholder="格式如：1.0.0"
-                    class="block w-full rounded-xl border border-[#e5e7eb] bg-white px-3 py-2 text-xs text-[#1f2937] placeholder:text-[#9ca3af] outline-none focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20 transition-all"
-                  />
-                  <span class="text-[10px] text-[#9ca3af] block mt-1">请使用三位版本号规范（例如：1.0.0）。</span>
-                </div>
-
-                <!-- display_name -->
-                <div>
-                  <label class="block text-xs font-semibold text-[#4b5563] mb-1.5">显示名称 (display_name) <span class="text-red-500">*</span></label>
-                  <input
-                    v-model="currentPendingData.formDisplayName"
-                    type="text"
-                    placeholder="如：中文翻译助手"
-                    class="block w-full rounded-xl border border-[#e5e7eb] bg-white px-3 py-2 text-xs text-[#1f2937] placeholder:text-[#9ca3af] outline-none focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20 transition-all"
-                  />
-                </div>
-
-                <!-- license -->
-                <div>
-                  <label class="block text-xs font-semibold text-[#4b5563] mb-1.5">许可证 (license)</label>
-                  <input
-                    v-model="currentPendingData.formLicense"
-                    type="text"
-                    placeholder="如：MIT、Apache-2.0"
-                    class="block w-full rounded-xl border border-[#e5e7eb] bg-white px-3 py-2 text-xs text-[#1f2937] placeholder:text-[#9ca3af] outline-none focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20 transition-all"
-                  />
-                </div>
-
-                <!-- compatibility -->
-                <div>
-                  <label class="block text-xs font-semibold text-[#4b5563] mb-1.5">兼容性要求 (compatibility)</label>
-                  <input
-                    v-model="currentPendingData.formCompatibility"
-                    type="text"
-                    placeholder="如：>=0.1.0"
-                    class="block w-full rounded-xl border border-[#e5e7eb] bg-white px-3 py-2 text-xs text-[#1f2937] placeholder:text-[#9ca3af] outline-none focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20 transition-all"
-                  />
-                </div>
-
-                <!-- description -->
-                <div>
-                  <label class="block text-xs font-semibold text-[#4b5563] mb-1.5">简短描述 (description) <span class="text-red-500">*</span></label>
-                  <textarea
-                    v-model="currentPendingData.formDescription"
-                    rows="3"
-                    placeholder="面向人类用户的一句话简介，将显示在仓库卡片和社区列表中。不超过 1024 字符。"
-                    class="block w-full rounded-xl border border-[#e5e7eb] bg-white px-3 py-2 text-xs text-[#1f2937] placeholder:text-[#9ca3af] outline-none focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20 transition-all"
-                  ></textarea>
-                </div>
-
-                <!-- tags -->
-                <div>
-                  <label class="block text-xs font-semibold text-[#4b5563] mb-1.5">标签 (tags)</label>
-                  <div class="flex flex-wrap items-center gap-1.5 p-2 rounded-xl border border-[#e5e7eb] bg-white min-h-[38px] w-full focus-within:ring-2 focus-within:ring-[#1f2937]/20 focus-within:border-[#1f2937] transition-all">
-                    <span 
-                      v-for="t in currentPendingData.formTags" 
-                      :key="t"
-                      class="inline-flex items-center gap-1 bg-[#f3f4f6] text-[#1f2937] px-2 py-0.5 rounded text-xs"
-                    >
-                      {{ t }}
-                      <button type="button" @click="removeFormTag(t, activeTab)" class="text-neutral-400 hover:text-neutral-700 font-bold font-sans">×</button>
-                    </span>
+                <!-- 模板可搜索下拉选择器 -->
+                <div class="flex items-center gap-2 flex-shrink-0 relative">
+                  <div class="relative w-56">
                     <input
-                      v-model="tagText"
-                      placeholder="输入标签并回车添加"
-                      @keydown.enter.prevent="addFormTag(tagText, activeTab)"
-                      class="flex-1 min-w-[120px] bg-transparent border-0 outline-none text-xs py-0.5 text-[#1f2937] placeholder:text-[#9ca3af]"
+                      v-model="formTemplateSearchText"
+                      @focus="formTemplateSearchOpen = true"
+                      class="block w-full rounded-none border border-purple-200 bg-white py-1.5 pl-3 pr-8 text-xs text-[#1f2937] placeholder:text-[#9ca3af] outline-none focus:border-purple-500"
+                      placeholder="搜索并选择模板技能..."
                     />
-                  </div>
-                </div>
-
-                <!-- changelog -->
-                <div>
-                  <label class="block text-xs font-semibold text-[#4b5563] mb-1.5">更新日志 (changelog) <span class="text-red-500">*</span></label>
-                  <textarea
-                    v-model="currentPendingData.formChangelog"
-                    rows="2.5"
-                    placeholder="请输入关于本次收集的更新说明（如：首次导入、修复已知 Prompt 逻辑等）"
-                    class="block w-full rounded-xl border border-[#e5e7eb] bg-white px-3 py-2 text-xs text-[#1f2937] placeholder:text-[#9ca3af] outline-none focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20 transition-all"
-                  ></textarea>
-                </div>
-
-                <!-- README.md Markdown 编辑器 -->
-                <div>
-                  <label class="block text-xs font-semibold text-[#4b5563] mb-1.5">详细说明文档 (README.md)</label>
-                  <div class="rounded-xl border border-[#e5e7eb] bg-white overflow-hidden flex flex-col focus-within:ring-2 focus-within:ring-[#1f2937]/20 focus-within:border-[#1f2937] transition-all">
-                    <!-- 编辑器控制条 -->
-                    <div class="flex bg-gray-50 border-b border-[#e5e7eb] px-3 py-1.5 justify-between items-center flex-shrink-0">
-                      <span class="text-[11px] font-semibold text-[#6b7280]">Markdown 编辑</span>
-                      <span class="text-[10px] text-[#9ca3af]">支持标准 Markdown 语法</span>
+                    <button
+                      type="button"
+                      @click="formTemplateSearchOpen = !formTemplateSearchOpen"
+                      class="absolute inset-y-0 right-0 flex items-center pr-2.5 text-gray-400"
+                    >
+                      <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </button>
+                    <!-- 下拉选择面板 -->
+                    <div
+                      v-if="formTemplateSearchOpen"
+                      class="absolute right-0 top-full z-50 mt-1 max-h-56 w-full overflow-y-auto rounded-none border border-gray-200 bg-white py-1 shadow-lg"
+                    >
+                      <div
+                        v-if="filteredTemplates.length === 0"
+                        class="px-3 py-2 text-xs text-[#9ca3af] text-center"
+                      >
+                        未找到模板
+                      </div>
+                      <button
+                        v-for="tmpl in filteredTemplates"
+                        :key="tmpl.id"
+                        type="button"
+                        @click="applyTemplateToTab(tmpl, activeTab); formTemplateSearchOpen = false; formTemplateSearchText = ''"
+                        class="block w-full px-3 py-1.5 text-left text-xs text-[#374151] hover:bg-purple-50 hover:text-purple-700 transition"
+                      >
+                        {{ tmpl.display_name || tmpl.name }} ({{ tmpl.name }})
+                      </button>
                     </div>
-                    <!-- 编辑区 -->
-                    <textarea
-                      v-model="currentPendingData.formReadmeMd"
-                      rows="8"
-                      placeholder="请输入关于此技能的使用方法、AI 代理调用建议等详细文档..."
-                      class="block w-full border-0 bg-transparent px-4 py-3 text-xs text-[#374151] font-mono leading-relaxed outline-none resize-y min-h-[160px]"
-                    ></textarea>
                   </div>
                 </div>
               </div>
+            </div>
+
+            <!-- 2. 表单字段 - 单栏流式布局 -->
+            <div class="space-y-6 w-full">
+              <!-- name (可编辑) -->
+              <div>
+                <label class="block text-xs font-semibold text-[#4b5563] mb-1.5">技能标识名 (name) <span class="text-red-500">*</span></label>
+                <input
+                  v-model="currentPendingData.formName"
+                  type="text"
+                  placeholder="仅限字母、数字、下划线和中划线"
+                  class="block w-full rounded-none border border-[#e5e7eb] bg-white px-3 py-2 text-xs text-[#1f2937] placeholder:text-[#9ca3af] outline-none focus:border-[#1f2937] focus:ring-1 focus:ring-[#1f2937]"
+                />
+                <span class="text-[10px] text-[#9ca3af] block mt-1">技能的唯一英文标识，将作为后端物理文件中的 SKILL.md name 配置项。</span>
+              </div>
+
+              <!-- version (可编辑) -->
+              <div>
+                <label class="block text-xs font-semibold text-[#4b5563] mb-1.5">版本号 (version) <span class="text-red-500">*</span></label>
+                <input
+                  v-model="currentPendingData.formVersion"
+                  type="text"
+                  placeholder="格式如：1.0.0"
+                  class="block w-full rounded-none border border-[#e5e7eb] bg-white px-3 py-2 text-xs text-[#1f2937] placeholder:text-[#9ca3af] outline-none focus:border-[#1f2937] focus:ring-1 focus:ring-[#1f2937]"
+                />
+                <span class="text-[10px] text-[#9ca3af] block mt-1">请使用三位版本号规范（例如：1.0.0）。</span>
+              </div>
+
+              <!-- display_name -->
+              <div>
+                <label class="block text-xs font-semibold text-[#4b5563] mb-1.5">显示名称 (display_name) <span class="text-red-500">*</span></label>
+                <input
+                  v-model="currentPendingData.formDisplayName"
+                  type="text"
+                  placeholder="如：中文翻译助手"
+                  class="block w-full rounded-none border border-[#e5e7eb] bg-white px-3 py-2 text-xs text-[#1f2937] placeholder:text-[#9ca3af] outline-none focus:border-[#1f2937] focus:ring-1 focus:ring-[#1f2937]"
+                />
+              </div>
+
+              <!-- description -->
+              <div>
+                <label class="block text-xs font-semibold text-[#4b5563] mb-1.5">简短描述 (description) <span class="text-red-500">*</span></label>
+                <textarea
+                  v-model="currentPendingData.formDescription"
+                  rows="3"
+                  placeholder="面向人类用户的一句话简介，将显示在仓库卡片和社区列表中。不超过 1024 字符。"
+                  class="block w-full rounded-none border border-[#e5e7eb] bg-white px-3 py-2 text-xs text-[#1f2937] placeholder:text-[#9ca3af] outline-none focus:border-[#1f2937] focus:ring-1 focus:ring-[#1f2937]"
+                ></textarea>
+              </div>
+
+              <!-- tags -->
+              <div>
+                <label class="block text-xs font-semibold text-[#4b5563] mb-1.5">标签 (tags)</label>
+                <div class="flex flex-wrap items-center gap-1.5 p-2 rounded-none border border-[#e5e7eb] bg-white min-h-[38px] w-full">
+                  <span 
+                    v-for="t in currentPendingData.formTags" 
+                    :key="t"
+                    class="inline-flex items-center gap-1 bg-purple-50 text-purple-700 px-2 py-0.5 rounded text-xs"
+                  >
+                    {{ t }}
+                    <button type="button" @click="removeFormTag(t, activeTab)" class="text-purple-400 hover:text-purple-700 font-bold font-sans">×</button>
+                  </span>
+                  <input
+                    v-model="tagText"
+                    placeholder="输入标签并回车添加"
+                    @keydown.enter.prevent="addFormTag(tagText, activeTab)"
+                    class="flex-1 min-w-[120px] bg-transparent border-0 outline-none text-xs py-0.5 text-[#1f2937] placeholder:text-[#9ca3af]"
+                  />
+                </div>
+              </div>
+
+              <!-- README.md Markdown 编辑器 -->
+              <div>
+                <label class="block text-xs font-semibold text-[#4b5563] mb-1.5">详细说明文档 (README.md)</label>
+                <div class="rounded-none border border-[#e5e7eb] bg-white overflow-hidden flex flex-col">
+                  <!-- 编辑器控制条 -->
+                  <div class="flex bg-gray-50 border-b border-[#e5e7eb] px-3 py-1.5 justify-between items-center flex-shrink-0">
+                    <span class="text-[11px] font-semibold text-[#6b7280]">Markdown 编辑</span>
+                    <span class="text-[10px] text-[#9ca3af]">支持标准 Markdown 语法</span>
+                  </div>
+                  <!-- 编辑区 -->
+                  <textarea
+                    v-model="currentPendingData.formReadmeMd"
+                    rows="8"
+                    placeholder="请输入关于此技能的使用方法、AI 代理调用建议等详细文档..."
+                    class="block w-full border-0 bg-transparent px-4 py-3 text-xs text-[#374151] font-mono leading-relaxed outline-none resize-y min-h-[160px]"
+                  ></textarea>
+                </div>
+              </div>
+            </div>
 
             </div>
             <!-- 悬浮动作条 -->
@@ -1720,7 +1619,7 @@ watch(activeTabId, async (newId) => {
                 type="button"
                 :disabled="isSavingPending"
                 @click="savePendingImport(activeTab)"
-                class="h-9 rounded-xl bg-[#1f2937] hover:bg-[#111827] px-6 text-xs font-medium text-white transition active:scale-95 disabled:opacity-40 disabled:scale-100 flex items-center gap-1.5 shadow-sm shadow-neutral-200"
+                class="h-9 rounded-xl bg-purple-600 px-6 text-xs font-medium text-white transition hover:bg-purple-700 active:scale-95 disabled:opacity-40 disabled:scale-100 flex items-center gap-1.5 shadow-sm shadow-purple-200"
               >
                 <svg v-if="isSavingPending" class="animate-spin h-3.5 w-3.5" fill="none" viewBox="0 0 24 24">
                   <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
