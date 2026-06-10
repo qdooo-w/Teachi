@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useChatSkillSidebar } from '../composables/useChatSkillSidebar'
 import { useProjectSkills } from '../composables/useProjectSkills'
@@ -10,7 +10,7 @@ import { deleteSkill, type SkillMeta } from '../skills'
 import { confirmDanger } from '../composables/useConfirmDialog'
 
 const route = useRoute()
-const { chatSidebarOpen, closeSidebar, openEditor } = useChatSkillSidebar()
+const { chatSidebarOpen, openEditor } = useChatSkillSidebar()
 
 // ── 技能数据 ────────────────────────────────────────────────────────────────
 const pid = computed(() => (route.params.pid as string) || null)
@@ -36,10 +36,6 @@ onMounted(() => {
   void loadUserSkills()
 })
 
-// 路由 pid 变化时关闭侧边栏
-watch(() => route.params.pid, () => {
-  closeSidebar()
-})
 
 function selectSkill(kind: 'user' | 'project', skill: SkillMeta): void {
   const userId = getCurrentUserId()

@@ -561,7 +561,7 @@ onBeforeUnmount(() => {
                 <template v-if="!rawMode">
                   <div class="mb-3.5">
                     <label class="mb-1 block text-xs font-medium text-[#4b5563]">技能名称</label>
-                    <div class="flex h-9 items-center rounded-xl border border-[#d1d5db] bg-[#f3f4f6] px-3 text-xs font-medium text-[#1f2937]">
+                    <div class="flex h-9 items-center rounded-none border border-[#d1d5db] bg-[#f3f4f6] px-3 text-xs font-medium text-[#1f2937]">
                       {{ selectedName }}
                     </div>
                     <p v-if="parseWarning" class="mt-1 text-xs text-[#92400e]">{{ parseWarning }}</p>
@@ -582,7 +582,7 @@ onBeforeUnmount(() => {
                     <input
                       v-model="form.display_name"
                       :maxlength="DISPLAY_NAME_MAX"
-                      class="h-9 w-full rounded-xl border border-[#d1d5db] bg-[#f3f4f6] px-3 text-xs outline-none transition duration-150 focus:bg-white focus:border-[#9ca3af] focus:ring-2 focus:ring-[#1f2937]/10"
+                      class="h-9 w-full rounded-none border border-[#d1d5db] bg-[#f3f4f6] px-3 text-xs outline-none transition duration-150 focus:bg-white focus:border-[#9ca3af] focus:ring-2 focus:ring-[#1f2937]/10"
                       placeholder="例如：数学解题助手"
                       type="text"
                     />
@@ -607,7 +607,7 @@ onBeforeUnmount(() => {
                       ref="descTextarea"
                       v-model="form.description"
                       :maxlength="DESCRIPTION_MAX"
-                      class="w-full resize-none overflow-hidden rounded-xl border border-[#d1d5db] bg-[#f3f4f6] p-2.5 text-xs outline-none transition duration-150 focus:bg-white focus:border-[#9ca3af] focus:ring-2 focus:ring-[#1f2937]/10"
+                      class="w-full resize-none overflow-hidden rounded-none border border-[#d1d5db] bg-[#f3f4f6] p-2.5 text-xs outline-none transition duration-150 focus:bg-white focus:border-[#9ca3af] focus:ring-2 focus:ring-[#1f2937]/10"
                       rows="2"
                       @input="autoGrow($event.target as HTMLTextAreaElement)"
                     />
@@ -633,7 +633,7 @@ onBeforeUnmount(() => {
                         <span class="mb-1 block text-xs text-[#4b5563]">license</span>
                         <input
                           v-model="form.license"
-                          class="h-9 w-full rounded-xl border border-[#d1d5db] bg-[#f3f4f6] px-3 text-xs outline-none transition duration-150 focus:bg-white focus:border-[#9ca3af] focus:ring-2 focus:ring-[#1f2937]/10"
+                          class="h-9 w-full rounded-none border border-[#d1d5db] bg-[#f3f4f6] px-3 text-xs outline-none transition duration-150 focus:bg-white focus:border-[#9ca3af] focus:ring-2 focus:ring-[#1f2937]/10"
                           placeholder="例如 MIT"
                           type="text"
                         />
@@ -653,7 +653,7 @@ onBeforeUnmount(() => {
                         <input
                           v-model="form.compatibility"
                           :maxlength="COMPATIBILITY_MAX"
-                          class="h-9 w-full rounded-xl border border-[#d1d5db] bg-[#f3f4f6] px-3 text-xs outline-none transition duration-150 focus:bg-white focus:border-[#9ca3af] focus:ring-2 focus:ring-[#1f2937]/10"
+                          class="h-9 w-full rounded-none border border-[#d1d5db] bg-[#f3f4f6] px-3 text-xs outline-none transition duration-150 focus:bg-white focus:border-[#9ca3af] focus:ring-2 focus:ring-[#1f2937]/10"
                           placeholder="兼容性说明"
                           type="text"
                         />
@@ -672,7 +672,7 @@ onBeforeUnmount(() => {
                     <textarea
                       ref="bodyTextarea"
                       v-model="form.body"
-                      class="w-full flex-1 resize-none overflow-hidden rounded-xl border border-[#d1d5db] bg-[#f3f4f6] p-3 font-mono text-xs outline-none transition duration-150 focus:bg-white focus:border-[#9ca3af] focus:ring-2 focus:ring-[#1f2937]/10"
+                      class="w-full flex-1 resize-none overflow-hidden rounded-none border border-[#d1d5db] bg-[#f3f4f6] p-3 font-mono text-xs outline-none transition duration-150 focus:bg-white focus:border-[#9ca3af] focus:ring-2 focus:ring-[#1f2937]/10"
                       spellcheck="false"
                       @input="autoGrow($event.target as HTMLTextAreaElement)"
                     />
@@ -697,7 +697,7 @@ onBeforeUnmount(() => {
                   <textarea
                     ref="rawTextarea"
                     v-model="rawContent"
-                    class="w-full flex-1 resize-none overflow-hidden rounded-xl border border-[#d1d5db] bg-[#f3f4f6] p-3 font-mono text-xs outline-none transition duration-150 focus:bg-white focus:border-[#9ca3af] focus:ring-2 focus:ring-[#1f2937]/10"
+                    class="w-full flex-1 resize-none overflow-hidden rounded-none border border-[#d1d5db] bg-[#f3f4f6] p-3 font-mono text-xs outline-none transition duration-150 focus:bg-white focus:border-[#9ca3af] focus:ring-2 focus:ring-[#1f2937]/10"
                     spellcheck="false"
                     @input="autoGrow($event.target as HTMLTextAreaElement)"
                   />
@@ -720,7 +720,7 @@ onBeforeUnmount(() => {
                   <textarea
                     ref="plainTextarea"
                     v-model="plainContent"
-                    class="w-full flex-1 resize-none overflow-hidden rounded-xl border border-[#d1d5db] bg-[#f3f4f6] p-3 font-mono text-xs outline-none transition duration-150 focus:bg-white focus:border-[#9ca3af] focus:ring-2 focus:ring-[#1f2937]/10"
+                    class="w-full flex-1 resize-none overflow-hidden rounded-none border border-[#d1d5db] bg-[#f3f4f6] p-3 font-mono text-xs outline-none transition duration-150 focus:bg-white focus:border-[#9ca3af] focus:ring-2 focus:ring-[#1f2937]/10"
                     spellcheck="false"
                     @input="autoGrow($event.target as HTMLTextAreaElement)"
                   />

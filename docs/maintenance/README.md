@@ -123,3 +123,82 @@ uv run python scripts/set_admin.py user@example.com --db data/project.db
 ### 注意事项
 - 该脚本当前不接受命令行参数；如需创建其他邮箱、用户名或密码，需要修改脚本末尾的 `username`、`email`、`password` 默认值，或通过前端注册。
 - `set_admin.py --db` 的路径应指向同一个数据库。项目根目录下通常使用 `data/project.db`。
+
+---
+
+## 5. 旧库精简迁移 (`scripts/migrate_legacy_db.py`)
+
+**脚本位置**：`scripts/migrate_legacy_db.py`
+
+### 功能描述
+将父目录旧库 `../data/project.db` 迁移到当前项目的新数据库 Schema，同时删除社区、skill 仓库、审核日志、nonce 等不需要保留的内容，只保留用户信息和用户对话记录相关数据。
+
+脚本不会原地修改旧库。默认输出到 `data/project.migrated.db`。
+
+### 保留范围
+- `users`
+- `projects`
+- `sessions`
+- `messages`
+- `attachments`
+- `user_model_configs`
+- `user_preferences`
+
+### 跳过范围
+- `nonces`
+- `community_skills`
+- `community_skill_versions`
+- `community_skill_likes`
+- `community_skill_comments`
+- `community_comment_likes`
+- `community_comment_reports`
+- `community_skill_contributors`
+- `community_skill_admins`
+- `user_library_skills`
+- `skill_review_logs`
+
+### 字段兼容
+迁移时会使用当前 `DatabaseFacade.setup_database()` 创建新库 Schema，并为旧库缺失字段补默认值，例如：
+
+- `users.role` 默认 `user`
+- `users.self_description`、`users.major`、`users.head_file` 默认 `NULL`
+- `attachments.file_hash` 默认空字符串
+- `attachments.file_size` 默认 `0`
+- `user_model_configs.supports_vision` 默认 `0`
+- `user_model_configs.top_p`、`frequency_penalty`、`presence_penalty`、`response_format` 默认 `NULL`
+
+### 运行方式
+默认从 `../data/project.db` 读取旧库，生成 `data/project.migrated.db`：
+
+```bash
+uv run python scripts/migrate_legacy_db.py --replace
+```
+
+指定输入输出路径：
+
+```bash
+uv run python scripts/migrate_legacy_db.py \
+  --source ../data/project.db \
+  --target data/project.db \
+  --replace
+```
+
+### 验证方式
+运行迁移脚本测试：
+
+```bash
+uv run pytest tests/test_migrate_legacy_db.py
+```
+
+检查迁移后数据库：
+
+```bash
+sqlite3 data/project.migrated.db "PRAGMA integrity_check;"
+sqlite3 data/project.migrated.db "PRAGMA foreign_key_check;"
+```
+
+### 注意事项
+- `--replace` 只会替换目标库，不会修改源库。
+- 源库和目标库路径必须不同，脚本会拒绝同路径迁移。
+- 如果要覆盖当前应用数据库，先确认服务已停止，并备份现有 `data/project.db`。
+- 迁移脚本只处理数据库记录，不复制 `data/` 下的物理附件文件；旧附件记录中的 `file_path` 会按原值保留。

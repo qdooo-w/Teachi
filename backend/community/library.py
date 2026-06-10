@@ -54,7 +54,6 @@ class CollectSkillRequest(BaseModel):
     description: str | None = None
     readme_md: str | None = None
     tags: str | None = None
-    version: str | None = Field(None, pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$")
 
 class UpdateLibrarySkillMetaRequest(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=64)
@@ -62,7 +61,6 @@ class UpdateLibrarySkillMetaRequest(BaseModel):
     description: str | None = None
     readme_md: str | None = None
     tags: str | None = None
-    version: str | None = Field(None, pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$")
 
 class PublishFromLibraryRequest(BaseModel):
     version: str = Field(..., pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$")
@@ -115,9 +113,18 @@ def parse_runtime_skill(
     # Check if we already have this in library
     latest_lib = db.library.get_latest_by_name(user_uuid=current_user["uuid"], name=skill_name)
 
+    readme_path = skill_dir / "README.md"
+    readme_content = ""
+    if readme_path.is_file():
+        try:
+            readme_content = readme_path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            readme_content = ""
+
     return {
         "frontmatter": asdict(fields),
-        "latest_in_library": latest_lib
+        "readme_md": readme_content,
+        "latest_in_library": latest_lib,
     }
 
 
@@ -201,7 +208,9 @@ def collect_skill_to_library(
     description = payload.description if payload.description is not None else (template["description"] if template else "")
     readme_md = payload.readme_md if payload.readme_md is not None else (template["readme_md"] if template else (fields.body if fields.body else ""))
     tags = payload.tags if payload.tags is not None else (template["tags"] if template else "[]")
-    version = payload.version.strip() if (payload.version and payload.version.strip()) else (template["version"] if template else "1.0.0")
+    
+    # 优先使用 SKILL.md 中解析出来的 version，其次继承模板版本，最后默认为 "1.0.0"
+    version = fields.version if fields.version else (template["version"] if template else "1.0.0")
 
     library_id = str(uuid.uuid4())
     library_fs = LibraryFile(library_id=library_id, user_uuid=user_uuid, db_facade=db)
@@ -210,36 +219,7 @@ def collect_skill_to_library(
     try:
         _copy_skill_dir(src_dir, dst_dir)
 
-        # 物理修改 SKILL.md 里的 name 和 version
         final_name = payload.name.strip() if (payload.name and payload.name.strip()) else fields.name
-        
-        try:
-            skill_md_path = dst_dir / "SKILL.md"
-            if skill_md_path.is_file():
-                skill_md_content = skill_md_path.read_text(encoding="utf-8")
-                import re
-                parts = skill_md_content.split("---", 2)
-                if len(parts) >= 3:
-                    frontmatter = parts[1]
-                    # 修改 name
-                    if payload.name and payload.name.strip():
-                        updated, count = re.subn(r"(?m)^name:\s*.*$", f"name: {payload.name.strip()}", frontmatter)
-                        if count == 0:
-                            frontmatter = f"name: {payload.name.strip()}\n" + frontmatter
-                        else:
-                            frontmatter = updated
-                    # 修改 version
-                    if payload.version and payload.version.strip():
-                        updated, count = re.subn(r"(?m)^version:\s*.*$", f"version: {payload.version.strip()}", frontmatter)
-                        if count == 0:
-                            frontmatter = f"version: {payload.version.strip()}\n" + frontmatter
-                        else:
-                            frontmatter = updated
-                    parts[1] = frontmatter
-                    new_content = "---".join(parts)
-                    skill_md_path.write_text(new_content, encoding="utf-8")
-        except Exception:
-            pass # 忽略异常，优先保证数据库完整性
 
         record = db.library.create(
             user_uuid=user_uuid,
@@ -269,7 +249,6 @@ class ForkLibrarySkillRequest(BaseModel):
     description: str | None = None
     readme_md: str | None = None
     tags: str | None = None
-    version: str | None = Field(None, pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$")
 
 @router.post("/skills/{library_id}/fork", dependencies=[Depends(verify_nonce)])
 def fork_library_skill(
@@ -310,33 +289,13 @@ def fork_library_skill(
     description = p.description if p.description is not None else src_record["description"]
     readme_md = p.readme_md if p.readme_md is not None else src_record["readme_md"]
     tags = p.tags if p.tags is not None else src_record["tags"]
-    version = p.version if p.version else src_record["version"]  # 版本号继承
+    version = src_record["version"]  # 版本号继承自源记录
 
     new_id = str(uuid.uuid4())
     dst_dir = LibraryFile(library_id=new_id, user_uuid=user_uuid, db_facade=db).base_path / "skill"
 
     try:
         _copy_skill_dir(src_dir, dst_dir)
-
-        # 如果 name 被修改，更新 SKILL.md 中的 name 字段
-        if name != src_record["name"]:
-            try:
-                skill_md_path = dst_dir / "SKILL.md"
-                if skill_md_path.is_file():
-                    import re
-                    content = skill_md_path.read_text(encoding="utf-8")
-                    parts = content.split("---", 2)
-                    if len(parts) >= 3:
-                        frontmatter = parts[1]
-                        updated, count = re.subn(r"(?m)^name:\s*.*$", f"name: {name}", frontmatter)
-                        if count == 0:
-                            frontmatter = f"name: {name}\n" + frontmatter
-                        else:
-                            frontmatter = updated
-                        parts[1] = frontmatter
-                        skill_md_path.write_text("---".join(parts), encoding="utf-8")
-            except Exception:
-                pass
 
         record = db.library.create(
             user_uuid=user_uuid,
@@ -643,6 +602,20 @@ def write_library_file(
     library_fs = LibraryFile(library_id=library_id, user_uuid=current_user["uuid"], db_facade=db)
     try:
         library_fs.create_file(f"skill/{payload.path}", payload.content)
+        if payload.path == "SKILL.md":
+            try:
+                from backend.skill_parser import parse_skill_file
+                fields = parse_skill_file(payload.content)
+                db.library.update_meta(
+                    library_id=library_id,
+                    user_uuid=current_user["uuid"],
+                    name=fields.name,
+                    display_name=fields.display_name,
+                    description=fields.description,
+                    version=fields.version,
+                )
+            except Exception:
+                pass
         return {"path": payload.path, "success": True}
     except FileError as e:
         raise HTTPException(status_code=400, detail={"code": "FILE_ERROR", "message": str(e)})
@@ -671,36 +644,7 @@ def update_library_skill_meta(
         description=payload.description,
         readme_md=payload.readme_md,
         tags=payload.tags,
-        version=payload.version,
     )
-
-    if payload.name or payload.version:
-        library_fs = LibraryFile(library_id=library_id, user_uuid=user_uuid, db_facade=db)
-        try:
-            skill_md_content = library_fs.read_file("skill/SKILL.md")
-            import re
-            parts = skill_md_content.split("---", 2)
-            if len(parts) >= 3:
-                frontmatter = parts[1]
-                # 修改 name
-                if payload.name and payload.name.strip():
-                    updated, count = re.subn(r"(?m)^name:\s*.*$", f"name: {payload.name.strip()}", frontmatter)
-                    if count == 0:
-                        frontmatter = f"name: {payload.name.strip()}\n" + frontmatter
-                    else:
-                        frontmatter = updated
-                # 修改 version
-                if payload.version and payload.version.strip():
-                    updated, count = re.subn(r"(?m)^version:\s*.*$", f"version: {payload.version.strip()}", frontmatter)
-                    if count == 0:
-                        frontmatter = f"version: {payload.version.strip()}\n" + frontmatter
-                    else:
-                        frontmatter = updated
-                parts[1] = frontmatter
-                new_content = "---".join(parts)
-                library_fs.create_file("skill/SKILL.md", new_content)
-        except Exception:
-            pass
 
     return db.library.get_by_id(library_id)
 

@@ -11,7 +11,7 @@ import SkillEditorPanel from '../components/SkillEditorPanel.vue'
 import {
   deleteTurn,
   getErrorMessage,
-  listDisplayMessages,
+  listDisplayMessagePage,
   listMessageVersions,
   listSessions,
   regenerateChatMessage,
@@ -81,17 +81,55 @@ const draft = ref('')
 // 滑动窗口：messageCache 存全量，renderedMessages 按需暴露可见切片
 const messageCache = ref<DisplayMessage[]>([])
 const renderStart = ref(0)          // messageCache 中第一个可见消息的下标
-const FOCUS_WINDOW = 20             // 焦点窗口大小
-const TAIL_ANCHOR = 20              // 底部始终保留条数
-const MAX_RENDER = FOCUS_WINDOW + TAIL_ANCHOR  // 最大 DOM 节点数
+const renderEnd = ref(0)            // messageCache 中第一个不可见消息的下标
+const MAX_RENDER = 30               // 最大 DOM 节点数
+const WINDOW_STEP = 10              // 滚动到窗口边缘时切换的缓存步长
+const JUMP_CONTEXT_BEFORE = Math.floor(MAX_RENDER / 4)
+const NODE_CHAIN_LIMIT = 10         // 右侧节点链单屏节点数
+const activeMessageIndex = ref(0)
+const nodeFocusMessageId = ref<string | null>(null)
+const nodePreviewMessageId = ref<string | null>(null)
+const nodeChainHovered = ref(false)
+const nodeChainTransientVisible = ref(false)
+const chatVisualReady = ref(false)
 const renderedMessages = computed<DisplayMessage[]>(() => {
   const total = messageCache.value.length
   if (total === 0) return []
   const start = Math.min(renderStart.value, Math.max(0, total - 1))
-  return messageCache.value.slice(start, total)
+  const end = Math.min(Math.max(renderEnd.value, start + 1), start + MAX_RENDER, total)
+  return messageCache.value.slice(start, end)
 })
+const messageNavigationNodes = computed(() => {
+  const userIndexes = getUserMessageIndexes()
+  const total = userIndexes.length
+  if (total === 0) return []
+
+  const active = findFocusedUserNodePosition(userIndexes)
+  let start = Math.max(0, active - Math.floor(NODE_CHAIN_LIMIT / 2))
+  start = Math.min(start, Math.max(0, total - NODE_CHAIN_LIMIT))
+
+  return userIndexes.slice(start, start + NODE_CHAIN_LIMIT).map((messageIndex, offset) => {
+    const nodePosition = start + offset
+    const message = messageCache.value[messageIndex]
+    return {
+      index: messageIndex,
+      id: message.id,
+      preview: summarizeNodeContent(message.content),
+      active: nodePosition === active,
+      visible: messageIndex >= renderStart.value && messageIndex < renderEnd.value,
+      title: `第 ${nodePosition + 1}/${total} 条用户消息`,
+    }
+  })
+})
+const nodeChainPreview = computed(() => {
+  const previewId = nodePreviewMessageId.value || nodeFocusMessageId.value
+  if (!previewId) return ''
+  const message = messageCache.value.find((item) => item.id === previewId)
+  return message ? summarizeNodeContent(message.content) : ''
+})
+const nodeChainVisible = computed(() => nodeChainHovered.value || nodeChainTransientVisible.value)
 // hiddenAboveCount 保留以备后续 spacer 实现：const hiddenAboveCount = computed(() => renderStart.value)
-const PAGE_LIMIT = 20
+const PAGE_LIMIT = 60
 const hasMore = ref(true)
 const loadingMore = ref(false)
 let currentOffset = 0
@@ -104,6 +142,10 @@ const composerHeight = ref(128)
 let footerResizeObserver: ResizeObserver | null = null
 const copiedId = ref<string | null>(null)
 let copyResetTimer: number | null = null
+let nodeChainHideTimer: number | null = null
+let nodeHistoryHydrateTimer: number | null = null
+let nodeHistoryHydrating = false
+let chatVisualTimer: number | null = null
 // 当前正在生成的那条 user 输入（不含 skill 前缀），用于 stop 后回填到输入框
 const inflightUserPrompt = ref<string>('')
 
@@ -585,6 +627,206 @@ function alignToTurnStart(index: number): number {
   return i
 }
 
+function getUserMessageIndexes(): number[] {
+  const indexes: number[] = []
+  messageCache.value.forEach((message, index) => {
+    if (message.role === 'user') indexes.push(index)
+  })
+  return indexes
+}
+
+function summarizeNodeContent(content: string): string {
+  const normalized = content.replace(/\s+/g, '').trim()
+  return normalized ? Array.from(normalized).slice(0, 7).join('') : '空消息'
+}
+
+function findUserMessageIndexAtOrBefore(
+  index: number,
+  userIndexes = getUserMessageIndexes(),
+): number {
+  if (userIndexes.length === 0) return Math.max(0, index)
+
+  const boundedIndex = Math.min(Math.max(index, 0), Math.max(0, messageCache.value.length - 1))
+  let selected = userIndexes[0]
+  for (const userIndex of userIndexes) {
+    if (userIndex > boundedIndex) break
+    selected = userIndex
+  }
+  return selected
+}
+
+function syncNodeFocusToMessageIndex(index: number): void {
+  const userIndexes = getUserMessageIndexes()
+  if (userIndexes.length === 0) {
+    nodeFocusMessageId.value = null
+    return
+  }
+  const userIndex = findUserMessageIndexAtOrBefore(index, userIndexes)
+  nodeFocusMessageId.value = messageCache.value[userIndex]?.id ?? null
+}
+
+function getFocusedUserNodePosition(userIndexes = getUserMessageIndexes()): number {
+  if (userIndexes.length === 0) return 0
+  const focusedPosition = userIndexes.findIndex(
+    (index) => messageCache.value[index]?.id === nodeFocusMessageId.value,
+  )
+  if (focusedPosition !== -1) return focusedPosition
+
+  const activeUserIndex = findUserMessageIndexAtOrBefore(activeMessageIndex.value, userIndexes)
+  return Math.max(0, userIndexes.findIndex((index) => index === activeUserIndex))
+}
+
+function findFocusedUserNodePosition(userIndexes = getUserMessageIndexes()): number {
+  if (userIndexes.length === 0) return 0
+  if (!nodeFocusMessageId.value) {
+    syncNodeFocusToMessageIndex(activeMessageIndex.value)
+  }
+  const focusedPosition = userIndexes.findIndex(
+    (index) => messageCache.value[index]?.id === nodeFocusMessageId.value,
+  )
+  if (focusedPosition !== -1) return focusedPosition
+
+  const activeUserIndex = findUserMessageIndexAtOrBefore(activeMessageIndex.value, userIndexes)
+  nodeFocusMessageId.value = messageCache.value[activeUserIndex]?.id ?? null
+  return Math.max(0, userIndexes.findIndex((index) => index === activeUserIndex))
+}
+
+function focusUserNodeByPosition(position: number): void {
+  const userIndexes = getUserMessageIndexes()
+  if (userIndexes.length === 0) return
+
+  const nextPosition = Math.min(Math.max(position, 0), userIndexes.length - 1)
+  const messageId = messageCache.value[userIndexes[nextPosition]]?.id
+  if (!messageId) return
+
+  nodeFocusMessageId.value = messageId
+  nodePreviewMessageId.value = messageId
+  showNodeChainTransient()
+}
+
+function showNodeChainTransient(): void {
+  nodeChainTransientVisible.value = true
+  if (nodeChainHideTimer) window.clearTimeout(nodeChainHideTimer)
+  nodeChainHideTimer = window.setTimeout(() => {
+    nodeChainTransientVisible.value = false
+    nodeChainHideTimer = null
+  }, 1000)
+}
+
+function handleNodeChainEnter(): void {
+  nodeChainHovered.value = true
+  nodeChainTransientVisible.value = true
+  if (nodeChainHideTimer) {
+    window.clearTimeout(nodeChainHideTimer)
+    nodeChainHideTimer = null
+  }
+}
+
+function handleNodeChainLeave(): void {
+  nodeChainHovered.value = false
+  nodePreviewMessageId.value = null
+  showNodeChainTransient()
+}
+
+function setNodePreview(messageId: string): void {
+  nodePreviewMessageId.value = messageId
+}
+
+function saveChatCache(): void {
+  if (!currentSession.value) return
+  try {
+    localStorage.setItem(
+      `chat_cache_${currentSession.value.sid}`,
+      JSON.stringify({
+        messages: messageCache.value,
+        attachments: sessionAttachments.value,
+        rawCount: currentOffset,
+        timestamp: Date.now(),
+      }),
+    )
+  } catch (e) {
+    console.warn('Failed to save chat cache:', e)
+  }
+}
+
+function revealChatAfterBottomAnchor(): void {
+  if (chatVisualTimer) window.clearTimeout(chatVisualTimer)
+  chatVisualReady.value = false
+  nextTick(() => {
+    const container = chatContainer.value
+    if (container) container.scrollTop = container.scrollHeight
+    chatVisualTimer = window.setTimeout(() => {
+      chatVisualReady.value = true
+      chatVisualTimer = null
+    }, 80)
+  })
+}
+
+function waitForNodeHydration(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms)
+  })
+}
+
+async function hydrateOlderMessagesForNodeChain(): Promise<boolean> {
+  if (!hasMore.value || !currentSession.value) return false
+
+  const page = await listDisplayMessagePage(currentSession.value.sid, PAGE_LIMIT, currentOffset)
+  currentOffset += page.rawCount
+
+  if (page.rawCount < PAGE_LIMIT) {
+    hasMore.value = false
+  }
+  if (page.rawCount === 0 || page.messages.length === 0) {
+    saveChatCache()
+    return page.rawCount > 0 && hasMore.value
+  }
+
+  const addedCount = page.messages.length
+  messageCache.value = [...page.messages, ...messageCache.value]
+  renderStart.value += addedCount
+  renderEnd.value += addedCount
+  activeMessageIndex.value += addedCount
+  saveChatCache()
+  return true
+}
+
+function scheduleNodeHistoryHydration(): void {
+  if (nodeHistoryHydrateTimer) window.clearTimeout(nodeHistoryHydrateTimer)
+  nodeHistoryHydrateTimer = window.setTimeout(() => {
+    nodeHistoryHydrateTimer = null
+    void hydrateNodeHistory()
+  }, 240)
+}
+
+async function hydrateNodeHistory(): Promise<void> {
+  if (nodeHistoryHydrating || loadingMore.value || streaming.value || !currentSession.value) return
+
+  const hydrateSid = currentSession.value.sid
+  nodeHistoryHydrating = true
+  try {
+    while (hasMore.value && currentSession.value?.sid === hydrateSid && !streaming.value) {
+      const changed = await hydrateOlderMessagesForNodeChain()
+      if (!changed && !hasMore.value) break
+      await waitForNodeHydration(180)
+    }
+    if (currentSession.value?.sid === hydrateSid) {
+      void refreshVersionMap()
+    }
+  } catch (error) {
+    console.error('Failed to hydrate node history:', error)
+  } finally {
+    nodeHistoryHydrating = false
+  }
+}
+
+function handleNodeClick(index: number, messageId: string): void {
+  nodeFocusMessageId.value = messageId
+  nodePreviewMessageId.value = messageId
+  showNodeChainTransient()
+  jumpToMessageIndex(index)
+}
+
 function findTopVisibleIndex(): number {
   const container = chatContainer.value
   if (!container) return renderStart.value
@@ -598,42 +840,177 @@ function findTopVisibleIndex(): number {
   return renderStart.value
 }
 
-/** 根据当前滚动位置重新计算渲染窗口，保持滚动锚定，且不对 user/assistant 拆轮 */
-function recalcWindow(): void {
-  const container = chatContainer.value
-  if (!container) return
+function setRenderWindowFromStart(start: number): void {
   const total = messageCache.value.length
-  if (total === 0) return
-
-  // 处于底部：窗口收束到末尾 MAX_RENDER 条，起始对齐到轮次
-  if (stickToBottom.value) {
-    renderStart.value = alignToTurnStart(Math.max(0, total - MAX_RENDER))
+  if (total === 0) {
+    renderStart.value = 0
+    renderEnd.value = 0
+    activeMessageIndex.value = 0
     return
   }
 
-  // 用户正在翻阅历史：以当前视口顶部消息为锚点
-  const rawAnchor = findTopVisibleIndex()
-  const halfFocus = Math.floor(FOCUS_WINDOW / 2)
-  let newStart = Math.max(0, rawAnchor - halfFocus)
-  // 不允许裁剪掉尾部锚定区
-  const maxStart = Math.max(0, total - TAIL_ANCHOR - FOCUS_WINDOW)
-  newStart = Math.min(newStart, maxStart)
-  // 对齐到轮次起始（user 消息），避免拆开 user/assistant 对
-  newStart = alignToTurnStart(newStart)
+  const maxStart = Math.max(0, total - MAX_RENDER)
+  const boundedStart = Math.min(Math.max(0, start), maxStart)
+  if (boundedStart >= maxStart) {
+    setRenderWindowToBottom()
+    return
+  }
+  const nextStart = alignToTurnStart(boundedStart)
+  renderStart.value = nextStart
+  renderEnd.value = Math.min(total, nextStart + MAX_RENDER)
+  activeMessageIndex.value = Math.min(Math.max(activeMessageIndex.value, nextStart), renderEnd.value - 1)
+}
 
-  // 小幅调整不重算
-  if (Math.abs(newStart - renderStart.value) < 2) return
+function setRenderWindowAroundIndex(index: number): void {
+  const total = messageCache.value.length
+  if (total === 0) {
+    setRenderWindowToTop()
+    return
+  }
 
-  // 记录锚点以便恢复滚动位置（用对齐后的 start 对应的 user 消息）
-  const anchorIndex = alignToTurnStart(rawAnchor)
-  renderStart.value = newStart
+  const targetIndex = Math.min(Math.max(index, 0), total - 1)
+  setRenderWindowFromStart(targetIndex - JUMP_CONTEXT_BEFORE)
+  if (targetIndex < renderStart.value || targetIndex >= renderEnd.value) {
+    const maxStart = Math.max(0, total - MAX_RENDER)
+    const fallbackStart = Math.min(Math.max(0, targetIndex - JUMP_CONTEXT_BEFORE), maxStart)
+    renderStart.value = fallbackStart
+    renderEnd.value = Math.min(total, fallbackStart + MAX_RENDER)
+  }
+  activeMessageIndex.value = targetIndex
+}
+
+function setRenderWindowToBottom(): void {
+  const total = messageCache.value.length
+  if (total === 0) {
+    renderStart.value = 0
+    renderEnd.value = 0
+    activeMessageIndex.value = 0
+    return
+  }
+
+  renderEnd.value = total
+  renderStart.value = Math.max(0, total - MAX_RENDER)
+  activeMessageIndex.value = total - 1
+}
+
+function setRenderWindowToTop(): void {
+  const total = messageCache.value.length
+  renderStart.value = 0
+  renderEnd.value = Math.min(total, MAX_RENDER)
+  activeMessageIndex.value = 0
+}
+
+function captureScrollAnchor(): { index: number; offset: number } | null {
+  const container = chatContainer.value
+  if (!container) return null
+  const index = findTopVisibleIndex()
+  const target = container.querySelector(`[data-msg-index="${index}"]`)
+  return {
+    index,
+    offset: target instanceof HTMLElement ? target.offsetTop - container.scrollTop : 0,
+  }
+}
+
+function restoreScrollAnchor(anchor: { index: number; offset: number } | null): void {
+  if (!anchor) return
+  nextTick(() => {
+    const container = chatContainer.value
+    if (!container) return
+    const target = container.querySelector(`[data-msg-index="${anchor.index}"]`)
+    if (target instanceof HTMLElement) {
+      container.scrollTop = Math.max(0, target.offsetTop - anchor.offset)
+    }
+  })
+}
+
+function revealOlderCachedMessages(): boolean {
+  if (renderStart.value <= 0) return false
+  const anchor = captureScrollAnchor()
+  setRenderWindowFromStart(renderStart.value - WINDOW_STEP)
+  restoreScrollAnchor(anchor)
+  return true
+}
+
+function revealNewerCachedMessages(): boolean {
+  const total = messageCache.value.length
+  if (renderEnd.value >= total) return false
+  const anchor = captureScrollAnchor()
+  setRenderWindowFromStart(renderStart.value + WINDOW_STEP)
+  restoreScrollAnchor(anchor)
+  return true
+}
+
+function jumpToMessageIndex(index: number): void {
+  const total = messageCache.value.length
+  if (total === 0) return
+
+  const targetIndex = Math.min(Math.max(index, 0), total - 1)
+  setRenderWindowAroundIndex(targetIndex)
 
   nextTick(() => {
-    const target = container.querySelector(`[data-msg-index="${anchorIndex}"]`)
+    const container = chatContainer.value
+    if (!container) return
+    const target = container.querySelector(`[data-msg-index="${targetIndex}"]`)
     if (target instanceof HTMLElement) {
       container.scrollTop = target.offsetTop
     }
   })
+}
+
+async function handleNodeChainWheel(event: WheelEvent): Promise<void> {
+  if (event.deltaY === 0) return
+  const userIndexes = getUserMessageIndexes()
+  if (userIndexes.length === 0) return
+
+  const direction = event.deltaY > 0 ? 1 : -1
+  const activePosition = findActiveUserNodePosition(userIndexes)
+  const nextPosition = activePosition + direction
+
+  if (nextPosition < 0) {
+    const firstUserId = messageCache.value[userIndexes[0]]?.id
+    await loadMoreMessages()
+    await nextTick()
+
+    const updatedUserIndexes = getUserMessageIndexes()
+    const shiftedFirstPosition = updatedUserIndexes.findIndex(
+      (messageIndex) => messageCache.value[messageIndex]?.id === firstUserId,
+    )
+    if (shiftedFirstPosition > 0) {
+      jumpToMessageIndex(updatedUserIndexes[shiftedFirstPosition - 1])
+    } else if (updatedUserIndexes.length > 0) {
+      jumpToMessageIndex(updatedUserIndexes[0])
+    }
+    return
+  }
+
+  if (nextPosition >= userIndexes.length) {
+    jumpToMessageIndex(userIndexes[userIndexes.length - 1])
+    return
+  }
+
+  jumpToMessageIndex(userIndexes[nextPosition])
+}
+
+function isRenderedAtBottom(): boolean {
+  const container = chatContainer.value
+  if (!container) return true
+  return container.scrollHeight - container.scrollTop - container.clientHeight <= CHAT_SCROLL_BOTTOM_THRESHOLD
+}
+
+function clampRenderWindow(): void {
+  const total = messageCache.value.length
+  if (total === 0) {
+    renderStart.value = 0
+    renderEnd.value = 0
+    return
+  }
+
+  if (renderStart.value >= total || renderEnd.value <= renderStart.value) {
+    setRenderWindowToBottom()
+    return
+  }
+
+  setRenderWindowFromStart(renderStart.value)
 }
 
 // ── 工具函数 ──────────────────────────────────────────────────────────────────
@@ -644,10 +1021,7 @@ function scrollToBottom(force = false): void {
     if (!container) return
     if (!stickToBottom.value) return
     // 强制尾部锚定：窗口收束到末尾，起始对齐到轮次
-    const total = messageCache.value.length
-    if (total > MAX_RENDER) {
-      renderStart.value = alignToTurnStart(Math.max(0, total - MAX_RENDER))
-    }
+    setRenderWindowToBottom()
     container.scrollTop = container.scrollHeight
   })
 }
@@ -655,7 +1029,7 @@ function scrollToBottom(force = false): void {
 function isChatAtBottom(): boolean {
   const container = chatContainer.value
   if (!container) return true
-  return container.scrollHeight - container.scrollTop - container.clientHeight <= CHAT_SCROLL_BOTTOM_THRESHOLD
+  return renderEnd.value >= messageCache.value.length && isRenderedAtBottom()
 }
 
 function handleChatScroll(): void {
@@ -663,15 +1037,18 @@ function handleChatScroll(): void {
 
   const container = chatContainer.value
   if (!container) return
+  activeMessageIndex.value = stickToBottom.value
+    ? Math.max(0, messageCache.value.length - 1)
+    : findTopVisibleIndex()
 
-  // 滑动窗口重算（防抖由浏览器 scroll 事件频率自然保证）
-  if (!stickToBottom.value) {
-    recalcWindow()
+  if (container.scrollTop <= 15) {
+    if (revealOlderCachedMessages()) return
+    void loadMoreMessages()
+    return
   }
 
-  // 触顶加载更多
-  if (container.scrollTop <= 15) {
-    void loadMoreMessages()
+  if (isRenderedAtBottom() && renderEnd.value < messageCache.value.length) {
+    revealNewerCachedMessages()
   }
 }
 
@@ -687,33 +1064,45 @@ async function loadMoreMessages(): Promise<void> {
   const container = chatContainer.value
   if (!container) return
 
+  if (revealOlderCachedMessages()) return
+
   loadingMore.value = true
-  const previousScrollHeight = container.scrollHeight
-  const previousScrollTop = container.scrollTop
+  const anchor = captureScrollAnchor()
+  const newMsgs: DisplayMessage[] = []
 
   try {
-    const nextOffset = currentOffset + PAGE_LIMIT
-    const newMsgs = await listDisplayMessages(currentSession.value.sid, PAGE_LIMIT, nextOffset)
-    
-    if (newMsgs.length < PAGE_LIMIT) {
-      hasMore.value = false
+    while (hasMore.value && newMsgs.length === 0) {
+      const page = await listDisplayMessagePage(currentSession.value.sid, PAGE_LIMIT, currentOffset)
+      currentOffset += page.rawCount
+
+      if (page.rawCount < PAGE_LIMIT) {
+        hasMore.value = false
+      }
+      if (page.messages.length > 0) {
+        newMsgs.push(...page.messages)
+      }
+      if (page.rawCount === 0) {
+        break
+      }
     }
 
     if (newMsgs.length > 0) {
       // 头部拼接
       const addedCount = newMsgs.length
       messageCache.value = [...newMsgs, ...messageCache.value]
-      currentOffset = nextOffset
-      // 新增的消息全部在最前面，renderStart 同步后移以保持视觉不动
-      renderStart.value += addedCount
+      const shiftedAnchor = anchor ? { ...anchor, index: anchor.index + addedCount } : null
+      if (shiftedAnchor) {
+        setRenderWindowFromStart(Math.max(0, shiftedAnchor.index - WINDOW_STEP))
+        activeMessageIndex.value = shiftedAnchor.index
+      } else {
+        setRenderWindowToTop()
+      }
 
       // 异步刷新版本地图
       await refreshVersionMap()
 
       // 保持滚动视口相对位置
-      await nextTick()
-      const heightDifference = container.scrollHeight - previousScrollHeight
-      container.scrollTop = previousScrollTop + heightDifference
+      restoreScrollAnchor(shiftedAnchor)
     }
   } catch (error) {
     console.error('Failed to load more messages:', error)
@@ -733,17 +1122,17 @@ async function loadMessages(init = false): Promise<void> {
     currentOffset = 0
     hasMore.value = true
     renderStart.value = 0
+    renderEnd.value = 0
   }
 
-  const fetchLimit = init ? PAGE_LIMIT : Math.max(messageCache.value.length, PAGE_LIMIT)
-  const [msgs, atts] = await Promise.all([
-    listDisplayMessages(currentSession.value.sid, fetchLimit, 0),
+  const fetchLimit = init ? PAGE_LIMIT : Math.max(currentOffset, PAGE_LIMIT)
+  const [messagePage, atts] = await Promise.all([
+    listDisplayMessagePage(currentSession.value.sid, fetchLimit, 0),
     listAttachments(currentSession.value.sid),
   ])
-
-  if (init && msgs.length < PAGE_LIMIT) {
-    hasMore.value = false
-  }
+  const msgs = messagePage.messages
+  currentOffset = messagePage.rawCount
+  hasMore.value = messagePage.rawCount === fetchLimit
 
   // 关键：在更新响应式数据前，先预加载消息的所有版本信息和图片的 Blob URL。
   // 这样做能在单次 Tick 内把完整的 DOM（包括正确的图片地址与版本下拉框）渲染出来，
@@ -758,9 +1147,9 @@ async function loadMessages(init = false): Promise<void> {
 
   // 刷新后重算窗口：init 时从末尾对齐轮次，否则尽量保持当前位置
   if (init) {
-    renderStart.value = alignToTurnStart(Math.max(0, msgs.length - MAX_RENDER))
-  } else if (renderStart.value >= msgs.length) {
-    renderStart.value = alignToTurnStart(Math.max(0, msgs.length - MAX_RENDER))
+    setRenderWindowToBottom()
+  } else {
+    clampRenderWindow()
   }
 
   try {
@@ -1364,7 +1753,7 @@ async function validateAndLoad(): Promise<void> {
       if (parsed && Array.isArray(parsed.messages) && Array.isArray(parsed.attachments)) {
         messageCache.value = parsed.messages
         sessionAttachments.value = parsed.attachments
-        renderStart.value = Math.max(0, parsed.messages.length - MAX_RENDER)
+        setRenderWindowToBottom()
         // 异步加载缓存图片的 Blob URL，使用户能够瞬间看到图片而无卡顿
         void loadAttachmentUrls()
         // 瞬间定位到底部，避免首屏第一条消息跳动
@@ -1490,7 +1879,7 @@ watch(
   <Transition name="skill-editor" mode="out-in">
     <SkillEditorPanel
       v-if="editingSkill"
-      key="editor"
+      :key="editingSkill.space.kind === 'user' ? ('user-' + editingSkill.space.userId + '-' + editingSkill.name) : ('project-' + editingSkill.space.pid + '-' + editingSkill.name)"
       :space="editingSkill.space"
       :skill-name="editingSkill.name"
       :display-name="editingSkill.displayName"
@@ -1498,7 +1887,7 @@ watch(
     />
     <div v-else key="chat" class="absolute inset-0">
     <!-- 消息滚动区铺满整个区域，消息可滚动到浮动 composer 之下（composer 叠在其上层） -->
-    <div ref="chatContainer" class="absolute inset-0 overflow-y-auto px-4 pt-16 pb-5 md:px-6" @scroll.passive="handleChatScroll" @load.capture="handleImageLoad">
+    <div ref="chatContainer" class="no-scrollbar absolute inset-0 overflow-y-auto pl-4 pr-10 pt-16 pb-5 md:pl-6 md:pr-12" @scroll.passive="handleChatScroll" @load.capture="handleImageLoad">
       <!-- 动态预留空间，使最后一条消息可滚动至浮动 composer 上方而不被永久遮挡 -->
       <div class="mx-auto flex max-w-3xl flex-col gap-5" :style="{ paddingBottom: `${composerHeight}px` }">
         <div v-for="(message, idx) in renderedMessages" :key="message.id" :data-msg-index="renderStart + idx" class="flex w-full flex-col">
@@ -1642,6 +2031,31 @@ watch(
         </div>
       </div>
     </div>
+
+    <nav
+      v-if="messageNavigationNodes.length > 1"
+      class="message-node-chain"
+      :style="{ bottom: `${composerHeight + 16}px` }"
+      aria-label="消息节点导航"
+      @wheel.prevent="handleNodeChainWheel"
+    >
+      <button
+        v-for="node in messageNavigationNodes"
+        :key="node.index"
+        type="button"
+        class="message-node-button"
+        :class="[
+          node.active ? 'is-active' : '',
+          node.visible ? 'is-visible' : '',
+        ]"
+        :title="node.title"
+        :aria-label="node.title"
+        :aria-current="node.active ? 'true' : undefined"
+        @click="jumpToMessageIndex(node.index)"
+      >
+        <span class="message-node-dot" aria-hidden="true" />
+      </button>
+    </nav>
 
     <!-- 浮动 composer：绝对贴底并叠在消息层最上方（z-20）；外层透明且不拦截事件，
          消息可在其下方/周围透出，仅内部 composer 区域接收点击 -->
@@ -1871,5 +2285,81 @@ watch(
 .skill-editor-leave-to {
   transform: translateX(100%);
   opacity: 0;
+}
+
+.message-node-chain {
+  position: absolute;
+  top: 72px;
+  right: 8px;
+  z-index: 15;
+  display: flex;
+  width: 26px;
+  min-height: 168px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 8px 0;
+}
+
+.message-node-chain::before {
+  position: absolute;
+  top: 14px;
+  bottom: 14px;
+  left: 50%;
+  width: 2px;
+  content: "";
+  transform: translateX(-50%);
+  background: #d1d5db;
+}
+
+.message-node-button {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: #9ca3af;
+  cursor: pointer;
+  transition: color 160ms ease, transform 160ms ease;
+}
+
+.message-node-button:hover {
+  color: #4b5563;
+  transform: scale(1.08);
+}
+
+.message-node-button.is-visible {
+  color: #6b7280;
+}
+
+.message-node-button.is-active {
+  color: #111827;
+}
+
+.message-node-dot {
+  display: block;
+  width: 7px;
+  height: 7px;
+  border: 2px solid currentColor;
+  border-radius: 999px;
+  background: #f3f4f6;
+  box-shadow: 0 0 0 2px #f3f4f6;
+}
+
+.message-node-button.is-active .message-node-dot {
+  width: 10px;
+  height: 10px;
+  background: currentColor;
+}
+
+@media (min-width: 768px) {
+  .message-node-chain {
+    right: 12px;
+  }
 }
 </style>

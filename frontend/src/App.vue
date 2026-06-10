@@ -158,6 +158,8 @@ const { projects, loadProjects, resetProjects, upsertProject, removeProject } = 
 const { sidebarOpen, isMobile, handleResize, closeSidebarOnMobile } = useLayout()
 const { chatSidebarOpen, editingSkill, toggleSidebar: toggleChatSidebar, closeEditor } = useChatSkillSidebar()
 
+const projectLastActive = ref<Record<string, number>>({})
+
 const LOGOUT_SESSION_STATE_KEYS = ['library-tabs', 'community-tabs']
 const LOGOUT_LOCAL_STATE_KEYS = ['library-sidebar-open']
 const LOGOUT_LOCAL_STATE_PREFIXES = ['preview_windows_', 'chat_cache_']
@@ -198,7 +200,22 @@ watch(route, () => {
   hasScrolled.value = false
 })
 
-const previewProjects = computed(() => projects.value.slice(0, PREVIEW_PROJECT_LIMIT))
+// 切换项目/会话或页面时，关闭技能编辑器，但不关闭侧边栏
+watch(
+  () => [route.params.pid, route.params.sid] as const,
+  () => {
+    closeEditor()
+  }
+)
+
+const previewProjects = computed(() => {
+  const sorted = [...projects.value].sort((a, b) => {
+    const timeA = projectLastActive.value[a.pid] ?? (a.timestamp || a.created_at || 0)
+    const timeB = projectLastActive.value[b.pid] ?? (b.timestamp || b.created_at || 0)
+    return timeB - timeA
+  })
+  return sorted.slice(0, PREVIEW_PROJECT_LIMIT)
+})
 
 const subjectProject = computed(() => {
   const pid = route.params.pid as string | undefined
@@ -456,9 +473,15 @@ async function loadRecentSessions(): Promise<void> {
   }
   loadingRecent.value = true
   try {
+    const activeTimes: Record<string, number> = {}
     const promises = projects.value.map(async (p) => {
       try {
         const list = await listSessions(p.pid)
+        const maxSessionTime = list.length > 0
+          ? Math.max(...list.map((s) => s.timestamp))
+          : 0
+        activeTimes[p.pid] = Math.max(maxSessionTime, p.timestamp || p.created_at || 0)
+
         return list.map((s) => ({
           ...s,
           pid: p.pid,
@@ -466,10 +489,12 @@ async function loadRecentSessions(): Promise<void> {
         }))
       } catch (err) {
         console.error(`App.vue 加载科目 ${p.projectname} 的会话失败:`, err)
+        activeTimes[p.pid] = p.timestamp || p.created_at || 0
         return []
       }
     })
     const allLists = await Promise.all(promises)
+    projectLastActive.value = activeTimes
     const combined = allLists.flat()
     combined.sort((a, b) => b.timestamp - a.timestamp)
     recentSessions.value = combined.slice(0, 6)

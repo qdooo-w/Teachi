@@ -423,8 +423,6 @@ PENDING_OWNER ──(Owner 审核通过)──▶ PENDING_ADMIN ──(Admin 审
 
 ### 5. 仓库 → 运行层 (Install from Library)
 
-### 4. 仓库 → 运行层 (Install from Library)
-
 **触发**: 用户在仓库面板中点击「安装到运行层」
 
 **请求**: `POST /library/skills/{library_id}/install`
@@ -449,7 +447,7 @@ data/{user_uuid}/{pid}/skills/{name}/ (target=project)
 
 ---
 
-### 5. 发布表单预填 (Publish Form)
+### 6. 发布表单预填 (Publish Form)
 
 **触发**: 用户打开发布对话框时自动加载
 
@@ -484,7 +482,7 @@ data/{user_uuid}/{pid}/skills/{name}/ (target=project)
 
 ---
 
-### 6. 社区技能详情 (Community Detail)
+### 7. 社区技能详情 (Community Detail)
 
 **请求**: `GET /community/skills/{skill_id}`
 
@@ -730,9 +728,9 @@ users (uuid)
 | Fork 技能 | 详情弹层按钮 | `POST /library/skills/{id}/fork` | 点击 Fork 按钮 |
 | ZIP 上传 | `LibraryUploadDialog.vue` | `POST /library/skills/upload` | 点击「上传 ZIP」按钮 |
 | 模板匹配 | 收集面板 | `GET /library/skills/match-template?skill_name=xxx` | 收集前自动匹配 |
-| 收集技能 | `CollectPanel.vue` (待建) | `POST /library/skills/collect` | 确认收集 |
-| 发布表单 | `PublishPanel.vue` (待建) | `GET /library/skills/{id}/publish-form` | 打开发布面板 |
-| 发布提交 | `PublishPanel.vue` | `POST /library/skills/{id}/publish` | 填写版本号后提交 |
+| 收集技能 | `LibraryView.vue` (待导入标签页) | `POST /library/skills/collect` | 确认收集 |
+| 发布表单 | `LibraryView.vue` (发布标签页) | `GET /library/skills/{id}/publish-form` | 打开发布面板 |
+| 发布提交 | `LibraryView.vue` (发布标签页) | `POST /library/skills/{id}/publish` | 填写版本号后提交 |
 | Owner审核 | `OwnerReviewPanel.vue` (待建) | `GET /owner/reviews` | 打开Owner审核面板 |
 | Owner审核操作 | 审核面板按钮 | `POST /owner/reviews/{id}/approve\|reject` | 审核决策 |
 | Admin审核 | `AdminReviewPanel.vue` (待建) | `GET /admin/reviews` | 打开Admin审核面板 |
@@ -785,15 +783,14 @@ users (uuid)
 |---|---|
 | 仓库面板 | `LibraryView.vue` — 卡片网格列表 + 筛选/排序/分页 + 详情弹层（安装/Fork） |
 | ZIP 上传弹窗 | `LibraryUploadDialog.vue` — 批量拖拽上传 + 进度条 + 队列管理 |
+| 收集面板 | `LibraryView.vue` 待导入标签页 — 运行层→仓库的导入与模板匹配配置表单 |
+| 发布面板 | `LibraryView.vue` 社区发布标签页 — 仓库→社区的发布表单 (版本号/changelog) |
 
 ### ❌ 缺失 (前端)
 
 | 组件 | 说明 |
 |---|---|
-| 收集面板 | 运行层→仓库的收集表单 |
-| 发布面板 | 仓库→社区的发布表单 (版本号/changelog) |
-| Owner 审核面板 | 技能管理员审核界面 |
-| Admin 审核面板 | 全局管理员审核界面 |
 | 排行榜面板 | 热门/最新技能排行 |
 | 贡献者管理 UI | 添加/移除贡献者的界面 |
 | 举报管理 UI | 管理员查看/处理举报的界面 |
+| 仓库/社区技能修改界面 |

@@ -27,13 +27,14 @@ class SkillFields:
     description: str
     license: str | None
     compatibility: str | None
+    version: str | None
     body: str
 
 def parse_skill_file(content: str) -> SkillFields:
     """严格解析 SKILL.md，失败抛 SkillParseError。
 
     校验规则（与前端 parseSkillFrontmatter 一致）：
-    - 必须有完整的 ---\\n...\\n--- frontmatter 块
+    - 必须有完整的 ---\n...\n--- frontmatter 块
     - YAML 必须解析为非空 dict
     - 必须包含非空字符串 name 与 description
     - description ≤ 1024 字符；compatibility ≤ 500 字符
@@ -91,12 +92,21 @@ def parse_skill_file(content: str) -> SkillFields:
             f"compatibility 不能超过 {COMPATIBILITY_MAX} 字符（当前 {len(compat_str)}）。"
         )
 
+    version_val = raw.get("version")
+    if version_val is not None:
+        if not isinstance(version_val, (str, int, float)):
+            raise SkillParseError("version 必须是字符串（例如 '1.0.0'）。")
+        version_str = str(version_val).strip()
+    else:
+        version_str = None
+
     return SkillFields(
         name=name,
         display_name=display_name,
         description=description,
         license=license_str,
         compatibility=compat_str,
+        version=version_str,
         body=body or "",
     )
 

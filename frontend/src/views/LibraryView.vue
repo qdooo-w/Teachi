@@ -56,6 +56,7 @@ interface Tab {
     source: 'zip' | 'runtime' | 'fork'
     templateMatched?: boolean
     matchedTemplate?: UserLibrarySkill | null
+    rawDescription?: string
   }
   publishData?: {
     libraryId: string
@@ -430,7 +431,17 @@ function skillTitle(skill: UserLibrarySkill): string {
 }
 
 function sourceLabel(skill: UserLibrarySkill): string {
-  return skill.community_skill_id ? '来自社区' : '本地收集'
+  switch (skill.source) {
+    case 'community':
+      return '来自社区'
+    case 'zip':
+      return 'ZIP 导入'
+    case 'fork':
+      return 'Fork 复制'
+    case 'runtime':
+    default:
+      return '运行层导入'
+  }
 }
 
 function formatBytes(n: number | null | undefined): string {
@@ -834,7 +845,6 @@ async function submitPublish(tab: Tab): Promise<void> {
       description: data.description.trim(),
       readme_md: data.readmeMd,
       tags: JSON.stringify(data.tags),
-      version: data.version.trim(),
     })
     await publishLibrarySkill(data.libraryId, {
       version: data.version.trim(),
@@ -957,11 +967,22 @@ interface ImportQueueItem {
     name: string
     displayName: string
     readmeMd: string
+    description: string
   }
 }
 
 const importQueue = ref<ImportQueueItem[]>([])
 const runtimeSelectedSkillNames = ref<string[]>([])
+
+function toggleRuntimeSkillSelection(name: string): void {
+  const index = runtimeSelectedSkillNames.value.indexOf(name)
+  if (index > -1) {
+    runtimeSelectedSkillNames.value.splice(index, 1)
+  } else {
+    runtimeSelectedSkillNames.value.push(name)
+  }
+}
+
 const isUploading = ref(false)
 
 const importSourceType = ref('user')
@@ -1073,6 +1094,7 @@ async function processQueue(): Promise<void> {
             name: res.name,
             displayName: res.display_name || res.name,
             readmeMd: res.readme_md || '',
+            description: res.description || '',
           }
         } else if (item.source === 'runtime') {
           const res = await parseRuntimeSkill(item.name)
@@ -1080,7 +1102,8 @@ async function processQueue(): Promise<void> {
           item.parsedData = {
             name: res.frontmatter.name,
             displayName: res.frontmatter.display_name || res.frontmatter.name,
-            readmeMd: res.frontmatter.body || '',
+            readmeMd: res.readme_md || '',
+            description: res.frontmatter.description || '',
           }
         }
       } catch (err) {
@@ -1115,13 +1138,14 @@ function startQueueImport(): void {
         name: data.name,
         formName: data.name,
         formDisplayName: data.displayName || data.name,
-        formDescription: '',
+        formDescription: data.description || '',
         formReadmeMd: data.readmeMd || '',
         formTags: [],
         formVersion: '1.0.0',
         source: item.source,
         templateMatched: false,
         matchedTemplate: null,
+        rawDescription: data.description || '',
       },
       lastAccessed: Date.now(),
     }
@@ -1226,14 +1250,6 @@ async function savePendingImport(tab: Tab): Promise<void> {
     showError('简短描述不能为空')
     return
   }
-  if (!data.formVersion.trim()) {
-    showError('版本号不能为空')
-    return
-  }
-  if (!/^[0-9]+\.[0-9]+\.[0-9]+$/.test(data.formVersion.trim())) {
-    showError('版本号格式必须为 X.Y.Z (例如 1.0.0)')
-    return
-  }
 
   isSavingPending.value = true
   try {
@@ -1247,7 +1263,6 @@ async function savePendingImport(tab: Tab): Promise<void> {
         description: data.formDescription,
         readme_md: data.formReadmeMd,
         tags: tagsJson,
-        version: data.formVersion,
       })
       finalSkillId = res.id
     } else if (data.source === 'runtime') {
@@ -1258,7 +1273,6 @@ async function savePendingImport(tab: Tab): Promise<void> {
         description: data.formDescription,
         readme_md: data.formReadmeMd,
         tags: tagsJson,
-        version: data.formVersion,
       })
       finalSkillId = res.id
     } else {
@@ -1269,7 +1283,6 @@ async function savePendingImport(tab: Tab): Promise<void> {
         description: data.formDescription,
         readme_md: data.formReadmeMd,
         tags: tagsJson,
-        version: data.formVersion,
       })
       finalSkillId = res.id
     }
@@ -1378,7 +1391,7 @@ watch(activeTabId, async (newId) => {
       <Transition name="skill-editor" mode="out-in">
         <SkillEditorPanel
           v-if="editingSkill"
-          key="editor"
+          :key="editingSkill.space.kind === 'user' ? ('user-' + editingSkill.space.userId + '-' + editingSkill.name) : ('project-' + editingSkill.space.pid + '-' + editingSkill.name)"
           :space="editingSkill.space"
           :skill-name="editingSkill.name"
           :display-name="editingSkill.displayName"
@@ -1569,7 +1582,7 @@ watch(activeTabId, async (newId) => {
                   </div>
                   <span
                     class="flex flex-shrink-0 items-center rounded-full px-2 py-0.5 text-[11px] whitespace-nowrap"
-                    :class="s.community_skill_id ? 'bg-blue-50 text-blue-600' : 'bg-[#f3f4f6] text-[#6b7280]'"
+                    :class="s.source === 'community' ? 'bg-blue-50 text-blue-600' : 'bg-[#f3f4f6] text-[#6b7280]'"
                   >
                     {{ sourceLabel(s) }}
                   </span>
@@ -1590,8 +1603,6 @@ watch(activeTabId, async (newId) => {
                     </template>
                   </div>
                   <div class="flex flex-shrink-0 items-center gap-1.5 text-[11px] text-[#9ca3af] tabular-nums">
-                    <span>v{{ s.version }}</span>
-                    <span>·</span>
                     <span>{{ formatBytes(s.size_bytes) }}</span>
                   </div>
                 </div>
@@ -1647,12 +1658,12 @@ watch(activeTabId, async (newId) => {
           <div class="min-h-0 flex-1 flex flex-col overflow-y-auto px-6 py-6 font-hans">
 
             <!-- 来源选择卡片 -->
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
               <!-- ZIP 压缩包上传 -->
               <div 
                 @dragover.prevent
                 @drop="handleZipDrop"
-                class="flex flex-col items-center justify-center border-2 border-dashed border-[#d1d5db] rounded-2xl bg-white p-6 transition-all hover:border-[#1f2937] hover:bg-gray-50/50 group relative cursor-pointer"
+                class="flex flex-col items-center justify-center border-2 border-dashed border-[#d1d5db] rounded-none bg-white p-5 min-h-[260px] h-full transition-all hover:border-[#1f2937] hover:bg-gray-50/50 group relative cursor-pointer"
               >
                 <input 
                   type="file" 
@@ -1661,31 +1672,21 @@ watch(activeTabId, async (newId) => {
                   class="absolute inset-0 opacity-0 cursor-pointer" 
                   @change="handleZipSelect"
                 />
-                <div class="flex h-12 w-12 items-center justify-center rounded-full bg-[#f3f4f6] text-[#4b5563] mb-4 group-hover:scale-105 transition-transform">
-                  <svg class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 16V4m0 0L8 8m4-4l4 4M4 18h16" />
-                  </svg>
-                </div>
                 <span class="text-sm font-medium text-[#1f2937]">点击选择或将 ZIP 拖拽到这里</span>
                 <span class="text-xs text-[#9ca3af] mt-1">支持多选，大小不超过 40MB</span>
               </div>
 
               <!-- 本地运行层导入 -->
-              <div class="flex flex-col rounded-2xl border border-[#e5e7eb] bg-white p-6 shadow-sm">
-                <div class="flex h-10 w-10 items-center justify-center rounded-full bg-[#f3f4f6] text-[#4b5563] mb-4">
-                  <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-                  </svg>
-                </div>
-                <h3 class="text-sm font-medium text-[#1f2937] mb-1">从本地运行层导入</h3>
-                <p class="text-xs text-[#9ca3af] mb-4">选择本地正在运行的技能进行配置导入，作为新版本或独立副本。</p>
+              <div class="flex flex-col rounded-none border border-[#e5e7eb] bg-white p-5 shadow-sm min-h-[260px] h-full">
+                <h3 class="text-sm font-medium text-[#1f2937] mb-0.5">从本地运行层导入</h3>
+                <p class="text-xs text-[#9ca3af] mb-2.5">选择本地正在运行的技能进行配置导入，作为新版本或独立副本。</p>
                 
                 <!-- 1. 来源选择 -->
-                <div class="mb-3">
-                  <label class="block text-[11px] font-semibold text-[#4b5563] mb-1">技能来源（用户/项目）：</label>
+                <div class="mb-2">
+                  <label class="block text-[11px] font-semibold text-[#4b5563] mb-0.5">技能来源（用户/项目）：</label>
                   <select
                     v-model="importSourceType"
-                    class="block w-full rounded-xl border border-[#d1d5db] bg-transparent px-3 py-1.5 text-xs text-[#1f2937] outline-none focus:ring-1 focus:ring-[#1f2937]"
+                    class="block w-full rounded-xl border border-[#d1d5db] bg-transparent px-3 py-2 text-sm text-[#1f2937] outline-none focus:ring-1 focus:ring-[#1f2937]"
                   >
                     <option value="user">当前用户运行层技能 (全局)</option>
                     <option
@@ -1700,26 +1701,45 @@ watch(activeTabId, async (newId) => {
 
                 <!-- 2. 技能多选 -->
                 <div>
-                  <label class="block text-[11px] font-semibold text-[#4b5563] mb-1">选择技能：</label>
+                  <label class="block text-[11px] font-semibold text-[#4b5563] mb-0.5">选择技能：</label>
                   <div class="flex gap-2">
                     <div class="relative flex-1 min-w-0">
                       <div v-if="loadingSourceSkills" class="text-xs text-[#9ca3af] py-4 text-center">
                         正在载入本地技能...
                       </div>
-                      <select
+                      <div
                         v-else
-                        v-model="runtimeSelectedSkillNames"
-                        multiple
-                        class="block w-full rounded-xl border border-[#d1d5db] bg-transparent px-3 py-1.5 text-xs text-[#1f2937] outline-none min-h-[90px] focus:ring-1 focus:ring-[#1f2937]"
+                        class="block w-full rounded-xl border border-[#d1d5db] bg-[#f9fafb] p-1 overflow-y-auto max-h-[160px] min-h-[110px] space-y-1"
                       >
-                        <option 
-                          v-for="s in importSourceSkills" 
-                          :key="s.name" 
-                          :value="s.name"
+                        <div
+                          v-for="s in importSourceSkills"
+                          :key="s.name"
+                          @click="toggleRuntimeSkillSelection(s.name)"
+                          :class="[
+                            'flex items-center gap-2 px-3 py-2 text-xs rounded-lg cursor-pointer transition select-none border',
+                            runtimeSelectedSkillNames.includes(s.name)
+                              ? 'bg-purple-50 text-purple-700 border-purple-300 font-medium shadow-sm'
+                              : 'bg-white text-[#1f2937] border-[#e5e7eb] hover:bg-gray-50'
+                          ]"
                         >
-                          {{ s.display_name || s.name }} ({{ s.name }})
-                        </option>
-                      </select>
+                          <input
+                            type="checkbox"
+                            :checked="runtimeSelectedSkillNames.includes(s.name)"
+                            @click.stop
+                            @change="toggleRuntimeSkillSelection(s.name)"
+                            class="h-4 w-4 rounded border-[#d1d5db] text-purple-600 focus:ring-purple-500 focus:ring-offset-0"
+                          />
+                          <span class="flex-1 truncate font-medium text-[13px]">
+                            {{ s.display_name || s.name }}
+                          </span>
+                          <span :class="[
+                            'text-[10px] font-mono opacity-80',
+                            runtimeSelectedSkillNames.includes(s.name) ? 'text-purple-400' : 'text-gray-500'
+                          ]">
+                            {{ s.name }}
+                          </span>
+                        </div>
+                      </div>
                       <div v-if="!loadingSourceSkills && importSourceSkills.length === 0" class="text-[10px] text-red-500 mt-1">
                         ⚠️ 选中的项目空间下无本地技能
                       </div>
@@ -1728,7 +1748,7 @@ watch(activeTabId, async (newId) => {
                       type="button"
                       :disabled="runtimeSelectedSkillNames.length === 0 || loadingSourceSkills"
                       @click="addRuntimeSkillsToQueue"
-                      class="h-8 rounded-xl bg-[#1f2937] px-3 text-xs font-medium text-white transition hover:bg-[#111827] active:scale-95 disabled:opacity-40 disabled:scale-100 flex-shrink-0"
+                      class="h-auto self-stretch rounded-xl bg-[#1f2937] px-6 text-sm font-semibold text-white transition hover:bg-[#111827] active:scale-95 disabled:opacity-40 disabled:scale-100 flex-shrink-0"
                     >
                       添加
                     </button>
@@ -1750,7 +1770,7 @@ watch(activeTabId, async (newId) => {
                     type="button"
                     @click="importQueue = []"
                     :disabled="isUploading"
-                    class="h-7 px-2.5 rounded-xl border border-gray-200 text-[10px] font-medium text-gray-500 hover:bg-gray-50 transition active:scale-95 disabled:opacity-40"
+                    class="h-9 px-4 rounded-xl border border-gray-200 text-sm font-semibold text-gray-500 hover:bg-gray-50 transition active:scale-95 disabled:opacity-40"
                   >
                     清空全部
                   </button>
@@ -1758,9 +1778,9 @@ watch(activeTabId, async (newId) => {
                     type="button"
                     @click="startQueueImport"
                     :disabled="isUploading || !importQueue.some(q => q.status === 'success')"
-                    class="h-7 px-3 rounded-xl bg-purple-600 text-[10px] font-medium text-white transition hover:bg-purple-700 active:scale-95 disabled:opacity-40 shadow-sm shadow-purple-100 flex items-center gap-1"
+                    class="h-9 px-5 rounded-xl bg-purple-600 text-sm font-semibold text-white transition hover:bg-purple-700 active:scale-95 disabled:opacity-40 shadow-sm shadow-purple-100 flex items-center gap-1.5"
                   >
-                    <svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
                     </svg>
                     <span>开始配置导入</span>
@@ -1925,18 +1945,6 @@ watch(activeTabId, async (newId) => {
                 <span class="text-[10px] text-[#9ca3af] block mt-1">技能的唯一标识，将作为后端物理文件中的 SKILL.md name 配置项。</span>
               </div>
 
-              <!-- version (可编辑) -->
-              <div>
-                <label class="block text-xs font-semibold text-[#4b5563] mb-1.5">版本号 (version) <span class="text-red-500">*</span></label>
-                <input
-                  v-model="currentPendingData.formVersion"
-                  type="text"
-                  placeholder="格式如：1.0.0"
-                  class="block w-full rounded-none border border-[#e5e7eb] bg-white px-3 py-2 text-xs text-[#1f2937] placeholder:text-[#9ca3af] outline-none focus:border-[#1f2937] focus:ring-1 focus:ring-[#1f2937]"
-                />
-                <span class="text-[10px] text-[#9ca3af] block mt-1">请使用三位版本号规范（例如：1.0.0）。</span>
-              </div>
-
               <!-- display_name -->
               <div>
                 <label class="block text-xs font-semibold text-[#4b5563] mb-1.5">显示名称 (display_name) <span class="text-red-500">*</span></label>
@@ -1950,7 +1958,18 @@ watch(activeTabId, async (newId) => {
 
               <!-- description -->
               <div>
-                <label class="block text-xs font-semibold text-[#4b5563] mb-1.5">简短描述 (description) <span class="text-red-500">*</span></label>
+                <div class="flex items-center justify-between mb-1.5">
+                  <label class="block text-xs font-semibold text-[#4b5563]">简短描述 (description) <span class="text-red-500">*</span></label>
+                  <button
+                    v-if="currentPendingData.rawDescription"
+                    type="button"
+                    @click="currentPendingData.formDescription = currentPendingData.rawDescription"
+                    class="text-[10px] text-purple-600 hover:text-purple-700 hover:underline select-none cursor-pointer"
+                    title="从原技能 SKILL.md 导入描述"
+                  >
+                    复制原技能描述
+                  </button>
+                </div>
                 <textarea
                   v-model="currentPendingData.formDescription"
                   rows="3"
@@ -2258,7 +2277,7 @@ watch(activeTabId, async (newId) => {
             <span
               v-if="detailSkill"
               class="rounded-full px-2 py-0.5 !text-xs whitespace-nowrap"
-              :class="detailSkill.community_skill_id ? 'bg-blue-50 text-blue-600' : 'bg-[#f3f4f6] text-[#6b7280]'"
+              :class="detailSkill.source === 'community' ? 'bg-blue-50 text-blue-600' : 'bg-[#f3f4f6] text-[#6b7280]'"
             >
               {{ sourceLabel(detailSkill) }}
             </span>

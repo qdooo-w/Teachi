@@ -530,7 +530,7 @@ watch(
   <Transition name="skill-editor" mode="out-in">
     <SkillEditorPanel
       v-if="editingSkill"
-      key="editor"
+      :key="editingSkill.space.kind === 'user' ? ('user-' + editingSkill.space.userId + '-' + editingSkill.name) : ('project-' + editingSkill.space.pid + '-' + editingSkill.name)"
       :space="editingSkill.space"
       :skill-name="editingSkill.name"
       :display-name="editingSkill.displayName"

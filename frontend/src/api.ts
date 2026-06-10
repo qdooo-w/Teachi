@@ -77,6 +77,11 @@ interface MessageListResponse {
   messages: MessageItem[]
 }
 
+export interface DisplayMessagePage {
+  messages: DisplayMessage[]
+  rawCount: number
+}
+
 interface StreamEvent {
   type: string
   content?: string
@@ -403,6 +408,14 @@ export async function listDisplayMessages(
   limit?: number,
   offset?: number
 ): Promise<DisplayMessage[]> {
+  return (await listDisplayMessagePage(sid, limit, offset)).messages
+}
+
+export async function listDisplayMessagePage(
+  sid: string,
+  limit?: number,
+  offset?: number
+): Promise<DisplayMessagePage> {
   let url = `/sessions/${encodeURIComponent(sid)}/messages`
   const params: string[] = []
   if (limit !== undefined) params.push(`limit=${limit}`)
@@ -410,10 +423,13 @@ export async function listDisplayMessages(
   if (params.length > 0) url += `?${params.join('&')}`
 
   const response = await request<MessageListResponse>(url)
-  return response.messages
-    .filter((message) => message.version === 0)
-    .map(parseMessage)
-    .filter((message): message is DisplayMessage => message !== null)
+  return {
+    rawCount: response.messages.length,
+    messages: response.messages
+      .filter((message) => message.version === 0)
+      .map(parseMessage)
+      .filter((message): message is DisplayMessage => message !== null),
+  }
 }
 
 export interface MessageVersionItem {
@@ -1191,7 +1207,7 @@ export async function installLibrarySkill(
 /** Fork 仓库技能，可选覆盖元数据 */
 export async function forkLibrarySkill(
   libraryId: string,
-  overrides?: { name?: string; display_name?: string; description?: string; readme_md?: string; tags?: string; version?: string },
+  overrides?: { name?: string; display_name?: string; description?: string; readme_md?: string; tags?: string },
 ): Promise<UserLibrarySkill> {
   return request<UserLibrarySkill>(`/library/skills/${encodeURIComponent(libraryId)}/fork`, {
     method: 'POST',
@@ -1239,7 +1255,6 @@ export async function collectLibrarySkill(payload: {
   description?: string | null
   readme_md?: string | null
   tags?: string | null
-  version?: string | null
 }): Promise<UserLibrarySkill> {
   return request<UserLibrarySkill>('/library/skills/collect', {
     method: 'POST',
@@ -1261,9 +1276,10 @@ export async function matchLibrarySkillTemplate(skillName: string): Promise<{
 /** 读取运行层技能配置以辅助填充表单 */
 export async function parseRuntimeSkill(skillName: string): Promise<{
   frontmatter: any
+  readme_md?: string
   latest_in_library: UserLibrarySkill | null
 }> {
-  return request<{ frontmatter: any; latest_in_library: UserLibrarySkill | null }>(
+  return request<{ frontmatter: any; readme_md?: string; latest_in_library: UserLibrarySkill | null }>(
     `/library/skills/parse-runtime?skill_name=${encodeURIComponent(skillName)}`
   )
 }
@@ -1277,7 +1293,6 @@ export async function updateLibrarySkillMeta(
     description?: string | null
     readme_md?: string | null
     tags?: string | null
-    version?: string | null
   }
 ): Promise<UserLibrarySkill> {
   return request<UserLibrarySkill>(`/library/skills/${encodeURIComponent(libraryId)}/meta`, {
