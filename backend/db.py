@@ -1348,7 +1348,16 @@ class CommunitySkillsFacade(_DataBase):
 
     def list_versions(self, skill_id: str) -> list[dict]:
         with self._cursor() as cursor:
-            cursor.execute("SELECT * FROM community_skill_versions WHERE skill_id = ? AND status = 'APPROVED' ORDER BY created_at DESC", (skill_id,))
+            cursor.execute(
+                """
+                SELECT v.*, u.username as submitted_by_username 
+                FROM community_skill_versions v
+                LEFT JOIN users u ON v.submitted_by = u.uuid
+                WHERE v.skill_id = ? AND v.status = 'APPROVED'
+                ORDER BY v.created_at DESC
+                """,
+                (skill_id,)
+            )
             return [dict(row) for row in cursor.fetchall()]
 
     def get_contributors(self, skill_id: str) -> list[dict]:
@@ -1493,15 +1502,19 @@ class UserLibrarySkillsFacade(_DataBase):
 
     def get_latest_by_name(self, user_uuid: str, name: str) -> dict | None:
         """
-        按技能唯一标识名称 and 用户 UUID 获取仓库中最新的记录
+        按技能唯一标识名称或显示名称 and 用户 UUID 获取仓库中最新的记录
         
         【调用链】
         - 被用于 `GET /library/skills/parse-runtime` 接口，用以做同名技能的匹配与表单自动预填。
         """
         with self._cursor() as cursor:
             cursor.execute(
-                "SELECT * FROM user_library_skills WHERE user_uuid = ? AND name = ? ORDER BY created_at DESC LIMIT 1",
-                (user_uuid, name)
+                """
+                SELECT * FROM user_library_skills 
+                WHERE user_uuid = ? AND (name = ? OR display_name = ?) 
+                ORDER BY created_at DESC LIMIT 1
+                """,
+                (user_uuid, name, name)
             )
             return self._row_to_dict(cursor.fetchone())
 
@@ -1588,6 +1601,86 @@ class UserLibrarySkillsFacade(_DataBase):
                 (community_skill_id, now_ts, library_id)
             )
             return cursor.rowcount > 0
+
+    def update_meta(
+        self,
+        library_id: str,
+        user_uuid: str,
+        *,
+        name: str | None = None,
+        display_name: str | None = None,
+        description: str | None = None,
+        readme_md: str | None = None,
+        tags: str | None = None,
+        version: str | None = None,
+        changelog: str | None = None,
+    ) -> bool:
+        """更新个人仓库技能的展示元数据。
+        
+        只更新非 None 的字段，带有 user_uuid 权限校验。
+        """
+        updates = []
+        params = []
+        if name is not None:
+            updates.append("name = ?")
+            params.append(name)
+        if display_name is not None:
+            updates.append("display_name = ?")
+            params.append(display_name)
+        if description is not None:
+            updates.append("description = ?")
+            params.append(description)
+        if readme_md is not None:
+            updates.append("readme_md = ?")
+            params.append(readme_md)
+        if tags is not None:
+            updates.append("tags = ?")
+            params.append(tags)
+        if version is not None:
+            updates.append("version = ?")
+            params.append(version)
+        if changelog is not None:
+            updates.append("changelog = ?")
+            params.append(changelog)
+            
+        if not updates:
+            return False
+            
+        now_ts = self._now_timestamp()
+        updates.append("updated_at = ?")
+        params.append(now_ts)
+        
+        sql = f"UPDATE user_library_skills SET {', '.join(updates)} WHERE id = ? AND user_uuid = ?"
+        params.extend([library_id, user_uuid])
+        
+        with self._cursor() as cursor:
+            cursor.execute(sql, tuple(params))
+            return cursor.rowcount > 0
+
+    def list_by_user(self, user_uuid: str) -> list[dict]:
+        """获取指定用户的全部仓库技能列表，用以向后兼容测试。"""
+        return self.list_by_user_filtered(user_uuid)
+
+    def delete_for_user(self, skill_id: str, user_uuid: str) -> bool:
+        """删除单条仓库技能记录（含权限校验）。"""
+        with self._cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM user_library_skills WHERE id = ? AND user_uuid = ?",
+                (skill_id, user_uuid),
+            )
+            return cursor.rowcount > 0
+
+    def delete_bulk_for_user(self, skill_ids: list[str], user_uuid: str) -> int:
+        """批量删除仓库技能记录，返回实际删除数量。"""
+        if not skill_ids:
+            return 0
+        placeholders = ",".join("?" for _ in skill_ids)
+        with self._cursor() as cursor:
+            cursor.execute(
+                f"DELETE FROM user_library_skills WHERE id IN ({placeholders}) AND user_uuid = ?",
+                (*skill_ids, user_uuid),
+            )
+            return cursor.rowcount
 
 class ReviewLogsFacade(_DataBase):
     """

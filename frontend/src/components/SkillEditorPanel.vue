@@ -439,7 +439,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="flex h-full flex-col bg-white">
+  <div class="flex h-full flex-col bg-white pt-14">
     <!-- 主体：文件树 + 编辑器 -->
     <div class="flex min-h-0 flex-1">
       <!-- 文件树 -->

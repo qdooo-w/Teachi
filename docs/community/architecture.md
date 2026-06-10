@@ -351,7 +351,7 @@ PENDING_OWNER ──(Owner 审核通过)──▶ PENDING_ADMIN ──(Admin 审
 │         SKILL.md │     │    → data/{user_uuid}/{pid}/skills/{name}│
 │         ...      │     │                                          │
 └──────────────────┘     │  target="library":                       │
-                         │    → data/{user_uuid}/library/{version_id}/ │
+                         │    → data/{user_uuid}/library/{version_id}/│
                          │      skill/                              │
                          │    + 创建 user_library_skills 记录       │
                          │    + version_id 复用为 library_id        │

@@ -867,6 +867,7 @@ export interface CommunitySkillVersion {
   downloads: number
   status: string
   submitted_by: string
+  submitted_by_username?: string
   created_at: number
 }
 
@@ -1116,6 +1117,86 @@ export async function forkLibrarySkill(libraryId: string): Promise<UserLibrarySk
   return request<UserLibrarySkill>(`/library/skills/${encodeURIComponent(libraryId)}/fork`, {
     method: 'POST',
     headers: nonceHeaders(),
+  })
+}
+
+/** 收集本地技能到仓库 */
+export async function collectLibrarySkill(payload: {
+  skill_name: string
+  template_id?: string | null
+  name?: string | null
+  display_name?: string | null
+  description?: string | null
+  readme_md?: string | null
+  tags?: string | null
+  version?: string | null
+  license?: string | null
+  compatibility?: string | null
+  changelog?: string | null
+}): Promise<UserLibrarySkill> {
+  return request<UserLibrarySkill>('/library/skills/collect', {
+    method: 'POST',
+    headers: nonceHeaders(),
+    body: JSON.stringify(payload),
+  })
+}
+
+/** 获取同名已入库的模板匹配建议 */
+export async function matchLibrarySkillTemplate(skillName: string): Promise<{
+  skill_name: string
+  matched: UserLibrarySkill | null
+}> {
+  return request<{ skill_name: string; matched: UserLibrarySkill | null }>(
+    `/library/skills/match-template?skill_name=${encodeURIComponent(skillName)}`
+  )
+}
+
+/** 读取运行层技能配置以辅助填充表单 */
+export async function parseRuntimeSkill(skillName: string): Promise<{
+  frontmatter: any
+  latest_in_library: UserLibrarySkill | null
+  community_skill: any | null
+}> {
+  return request<{ frontmatter: any; latest_in_library: UserLibrarySkill | null; community_skill: any | null }>(
+    `/library/skills/parse-runtime?skill_name=${encodeURIComponent(skillName)}`
+  )
+}
+
+/** 更新仓库技能的展示元数据 */
+export async function updateLibrarySkillMeta(
+  libraryId: string,
+  payload: {
+    name?: string | null
+    display_name?: string | null
+    description?: string | null
+    readme_md?: string | null
+    tags?: string | null
+    version?: string | null
+    license?: string | null
+    compatibility?: string | null
+    changelog?: string | null
+  }
+): Promise<UserLibrarySkill> {
+  return request<UserLibrarySkill>(`/library/skills/${encodeURIComponent(libraryId)}/meta`, {
+    method: 'PUT',
+    headers: nonceHeaders(),
+    body: JSON.stringify(payload),
+  })
+}
+
+/** 删除单条仓库技能 */
+export async function deleteLibrarySkill(libraryId: string): Promise<void> {
+  await request<void>(`/library/skills/${encodeURIComponent(libraryId)}`, {
+    method: 'DELETE',
+  })
+}
+
+/** 批量删除仓库技能 */
+export async function bulkDeleteLibrarySkills(skillIds: string[]): Promise<{ deleted: number }> {
+  return request<{ deleted: number }>('/library/skills/bulk-delete', {
+    method: 'POST',
+    headers: nonceHeaders(),
+    body: JSON.stringify({ skill_ids: skillIds }),
   })
 }
 

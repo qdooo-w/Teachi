@@ -634,7 +634,7 @@ onBeforeUnmount(() => {
       <!-- ── 主界面标签页：技能列表 ── -->
       <template v-if="activeTab.type === 'main'">
         <!-- 筛选栏 -->
-        <div class="flex flex-shrink-0 items-center gap-2 px-5 py-2 bg-white">
+        <div class="flex flex-shrink-0 items-center h-9 px-5 gap-2 bg-white font-hans">
           <select
             :value="sort"
             class="h-7 py-0 leading-none border-0 border-b-2 border-[#e5e7eb] bg-transparent pl-0 pr-4 text-xs text-[#4b5563] outline-none cursor-pointer hover:border-[#1f2937] transition-colors duration-200 font-hans"

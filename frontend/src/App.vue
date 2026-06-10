@@ -931,6 +931,19 @@ watch(
           </svg>
         </button>
 
+        <!-- 新建对话按钮（仅聊天页显示） -->
+        <button
+          v-if="$route.name === 'chat'"
+          class="flex h-8 w-8 items-center justify-center rounded-full border border-[#d1d5db] bg-white text-[#4b5563] transition-all duration-200 hover:bg-[#e5e7eb] active:scale-95"
+          type="button"
+          title="新建对话"
+          @click="router.push({ name: 'subject', params: { pid: $route.params.pid } })"
+        >
+          <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+          </svg>
+        </button>
+
         <!-- 技能侧边栏切换按钮 -->
         <button
           class="flex h-8 w-8 items-center justify-center rounded-full border border-[#d1d5db] bg-white text-[#4b5563] transition-all duration-200 hover:bg-[#e5e7eb] active:scale-95"
@@ -950,19 +963,6 @@ watch(
             viewBox="0 0 24 24"
           >
             <path d="M15 18l-6-6 6-6" />
-          </svg>
-        </button>
-
-        <!-- 新建对话按钮（仅聊天页显示） -->
-        <button
-          v-if="$route.name === 'chat'"
-          class="flex h-8 w-8 items-center justify-center rounded-full border border-[#d1d5db] bg-white text-[#4b5563] transition-all duration-200 hover:bg-[#e5e7eb] active:scale-95"
-          type="button"
-          title="新建对话"
-          @click="router.push({ name: 'subject', params: { pid: $route.params.pid } })"
-        >
-          <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
           </svg>
         </button>
       </div>

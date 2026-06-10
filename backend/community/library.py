@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 import uuid
 from dataclasses import asdict
 from pathlib import Path
@@ -48,6 +49,26 @@ def _suggest_next_version(current: str | None) -> str:
 class CollectSkillRequest(BaseModel):
     skill_name: str = Field(..., min_length=1, max_length=64)
     template_id: str | None = None  # 可选：指定模板技能 ID
+    name: str | None = Field(None, min_length=1, max_length=64)
+    display_name: str | None = None
+    description: str | None = None
+    readme_md: str | None = None
+    tags: str | None = None
+    version: str | None = Field(None, pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$")
+    license: str | None = None
+    compatibility: str | None = None
+    changelog: str | None = None
+
+class UpdateLibrarySkillMetaRequest(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=64)
+    display_name: str | None = None
+    description: str | None = None
+    readme_md: str | None = None
+    tags: str | None = None
+    version: str | None = Field(None, pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$")
+    license: str | None = None
+    compatibility: str | None = None
+    changelog: str | None = None
 
 class PublishFromLibraryRequest(BaseModel):
     version: str = Field(..., pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$")
@@ -100,9 +121,13 @@ def parse_runtime_skill(
     # Check if we already have this in library
     latest_lib = db.library.get_latest_by_name(user_uuid=current_user["uuid"], name=skill_name)
 
+    # Check if there is a matching community skill
+    community_skill = db.community.get_skill_by_name(skill_name)
+
     return {
         "frontmatter": asdict(fields),
-        "latest_in_library": latest_lib
+        "latest_in_library": latest_lib,
+        "community_skill": community_skill
     }
 
 
@@ -181,11 +206,12 @@ def collect_skill_to_library(
     if not template:
         template = db.library.get_latest_by_name(user_uuid=user_uuid, name=skill_name)
 
-    # 从模板继承元数据，无模板时使用默认值
-    display_name = template["display_name"] if template else fields.display_name
-    description = template["description"] if template else ""  # 不从 SKILL.md 提取，留给作者另行填写
-    readme_md = template["readme_md"] if template else (fields.body if fields.body else "")
-    tags = template["tags"] if template else "[]"
+    # 从模板继承元数据，无模板时使用默认值，如果 payload 传入了则优先使用
+    display_name = payload.display_name if payload.display_name is not None else (template["display_name"] if template else fields.display_name)
+    description = payload.description if payload.description is not None else (template["description"] if template else "")
+    readme_md = payload.readme_md if payload.readme_md is not None else (template["readme_md"] if template else (fields.body if fields.body else ""))
+    tags = payload.tags if payload.tags is not None else (template["tags"] if template else "[]")
+    version = payload.version.strip() if (payload.version and payload.version.strip()) else (template["version"] if template else "1.0.0")
 
     library_id = str(uuid.uuid4())
     library_fs = LibraryFile(library_id=library_id, user_uuid=user_uuid, db_facade=db)
@@ -194,15 +220,60 @@ def collect_skill_to_library(
     try:
         _copy_skill_dir(src_dir, dst_dir)
 
+        # 物理修改 SKILL.md 里的 name 和 version
+        final_name = payload.name.strip() if (payload.name and payload.name.strip()) else fields.name
+        
+        try:
+            skill_md_path = dst_dir / "SKILL.md"
+            if skill_md_path.is_file():
+                skill_md_content = skill_md_path.read_text(encoding="utf-8")
+                import re
+                parts = skill_md_content.split("---", 2)
+                if len(parts) >= 3:
+                    frontmatter = parts[1]
+                    # 修改 name
+                    if payload.name and payload.name.strip():
+                        updated, count = re.subn(r"(?m)^name:\s*.*$", f"name: {payload.name.strip()}", frontmatter)
+                        if count == 0:
+                            frontmatter = f"name: {payload.name.strip()}\n" + frontmatter
+                        else:
+                            frontmatter = updated
+                    # 修改 version
+                    if payload.version and payload.version.strip():
+                        updated, count = re.subn(r"(?m)^version:\s*.*$", f"version: {payload.version.strip()}", frontmatter)
+                        if count == 0:
+                            frontmatter = f"version: {payload.version.strip()}\n" + frontmatter
+                        else:
+                            frontmatter = updated
+                    # 修改 license
+                    if payload.license and payload.license.strip():
+                        updated, count = re.subn(r"(?m)^license:\s*.*$", f"license: {payload.license.strip()}", frontmatter)
+                        if count == 0:
+                            frontmatter = f"license: {payload.license.strip()}\n" + frontmatter
+                        else:
+                            frontmatter = updated
+                    # 修改 compatibility
+                    if payload.compatibility and payload.compatibility.strip():
+                        updated, count = re.subn(r"(?m)^compatibility:\s*.*$", f"compatibility: {payload.compatibility.strip()}", frontmatter)
+                        if count == 0:
+                            frontmatter = f"compatibility: {payload.compatibility.strip()}\n" + frontmatter
+                        else:
+                            frontmatter = updated
+                    parts[1] = frontmatter
+                    new_content = "---".join(parts)
+                    skill_md_path.write_text(new_content, encoding="utf-8")
+        except Exception:
+            pass # 忽略异常，优先保证数据库完整性
+
         record = db.library.create(
             user_uuid=user_uuid,
-            name=fields.name,
+            name=final_name,
             display_name=display_name,
             description=description,
             readme_md=readme_md,
             tags=tags,
-            version="1.0.0",
-            changelog="Initial collect",
+            version=version,
+            changelog=payload.changelog.strip() if (payload.changelog and payload.changelog.strip()) else "Initial collect",
             community_skill_id=None,  # 为空表示来自运行层
             local_path=f"data/{user_uuid}/library/{library_id}",
             size_bytes=_directory_size(dst_dir),
@@ -501,3 +572,139 @@ def write_library_file(
         return {"path": payload.path, "success": True}
     except FileError as e:
         raise HTTPException(status_code=400, detail={"code": "FILE_ERROR", "message": str(e)})
+
+
+@router.put("/skills/{library_id}/meta", dependencies=[Depends(verify_nonce)])
+def update_library_skill_meta(
+    library_id: str,
+    payload: UpdateLibrarySkillMetaRequest,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
+):
+    """更新仓库技能的展示元数据。"""
+    db = _resolve_db(db)
+    user_uuid = current_user["uuid"]
+
+    record = db.library.get_by_id(library_id)
+    if not record or record["user_uuid"] != user_uuid:
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "Library skill not found"})
+
+    db.library.update_meta(
+        library_id=library_id,
+        user_uuid=user_uuid,
+        name=payload.name,
+        display_name=payload.display_name,
+        description=payload.description,
+        readme_md=payload.readme_md,
+        tags=payload.tags,
+        version=payload.version,
+        changelog=payload.changelog,
+    )
+
+    if payload.name or payload.version or payload.license or payload.compatibility:
+        library_fs = LibraryFile(library_id=library_id, user_uuid=user_uuid, db_facade=db)
+        try:
+            skill_md_content = library_fs.read_file("skill/SKILL.md")
+            import re
+            parts = skill_md_content.split("---", 2)
+            if len(parts) >= 3:
+                frontmatter = parts[1]
+                # 修改 name
+                if payload.name and payload.name.strip():
+                    updated, count = re.subn(r"(?m)^name:\s*.*$", f"name: {payload.name.strip()}", frontmatter)
+                    if count == 0:
+                        frontmatter = f"name: {payload.name.strip()}\n" + frontmatter
+                    else:
+                        frontmatter = updated
+                # 修改 version
+                if payload.version and payload.version.strip():
+                    updated, count = re.subn(r"(?m)^version:\s*.*$", f"version: {payload.version.strip()}", frontmatter)
+                    if count == 0:
+                        frontmatter = f"version: {payload.version.strip()}\n" + frontmatter
+                    else:
+                        frontmatter = updated
+                # 修改 license
+                if payload.license and payload.license.strip():
+                    updated, count = re.subn(r"(?m)^license:\s*.*$", f"license: {payload.license.strip()}", frontmatter)
+                    if count == 0:
+                        frontmatter = f"license: {payload.license.strip()}\n" + frontmatter
+                    else:
+                        frontmatter = updated
+                # 修改 compatibility
+                if payload.compatibility and payload.compatibility.strip():
+                    updated, count = re.subn(r"(?m)^compatibility:\s*.*$", f"compatibility: {payload.compatibility.strip()}", frontmatter)
+                    if count == 0:
+                        frontmatter = f"compatibility: {payload.compatibility.strip()}\n" + frontmatter
+                    else:
+                        frontmatter = updated
+                parts[1] = frontmatter
+                new_content = "---".join(parts)
+                library_fs.create_file("skill/SKILL.md", new_content)
+        except Exception:
+            pass
+
+    return db.library.get_by_id(library_id)
+
+
+class BulkDeleteRequest(BaseModel):
+    skill_ids: list[str] = Field(..., min_length=1, max_length=100)
+
+
+@router.delete("/skills/{library_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_library_skill(
+    library_id: str,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
+):
+    """删除单条仓库技能及其本地文件。"""
+    db = _resolve_db(db)
+    user_uuid = current_user["uuid"]
+
+    record = db.library.get_by_id(library_id)
+    if not record or record["user_uuid"] != user_uuid:
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "Library skill not found"})
+
+    db.library.delete_for_user(library_id, user_uuid)
+
+    # 清理本地文件
+    try:
+        local_path = record.get("local_path", "")
+        if local_path:
+            skill_dir = Path(local_path)
+            if skill_dir.exists():
+                shutil.rmtree(skill_dir, ignore_errors=True)
+    except Exception:
+        logger.warning("Failed to clean up local files for library skill %s", library_id)
+
+
+@router.post("/skills/bulk-delete")
+def bulk_delete_library_skills(
+    payload: BulkDeleteRequest,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
+):
+    """批量删除仓库技能，返回实际删除数量。"""
+    db = _resolve_db(db)
+    user_uuid = current_user["uuid"]
+
+    # 先查询需要删除的记录以清理文件
+    records = []
+    for sid in payload.skill_ids:
+        record = db.library.get_by_id(sid)
+        if record and record["user_uuid"] == user_uuid:
+            records.append(record)
+
+    deleted = db.library.delete_bulk_for_user(payload.skill_ids, user_uuid)
+
+    # 清理本地文件
+    for record in records:
+        try:
+            local_path = record.get("local_path", "")
+            if local_path:
+                skill_dir = Path(local_path)
+                if skill_dir.exists():
+                    shutil.rmtree(skill_dir, ignore_errors=True)
+        except Exception:
+            logger.warning("Failed to clean up local files for library skill %s", record["id"])
+
+    return {"deleted": deleted}

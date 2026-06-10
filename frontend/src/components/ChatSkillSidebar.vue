@@ -4,8 +4,9 @@ import { useRoute } from 'vue-router'
 import { useChatSkillSidebar } from '../composables/useChatSkillSidebar'
 import { useProjectSkills } from '../composables/useProjectSkills'
 import { useUserSkills } from '../composables/useUserSkills'
-import { getCurrentUserId } from '../api'
-import type { SkillMeta } from '../skills'
+import { useNotification } from '../composables/useNotification'
+import { getCurrentUserId, getErrorMessage } from '../api'
+import { deleteSkill, type SkillMeta } from '../skills'
 
 const route = useRoute()
 const { chatSidebarOpen, closeSidebar, openEditor } = useChatSkillSidebar()
@@ -13,11 +14,14 @@ const { chatSidebarOpen, closeSidebar, openEditor } = useChatSkillSidebar()
 // ── 技能数据 ────────────────────────────────────────────────────────────────
 const pid = computed(() => (route.params.pid as string) || null)
 
+const { showSuccess, showError } = useNotification()
+const deletingSkillName = ref<string | null>(null)
+
 // 用户级技能
-const { skills: userSkills, load: loadUserSkills } = useUserSkills()
+const { skills: userSkills, load: loadUserSkills, refresh: refreshUserSkills } = useUserSkills()
 
 // 项目级技能
-const { skills: projectSkills } = useProjectSkills(pid)
+const { skills: projectSkills, refresh: refreshProjectSkills } = useProjectSkills(pid)
 
 // ── 折叠状态（默认收起） ────────────────────────────────────────────────────
 const userExpanded = ref(false)
@@ -42,6 +46,41 @@ function selectSkill(kind: 'user' | 'project', skill: SkillMeta): void {
     openEditor({ kind: 'user', userId }, skill.name, skill.display_name || skill.name)
   } else if (kind === 'project' && pid.value) {
     openEditor({ kind: 'project', pid: pid.value }, skill.name, skill.display_name || skill.name)
+  }
+}
+
+async function handleDeleteSkill(kind: 'user' | 'project', skill: SkillMeta): Promise<void> {
+  const skillName = skill.name
+  const displayName = skill.display_name || skill.name
+  if (!confirm(`确定要彻底删除技能「${displayName}」吗？`)) {
+    return
+  }
+
+  const userId = getCurrentUserId()
+  let space: any = null
+  if (kind === 'user' && userId) {
+    space = { kind: 'user', userId }
+  } else if (kind === 'project' && pid.value) {
+    space = { kind: 'project', pid: pid.value }
+  }
+
+  if (!space) return
+
+  deletingSkillName.value = skill.name
+  try {
+    await deleteSkill(space, skillName)
+    showSuccess(`已成功删除技能「${displayName}」`)
+
+    // 刷新列表
+    if (kind === 'user') {
+      await refreshUserSkills()
+    } else {
+      await refreshProjectSkills()
+    }
+  } catch (e) {
+    showError(`删除技能失败: ${getErrorMessage(e)}`)
+  } finally {
+    deletingSkillName.value = null
   }
 }
 </script>
@@ -114,7 +153,7 @@ function selectSkill(kind: 'user' | 'project', skill: SkillMeta): void {
               role="button"
               tabindex="0"
               :class="[
-                'flex h-8 mx-1 cursor-pointer items-center justify-start gap-2 rounded-xl pl-4 pr-2 text-left transition-colors',
+                'group relative flex h-8 mx-1 cursor-pointer items-center justify-start gap-2 rounded-xl pl-4 pr-8 text-left transition-colors',
                 'text-[13px]',
                 'hover:bg-[#e5e7eb]',
               ]"
@@ -125,6 +164,19 @@ function selectSkill(kind: 'user' | 'project', skill: SkillMeta): void {
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
               </svg>
               <span class="font-hans flex-1 truncate">{{ skill.display_name || skill.name }}</span>
+              <!-- 删除技能按钮 -->
+              <button
+                type="button"
+                class="absolute right-2 top-1/2 -translate-y-1/2 flex h-5.5 w-5.5 items-center justify-center rounded-lg text-gray-400 opacity-0 group-hover:opacity-100 hover:bg-[#d1d5db] hover:text-red-600 transition-all active:scale-90"
+                title="删除技能"
+                @click.stop="handleDeleteSkill('user', skill)"
+              >
+                <!-- Loading 状态 -->
+                <span v-if="deletingSkillName === skill.name" class="h-3.5 w-3.5 border-2 border-red-600/30 border-t-red-600 rounded-full animate-spin" />
+                <svg v-else class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+              </button>
             </div>
           </div>
         </div>
@@ -171,7 +223,7 @@ function selectSkill(kind: 'user' | 'project', skill: SkillMeta): void {
               role="button"
               tabindex="0"
               :class="[
-                'flex h-8 mx-1 cursor-pointer items-center justify-start gap-2 rounded-xl pl-4 pr-2 text-left transition-colors',
+                'group relative flex h-8 mx-1 cursor-pointer items-center justify-start gap-2 rounded-xl pl-4 pr-8 text-left transition-colors',
                 'text-[13px]',
                 'hover:bg-[#e5e7eb]',
               ]"
@@ -182,6 +234,19 @@ function selectSkill(kind: 'user' | 'project', skill: SkillMeta): void {
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
               </svg>
               <span class="font-hans flex-1 truncate">{{ skill.display_name || skill.name }}</span>
+              <!-- 删除技能按钮 -->
+              <button
+                type="button"
+                class="absolute right-2 top-1/2 -translate-y-1/2 flex h-5.5 w-5.5 items-center justify-center rounded-lg text-gray-400 opacity-0 group-hover:opacity-100 hover:bg-[#d1d5db] hover:text-red-600 transition-all active:scale-90"
+                title="删除技能"
+                @click.stop="handleDeleteSkill('project', skill)"
+              >
+                <!-- Loading 状态 -->
+                <span v-if="deletingSkillName === skill.name" class="h-3.5 w-3.5 border-2 border-red-600/30 border-t-red-600 rounded-full animate-spin" />
+                <svg v-else class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+              </button>
             </div>
           </div>
         </div>
