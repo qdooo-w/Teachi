@@ -64,20 +64,37 @@ def get_user_by_email(conn: sqlite3.Connection, email: str) -> dict | None:
     return dict(row) if row else None
 
 
+def ensure_role_column(conn: sqlite3.Connection) -> bool:
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+    if not columns:
+        raise sqlite3.OperationalError("users table does not exist")
+    return "role" in columns
+
+
 def set_admin(email: str, database_path: str) -> int:
     email = email.strip()
     if not email:
         print("Email cannot be empty.", file=sys.stderr)
         return 2
 
-    db_path = Path(database_path)
+    db_path = Path(database_path).expanduser()
+    if not db_path.is_absolute():
+        db_path = (PROJECT_ROOT / db_path).resolve()
     if not db_path.exists():
         print(f"Database does not exist: {db_path}", file=sys.stderr)
         return 1
 
+    print(f"Using database path: {db_path}")
     db = DatabaseFacade(str(db_path))
     try:
         with closing(db.get_connection()) as conn:
+            if not ensure_role_column(conn):
+                print(
+                    "Database users table has no role column. "
+                    "This is likely an old database or the wrong --db path; no changes were made.",
+                    file=sys.stderr,
+                )
+                return 1
             user = get_user_by_email(conn, email)
             if user is None:
                 print(f"User not found for email: {email}", file=sys.stderr)

@@ -296,7 +296,9 @@ async def build_model_node(ctx: LoopContext) -> NodeOutput:
     tools = build_tools(allowed=ctx.allowed_tools)
 
     agent_kwargs: dict = {"tools": tools, "capabilities": [skills_capability]}
-    user_config = db.model_configs.get_active_for_user(ctx.user_uuid)
+    from backend.config.model import get_active_model_config
+
+    user_config = get_active_model_config(db, ctx.user_uuid)
     model_settings: dict = {}
     user_instruction: str = ""
     if user_config:

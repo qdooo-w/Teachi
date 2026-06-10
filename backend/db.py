@@ -829,11 +829,56 @@ class ModelConfigsFacade(_DataBase):
             rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
-    def get_active_for_user(self, user_uuid: str) -> dict | None:
-        """获取用户当前激活的模型配置。如果没有激活配置则返回 None。"""
+    def list_active_for_user(self, user_uuid: str) -> list[dict]:
+        """获取用户当前激活的全部模型配置。
+
+        运行时最多允许两条 active，校验由 settings 路由负责；这里按普通模型优先、
+        创建时间升序返回，便于调用方稳定选出主模型。
+        """
         with self._cursor() as cursor:
             cursor.execute(
-                f"SELECT {self._COLUMNS} FROM user_model_configs WHERE user_uuid = ? AND is_active = 1 LIMIT 1",
+                f"""
+                SELECT {self._COLUMNS}
+                FROM user_model_configs
+                WHERE user_uuid = ? AND is_active = 1
+                ORDER BY supports_vision ASC, created_at ASC
+                """,
+                (user_uuid,),
+            )
+            rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+
+    def get_active_for_user(self, user_uuid: str) -> dict | None:
+        """获取用户当前主模型配置。如果没有激活配置则返回 None。
+
+        当用户同时激活普通模型和视觉模型时，普通模型作为主模型，视觉模型
+        只作为图片理解辅助模型使用。
+        """
+        with self._cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT {self._COLUMNS}
+                FROM user_model_configs
+                WHERE user_uuid = ? AND is_active = 1
+                ORDER BY supports_vision ASC, created_at ASC
+                LIMIT 1
+                """,
+                (user_uuid,),
+            )
+            row = cursor.fetchone()
+        return self._row_to_dict(row)
+
+    def get_active_vision_for_user(self, user_uuid: str) -> dict | None:
+        """获取用户当前激活的视觉辅助模型配置。"""
+        with self._cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT {self._COLUMNS}
+                FROM user_model_configs
+                WHERE user_uuid = ? AND is_active = 1 AND supports_vision = 1
+                ORDER BY created_at ASC
+                LIMIT 1
+                """,
                 (user_uuid,),
             )
             row = cursor.fetchone()
@@ -900,29 +945,30 @@ class ModelConfigsFacade(_DataBase):
         return self.get_for_user(config_id, user_uuid)
 
     def set_active_for_user(self, config_id: str, user_uuid: str) -> dict | None:
-        """将指定配置设为激活状态，同时取消该用户其他配置的激活状态。
+        """将指定配置标记为激活状态，不再自动取消其他配置。
 
-        使用 CASE WHEN 单条 SQL 原子完成切换，避免两条 UPDATE 之间的并发窗口。
-        若目标不存在或不属于该用户，不执行任何写入，直接返回 None。
+        active 组合合法性由 settings 路由在调用前校验。
         """
-        # 先验证目标配置存在且属于该用户
+        return self.set_active_status_for_user(config_id, user_uuid, is_active=True)
+
+    def set_active_status_for_user(self, config_id: str, user_uuid: str, *, is_active: bool) -> dict | None:
+        """设置单条模型配置的激活状态。"""
         target = self.get_for_user(config_id, user_uuid)
         if target is None:
             return None
 
         now_ts = self._now_timestamp()
         with self._cursor() as cursor:
-            # 单条 SQL 原子操作：属于该用户的所有配置，目标设为 1，其余设为 0
             cursor.execute(
                 """
                 UPDATE user_model_configs
-                SET is_active = CASE WHEN config_id = ? THEN 1 ELSE 0 END,
-                    updated_at = ?
-                WHERE user_uuid = ?
-                  AND (is_active = 1 OR config_id = ?)
+                SET is_active = ?, updated_at = ?
+                WHERE config_id = ? AND user_uuid = ?
                 """,
-                (config_id, now_ts, user_uuid, config_id),
+                (1 if is_active else 0, now_ts, config_id, user_uuid),
             )
+            if cursor.rowcount == 0:
+                return None
         return self.get_for_user(config_id, user_uuid)
 
     def deactivate_all_for_user(self, user_uuid: str) -> bool:
@@ -946,11 +992,8 @@ class ModelConfigsFacade(_DataBase):
         return affected > 0
 
     def user_model_config_supports_vision(self, user_uuid: str) -> bool:
-        """检查用户当前激活的配置是否支持视觉。"""
-        active_config = self.get_active_for_user(user_uuid)
-        if active_config is None:
-            return False
-        return bool(active_config.get("supports_vision", 0))
+        """检查用户当前是否激活了视觉模型配置。"""
+        return self.get_active_vision_for_user(user_uuid) is not None
 
 class UserPreferencesFacade(_DataBase):
     """用户偏好设置管理。"""

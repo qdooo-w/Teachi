@@ -50,6 +50,15 @@ FETCH_MODELS_TIMEOUT = 10
 
 _logger = logging.getLogger(__name__)
 
+VISION_TEST_CODE = "V7K"
+VISION_TEST_IMAGE_BASE64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAKAAAABQCAIAAAARP+ljAAABBklEQVR42u3aMQ6FIBBAQU5j4eU8sN5FOzsTjcouMC9b"
+    "w5exMOSXXV1XHMEQwPOyms4GMGAD2LQBLF/RAizAigTepukcRwNYvQOXiz77cQ/XL0FlPh/AgAEDBgwYMGDAgAEDB"
+    "twv8O+XBkHAb9YBDBgwYMCAAQMGDBgwYMCAa+2b4WIEMGDAgAEDBgwYMGDAgAF/B5z5wTK/oDWfFzBgwIABAwYMGD"
+    "BgwIABjwfcygvkogMwYMCAAQMGDBgwYMCA2wQe7ULj733D/vgOGDBgwIABAwYMGDBgwIABJ9r3zvqAATtowIABAwY"
+    "MGLB9AQOOA1b9AI8ELMACLMACLMACLMCABVhpOwDk11btBNY3awAAAABJRU5ErkJggg=="
+)
+
 
 def validate_base_url(url: str) -> str:
     """Validate base_url to prevent SSRF: must be http(s), must not point to private/internal networks."""
@@ -96,6 +105,29 @@ def model_name_is_vision(model_name: str) -> bool:
     return any(kw in lower for kw in VISION_MODEL_WHITELIST)
 
 
+def config_supports_vision(config: dict | None) -> bool:
+    """判断一条模型配置是否可作为视觉理解模型。"""
+    if not config:
+        return False
+    model_name = str(config.get("model_name") or "")
+    return bool(config.get("supports_vision")) or model_name_is_vision(model_name)
+
+
+def get_active_model_config(db, user_uuid: str) -> dict | None:
+    """获取运行时主模型配置。
+
+    当用户同时启用普通模型与视觉模型时，普通模型负责主对话，视觉模型只做图片理解辅助。
+    若启用的配置全都是视觉模型，则使用创建时间最早的 active 配置作为主模型。
+    """
+    configs = db.model_configs.list_active_for_user(user_uuid)
+    if not configs:
+        return None
+    for config in configs:
+        if not config_supports_vision(config):
+            return config
+    return configs[0]
+
+
 def active_model_supports_vision(db, user_uuid: str) -> bool:
     """判断当前用户激活的模型配置是否支持视觉。
 
@@ -104,25 +136,22 @@ def active_model_supports_vision(db, user_uuid: str) -> bool:
     2. 激活配置的 supports_vision 字段为 True
     3. 否则返回 False
     """
-    config = db.model_configs.get_active_for_user(user_uuid)
+    config = get_active_model_config(db, user_uuid)
     if config is None:
         return bool(VISION_MODEL_NAME) and model_name_is_vision(VISION_MODEL_NAME)
-    model_name = config.get("model_name", "")
-    if model_name and model_name_is_vision(model_name):
-        return True
-    return bool(config.get("supports_vision"))
+    return config_supports_vision(config)
 
 
 def get_vision_assistant_provider(db, user_uuid: str) -> "OpenAIChatModel":
     """选取视觉辅助模型，按优先级：
-    1. 用户配置中 supports_vision=True 的任意一条（取第一条）
+    1. 用户当前激活的视觉模型配置（取第一条）
     2. 系统 env 默认视觉模型（VISION_MODEL_*）
     3. 抛出 RuntimeError
     """
-    configs = db.model_configs.list_by_user(user_uuid)
+    configs = db.model_configs.list_active_for_user(user_uuid)
 
     for c in configs:
-        if c.get("supports_vision") or model_name_is_vision(c.get("model_name", "")):
+        if config_supports_vision(c):
             return GetProvider(
                 api_key=c.get("api_key") or None,
                 base_url=c.get("base_url") or None,
@@ -227,29 +256,42 @@ async def test_connection(
     primary_success = False
     primary_error = None
 
-    # 构造视觉消息
+    def _extract_response_text(response) -> str:
+        try:
+            content = response.choices[0].message.content
+        except (AttributeError, IndexError, TypeError):
+            return ""
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                if isinstance(item, dict):
+                    text = item.get("text")
+                    if isinstance(text, str):
+                        parts.append(text)
+                else:
+                    text = getattr(item, "text", None)
+                    if isinstance(text, str):
+                        parts.append(text)
+            return " ".join(parts)
+        return str(content)
+
+    def _normalize_vision_answer(text: str) -> str:
+        return "".join(ch for ch in text.upper() if ch.isalnum())
+
+    # 构造视觉消息。不要在 prompt 中泄露 VISION_TEST_CODE；模型必须读图答出。
     vision_messages = []
     if supports_vision:
-        from backend.config import BASE_DIR
-        import base64
-        image_path = BASE_DIR / "image.png"
-        if image_path.is_file():
-            image_bytes = image_path.read_bytes()
-        else:
-            # 备用单像素透明 PNG，防止文件缺失导致报错
-            image_bytes = base64.b64decode(
-                b"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
-            )
-        base64_image = base64.b64encode(image_bytes).decode("utf-8")
         vision_messages = [
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": "Hi, please describe this image briefly in one sentence to test our API connection."},
+                    {"type": "text", "text": "Read the 3-character code shown in the image. Reply with the code only, no explanation."},
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": f"data:image/png;base64,{base64_image}"
+                            "url": f"data:image/png;base64,{VISION_TEST_IMAGE_BASE64}"
                         }
                     }
                 ]
@@ -259,14 +301,20 @@ async def test_connection(
     # 尝试进行主测试
     try:
         messages = vision_messages if supports_vision else [{"role": "user", "content": "Hi"}]
-        await asyncio.wait_for(
+        response = await asyncio.wait_for(
             client.chat.completions.create(
                 model=model.model_name,
                 messages=messages,
-                max_tokens=64,
+                max_tokens=16 if supports_vision else 64,
             ),
             timeout=TEST_CONNECTION_TIMEOUT,
         )
+        if supports_vision:
+            answer = _normalize_vision_answer(_extract_response_text(response))
+            if VISION_TEST_CODE not in answer:
+                raise ValueError(
+                    f"模型未能正确读取视觉测试图片中的验证码，期望 {VISION_TEST_CODE}，实际返回：{_extract_response_text(response) or '<empty>'}"
+                )
         primary_success = True
     except Exception as e:
         primary_error = e

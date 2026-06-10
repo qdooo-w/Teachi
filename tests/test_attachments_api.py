@@ -25,6 +25,7 @@ def isolated_api_env(tmp_path, monkeypatch):
     facade.setup_database()
     
     app = FastAPI()
+    app.state.facade = facade
     app.dependency_overrides[get_db] = lambda: facade
     app.include_router(auth_router)
     app.include_router(data_router)
@@ -36,11 +37,11 @@ def isolated_api_env(tmp_path, monkeypatch):
 
 
 def register_and_login(client: TestClient, email: str, username: str = "alice", password: str = "password123") -> str:
-    r = client.post(
-        "/auth/register",
-        json={"username": username, "email": email, "password": password},
-    )
-    assert r.status_code == 201, r.text
+    from backend.auth import hash_password
+
+    facade = client.app.state.facade
+    if facade.users.get_by_email(email) is None:
+        facade.users.create(username=username, email=email, password_hash=hash_password(password))
     r = client.post("/auth/login", json={"email": email, "password": password})
     assert r.status_code == 200, r.text
     return r.json()["access_token"]
@@ -564,6 +565,5 @@ def test_get_attachment_physical_file_missing(isolated_api_env):
     # Attempt retrieve attachment
     r = client.get(f"/sessions/{sid}/attachments/{attachment_id}", headers=headers)
     assert r.status_code == 404
-
 
 

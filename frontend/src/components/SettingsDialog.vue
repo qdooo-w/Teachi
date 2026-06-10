@@ -10,7 +10,6 @@ import {
   createModelConfig,
   updateModelConfig,
   activateModelConfig,
-  deactivateAllModelConfigs,
   deleteModelConfig,
   testConnectionWithParams,
   testConnectionWithConfig,
@@ -38,6 +37,7 @@ const tabs: { key: TabName; label: string }[] = [
 ]
 
 const configs = ref<ModelConfigItem[]>([])
+const activeConfigs = computed(() => configs.value.filter((config) => config.is_active))
 const loading = ref(false)
 const saving = ref(false)
 const deleting = ref(false)
@@ -81,7 +81,53 @@ const form = ref({
 const showAdvanced = ref(false)
 const showApiKey = ref(false)
 const apiKeyIsMasked = ref(false)
-const canSave = computed(() => form.value.config_name.trim().length > 0)
+const formActiveRuleMessage = computed(() => {
+  if (!editingId.value || isCreating.value) return ''
+  const existing = configs.value.find((config) => config.config_id === editingId.value)
+  if (!existing?.is_active) return ''
+  const candidateActiveConfigs = activeConfigs.value.map((config) => (
+    config.config_id === editingId.value
+      ? { ...config, supports_vision: form.value.supports_vision }
+      : config
+  ))
+  if (candidateActiveConfigs.length === 2 && !candidateActiveConfigs.some(isVisionConfig)) {
+    return '双模型启用时至少需要一个视觉模型'
+  }
+  return ''
+})
+const canSave = computed(() => form.value.config_name.trim().length > 0 && !formActiveRuleMessage.value)
+
+function isVisionConfig(config: Pick<ModelConfigItem, 'supports_vision'>): boolean {
+  return !!config.supports_vision
+}
+
+function activeRoleLabel(config: ModelConfigItem): string {
+  if (activeConfigs.value.length === 1) {
+    return isVisionConfig(config) ? '主模型 + 视觉' : '主模型'
+  }
+  return isVisionConfig(config) ? '视觉' : '主模型'
+}
+
+function activationBlockReason(config: ModelConfigItem): string {
+  if (config.is_active) return ''
+  if (activeConfigs.value.length >= 2) return '最多只能同时启用两个模型'
+  if (activeConfigs.value.length === 1 && !isVisionConfig(config) && !activeConfigs.value.some(isVisionConfig)) {
+    return '第二个启用模型必须是视觉模型'
+  }
+  return ''
+}
+
+function canToggleActive(config: ModelConfigItem): boolean {
+  return activationBlockReason(config) === ''
+}
+
+function activeToggleTitle(config: ModelConfigItem): string {
+  if (config.is_active) return '停用'
+  return activationBlockReason(config) || '启用'
+}
+
+const connectionTestLabel = computed(() => form.value.supports_vision ? '测试视觉' : '测试连接')
+const connectionResultLabel = computed(() => form.value.supports_vision ? '视觉测试' : '连接测试')
 
 // 视觉模型帮助 tooltip：用 Teleport 渲染到 body，避开所有 overflow 裁剪
 const visionTooltipTrigger = ref<HTMLElement | null>(null)
@@ -98,10 +144,15 @@ function hideVisionTooltipFn(): void { showVisionTooltip.value = false }
 
 watch(
   () => [form.value.api_key, form.value.base_url, form.value.model_name, form.value.supports_vision],
-  () => {
+  (current, previous) => {
     if (isInitializing.value) return
     testPassed.value = false
     testResult.value = null
+    const supportsVision = current[3] === true
+    const previouslySupportedVision = previous?.[3] === true
+    if (supportsVision && !previouslySupportedVision) {
+      void runConnectionTest()
+    }
   }
 )
 
@@ -141,6 +192,13 @@ function startEdit(config: ModelConfigItem): void {
 async function save(): Promise<void> {
   saving.value = true; errorMsg.value = ''
   try {
+    if (form.value.supports_vision) {
+      const visionOk = await runConnectionTest()
+      if (!visionOk) {
+        errorMsg.value = '视觉测试未通过，不能保存为视觉模型'
+        return
+      }
+    }
     if (isCreating.value) {
       await createModelConfig({ config_name: form.value.config_name.trim(), api_key: form.value.api_key, base_url: form.value.base_url, model_name: form.value.model_name, user_instruction: form.value.user_instruction, temperature: form.value.temperature, max_tokens: form.value.max_tokens, supports_vision: form.value.supports_vision, is_active: false })
     } else if (editingId.value) {
@@ -156,7 +214,18 @@ async function save(): Promise<void> {
 
 
 async function handleActivate(config: ModelConfigItem): Promise<void> {
-  try { if (config.is_active) { await deactivateAllModelConfigs() } else { await activateModelConfig(config.config_id) }; await loadConfigs() }
+  const reason = activationBlockReason(config)
+  if (reason) {
+    errorMsg.value = reason
+    return
+  }
+  errorMsg.value = ''
+  try {
+    const updated = await activateModelConfig(config.config_id)
+    configs.value = configs.value.map((item) => (
+      item.config_id === updated.config_id ? updated : item
+    ))
+  }
   catch (e) { errorMsg.value = getErrorMessage(e) }
 }
 
@@ -175,17 +244,37 @@ async function requestDelete(config: ModelConfigItem): Promise<void> {
   finally { deleting.value = false }
 }
 
-async function testConnection(): Promise<void> {
+function buildConnectionTestPayload(): {
+  api_key: string
+  base_url: string
+  model_name: string
+  supports_vision: boolean
+} {
+  return {
+    api_key: apiKeyIsMasked.value ? '' : form.value.api_key,
+    base_url: form.value.base_url,
+    model_name: form.value.model_name,
+    supports_vision: form.value.supports_vision,
+  }
+}
+
+async function runConnectionTest(): Promise<boolean> {
   testing.value = true; errorMsg.value = ''; testResult.value = null
   try {
-    if (editingId.value && apiKeyIsMasked.value) { testResult.value = await testConnectionWithConfig(editingId.value) }
-    else { testResult.value = await testConnectionWithParams({ api_key: form.value.api_key, base_url: form.value.base_url, model_name: form.value.model_name, supports_vision: form.value.supports_vision }) }
+    const payload = buildConnectionTestPayload()
+    if (editingId.value && !isCreating.value && apiKeyIsMasked.value) { testResult.value = await testConnectionWithConfig(editingId.value, payload) }
+    else { testResult.value = await testConnectionWithParams(payload) }
     testPassed.value = !!testResult.value.success
   } catch (e) {
     testResult.value = { success: false, message: getErrorMessage(e), model: null }
     testPassed.value = false
   }
   finally { testing.value = false }
+  return testPassed.value
+}
+
+async function testConnection(): Promise<void> {
+  await runConnectionTest()
 }
 
 async function fetchModelList(): Promise<void> {
@@ -380,6 +469,21 @@ onMounted(() => { loadConfigs(); loadAccountInfo(); loadPreferences() })
       <div v-if="activeTab === 'model'" class="flex flex-1 overflow-hidden">
         <!-- 左侧列表：独立的 overflow-hidden + 左下圆角，防止背景色渗透到卡片外部 -->
         <div class="w-56 flex-shrink-0 overflow-y-auto rounded-bl-2xl bg-[#f9fafb] p-3">
+          <div class="mb-3 h-24 rounded-xl bg-white px-3 py-2.5 shadow-sm">
+            <div class="mb-2 flex items-center justify-between">
+              <span class="text-xs font-medium text-[#6b7280]">运行概览</span>
+              <span class="text-[11px] font-medium text-[#9ca3af]">{{ activeConfigs.length }}/2</span>
+            </div>
+            <div v-if="activeConfigs.length === 0" class="truncate text-xs text-[#9ca3af]">系统默认</div>
+            <div v-else class="space-y-1.5">
+              <div v-for="config in activeConfigs" :key="`active-${config.config_id}`" class="flex items-center gap-1.5">
+                <span class="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-emerald-500" />
+                <span class="w-14 flex-shrink-0 text-[10px] font-medium text-[#6b7280]">{{ activeRoleLabel(config) }}</span>
+                <span class="min-w-0 flex-1 truncate text-xs text-[#374151]">{{ config.config_name }}</span>
+                <span v-if="isVisionConfig(config)" class="rounded-full bg-sky-50 px-1.5 py-0.5 text-[10px] font-medium text-sky-700">视觉</span>
+              </div>
+            </div>
+          </div>
           <div class="mb-2 flex items-center justify-between">
             <span class="text-xs font-medium text-[#6b7280]">配置列表</span>
             <button class="text-xs text-[#1f2937] hover:text-[#111827]" @click="startCreate">+ 新增</button>
@@ -387,9 +491,24 @@ onMounted(() => { loadConfigs(); loadAccountInfo(); loadPreferences() })
           <div v-if="loading" class="py-4 text-center text-xs text-[#9ca3af]">加载中...</div>
           <div v-else-if="configs.length === 0" class="py-4 text-center text-xs text-[#9ca3af]">暂无配置</div>
           <div v-for="config in configs" :key="config.config_id" class="group relative">
-            <div class="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-sm transition-colors cursor-pointer" :class="editingId === config.config_id ? 'bg-[#f3f4f6] text-[#1f2937]' : 'text-[#374151] hover:bg-[#f9fafb]'" @click="startEdit(config)">
-              <span class="inline-block h-2 w-2 flex-shrink-0 rounded-full cursor-pointer" :class="config.is_active ? 'bg-emerald-500' : 'bg-[#d1d5db]'" :title="config.is_active ? '取消激活' : '设为激活'" @click.stop="handleActivate(config)" />
-              <span class="truncate">{{ config.config_name }}</span>
+            <div class="flex min-h-[58px] w-full items-center gap-2 rounded-xl px-2.5 py-2 pr-8 text-left text-sm transition-colors cursor-pointer" :class="editingId === config.config_id ? 'bg-[#f3f4f6] text-[#1f2937]' : 'text-[#374151] hover:bg-white'" @click="startEdit(config)">
+              <button
+                type="button"
+                class="relative h-7 w-12 flex-shrink-0 rounded-full transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-50"
+                :class="config.is_active ? 'bg-emerald-500' : 'bg-[#d1d5db]'"
+                :disabled="!canToggleActive(config)"
+                :title="activeToggleTitle(config)"
+                @click.stop="handleActivate(config)"
+              >
+                <span class="absolute left-0.5 top-0.5 h-6 w-6 rounded-full bg-white shadow-sm transition-transform duration-200" :class="config.is_active ? 'translate-x-5' : ''" />
+              </button>
+              <div class="min-w-0 flex-1">
+                <div class="flex min-w-0 items-center gap-1.5">
+                  <span class="truncate">{{ config.config_name }}</span>
+                  <span v-if="isVisionConfig(config)" class="flex-shrink-0 rounded-full bg-sky-50 px-1.5 py-0.5 text-[10px] font-medium text-sky-700">视觉</span>
+                </div>
+                <div class="mt-0.5 h-3.5 text-[10px] text-emerald-600">{{ config.is_active ? activeRoleLabel(config) : '' }}</div>
+              </div>
             </div>
             <button v-if="editingId === config.config_id" class="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-[#9ca3af] opacity-0 transition hover:text-red-500 group-hover:opacity-100" title="删除" @click.stop="requestDelete(config)">
               <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
@@ -400,6 +519,7 @@ onMounted(() => { loadConfigs(); loadAccountInfo(); loadPreferences() })
         <div class="relative flex-1">
           <div class="h-full overflow-y-auto p-5">
             <div v-if="errorMsg" class="mb-3 rounded-xl bg-red-50 px-3 py-2 text-xs text-red-700">{{ errorMsg }}</div>
+            <div v-if="formActiveRuleMessage" class="mb-3 rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-700">{{ formActiveRuleMessage }}</div>
             <template v-if="editingId === null">
               <div class="flex flex-col items-center justify-center py-12 text-center">
                 <svg class="mb-3 h-10 w-10 text-[#d1d5db]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
@@ -441,9 +561,9 @@ onMounted(() => { loadConfigs(); loadAccountInfo(); loadPreferences() })
                     </button>
                     <!-- 视觉模型开关（摇杆） -->
                     <label class="ml-auto flex cursor-pointer items-center gap-2 select-none" title="开启后，此配置可作为视觉模型用于图片理解">
-                      <span class="text-[11px] text-[#9ca3af]">视觉</span>
-                      <div class="relative h-5 w-9 rounded-full transition-colors duration-200" :class="form.supports_vision ? 'bg-emerald-500' : 'bg-[#d1d5db]'">
-                        <div class="absolute top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200" :class="form.supports_vision ? 'translate-x-[18px] left-0.5' : 'left-0.5'" />
+                      <span class="text-[11px] font-medium" :class="form.supports_vision ? 'text-sky-700' : 'text-[#9ca3af]'">{{ form.supports_vision ? '视觉模型' : '普通模型' }}</span>
+                      <div class="relative h-7 w-12 rounded-full transition-colors duration-200" :class="form.supports_vision ? 'bg-sky-500' : 'bg-[#d1d5db]'">
+                        <div class="absolute left-0.5 top-0.5 h-6 w-6 rounded-full bg-white shadow-sm transition-transform duration-200" :class="form.supports_vision ? 'translate-x-5' : ''" />
                       </div>
                       <input v-model="form.supports_vision" type="checkbox" class="sr-only" />
                     </label>
@@ -479,11 +599,12 @@ onMounted(() => { loadConfigs(); loadAccountInfo(); loadPreferences() })
                   <button class="flex items-center gap-1.5 rounded-full bg-[#f3f4f6] px-4 py-2 text-sm text-[#374151] transition-colors hover:bg-[#e5e7eb]" type="button" :disabled="testing" @click="testConnection">
                     <span v-if="testing" class="h-3.5 w-3.5 border-2 border-[#9ca3af]/30 border-t-[#6b7280] rounded-full animate-spin" />
                     <svg v-else class="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-                    {{ testing ? '测试中...' : '测试连接' }}
+                    {{ testing ? '测试中...' : connectionTestLabel }}
                   </button>
+                  <span v-if="form.supports_vision" class="rounded-full bg-sky-50 px-2 py-1 text-[11px] font-medium text-sky-700">图片输入测试</span>
                 </div>
                 <div v-if="testResult" class="rounded-xl px-3 py-2 text-xs" :class="testResult.success ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'">
-                  {{ testResult.success ? '连接成功' : '连接失败' }}：{{ testResult.message }}
+                  {{ connectionResultLabel }}{{ testResult.success ? '成功' : '失败' }}：{{ testResult.message }}
                 </div>
                 <div>
                   <button type="button" class="flex items-center gap-1 text-xs font-medium text-[#6b7280] hover:text-[#1f2937]" @click="showAdvanced = !showAdvanced">
@@ -519,7 +640,7 @@ onMounted(() => { loadConfigs(); loadAccountInfo(); loadPreferences() })
               :class="canSave ? 'bg-slate-900 text-white hover:bg-slate-800' : 'bg-slate-200 text-slate-400 shadow-none'"
               type="button"
               :disabled="!canSave || saving"
-              :title="!testPassed ? '需要先测试连接成功后才能保存' : ''"
+              :title="formActiveRuleMessage || (!testPassed ? '需要先测试连接成功后才能保存' : '')"
               @click="save"
             >
               <span v-if="saving" class="h-4 w-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />

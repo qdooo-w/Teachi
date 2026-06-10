@@ -74,10 +74,52 @@ uv run python scripts/set_admin.py user@example.com --db data/project.db
 ```
 
 ### 输出与错误
-- 成功：输出用户 UUID、用户名、邮箱，以及角色变化。
+- 成功：输出实际使用的数据库绝对路径、用户 UUID、用户名、邮箱，以及角色变化。
 - 用户已是管理员：输出 `User is already admin`，退出码为 0。
 - 邮箱不存在或数据库路径不存在：输出错误信息，退出码为 1。
 
 ### 注意事项
 - 参数必须是已经注册用户的邮箱。
+- 如果目标数据库缺少 `users.role` 字段，脚本会直接退出并提示可能传错了旧库路径，不会自动改动旧库结构。
+- `--db` 路径相对于项目根目录解析。项目根目录下的新库通常是 `data/project.db`；`../data/project.db` 会指向父目录的另一个数据库。
 - 如果用户已经打开前端页面，更新后需要刷新页面，让前端重新通过 `/auth/me` 读取最新 `role`。
+
+---
+
+## 4. 创建默认测试用户 (`scripts/add_user.py`)
+
+**脚本位置**：`scripts/add_user.py`
+
+### 功能描述
+用于在当前 SQLite 数据库中快速创建一个本地测试用户。脚本会读取 `.env` 中的 `DATABASE_PATH`；如果未配置，则默认写入 `data/project.db`。
+
+当前脚本内置创建的用户为：
+
+| 字段 | 值 |
+|---|---|
+| 用户名 | `user` |
+| 邮箱 | `user@example.com` |
+| 密码 | `admin114514` |
+
+### 运行方式
+```bash
+uv run python scripts/add_user.py
+```
+
+### 输出与错误
+- 成功：输出数据库路径、用户 UUID、用户名和邮箱。
+- 用户已存在：输出已存在用户的信息，不会重复创建。
+- 创建失败：输出错误信息，退出码为 1。
+
+### 常见流程
+如果刚换了一个新数据库，可以按顺序初始化数据库、创建默认用户、设置社区管理员：
+
+```bash
+uv run python -m backend.db
+uv run python scripts/add_user.py
+uv run python scripts/set_admin.py user@example.com --db data/project.db
+```
+
+### 注意事项
+- 该脚本当前不接受命令行参数；如需创建其他邮箱、用户名或密码，需要修改脚本末尾的 `username`、`email`、`password` 默认值，或通过前端注册。
+- `set_admin.py --db` 的路径应指向同一个数据库。项目根目录下通常使用 `data/project.db`。

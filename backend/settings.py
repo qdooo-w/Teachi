@@ -11,7 +11,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field, field_validator
 
 from backend.auth import get_current_user
@@ -90,6 +90,7 @@ class ActiveConfigResponse(BaseModel):
     """当前激活配置响应"""
 
     config: ModelConfigItem | None = None
+    configs: list[ModelConfigItem] = []
 
 class TestConnectionRequest(BaseModel):
     """测试连接请求（保存前预检）"""
@@ -167,6 +168,62 @@ def _row_to_item(row: dict) -> ModelConfigItem:
         updated_at=float(row["updated_at"]),
     )
 
+def _config_is_vision(config: dict) -> bool:
+    from backend.config.model import config_supports_vision
+
+    return config_supports_vision(config)
+
+def _validate_active_configs(configs: list[dict]) -> None:
+    """校验运行时 active 模型组合：最多两条，且两条时至少一条是视觉模型。"""
+    if len(configs) > 2:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "ACTIVE_MODEL_LIMIT", "message": "最多只能同时启用两个模型"},
+        )
+    if len(configs) == 2 and not any(_config_is_vision(c) for c in configs):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "ACTIVE_MODEL_REQUIRES_VISION",
+                "message": "同时启用两个模型时，至少一个必须标记为视觉理解模型",
+            },
+        )
+
+def _sort_active_configs(configs: list[dict]) -> list[dict]:
+    return sorted(configs, key=lambda c: (1 if _config_is_vision(c) else 0, float(c["created_at"])))
+
+def _create_candidate_config(payload: CreateModelConfigRequest, user_uuid: str) -> dict:
+    return {
+        "config_id": "__new__",
+        "user_uuid": user_uuid,
+        "config_name": payload.config_name,
+        "api_key": payload.api_key,
+        "base_url": payload.base_url,
+        "model_name": payload.model_name,
+        "user_instruction": payload.user_instruction,
+        "temperature": payload.temperature,
+        "max_tokens": payload.max_tokens,
+        "is_active": 1 if payload.is_active else 0,
+        "supports_vision": 1 if payload.supports_vision else 0,
+    }
+
+def _updated_candidate_config(existing: dict, payload: UpdateModelConfigRequest) -> dict:
+    candidate = dict(existing)
+    for field_name in (
+        "config_name",
+        "api_key",
+        "base_url",
+        "model_name",
+        "user_instruction",
+        "temperature",
+        "max_tokens",
+        "supports_vision",
+    ):
+        value = getattr(payload, field_name)
+        if value is not None:
+            candidate[field_name] = value
+    return candidate
+
 # ─── 路由 ──────────────────────────────────────────────────────────────
 
 @router.get("/model-configs", response_model=ModelConfigListResponse)
@@ -187,6 +244,10 @@ def create_model_config(
 ) -> ModelConfigItem:
     """创建新的模型配置。"""
     user_uuid: str = current_user["uuid"]
+    if payload.is_active:
+        active_configs = db.model_configs.list_active_for_user(user_uuid)
+        _validate_active_configs(active_configs + [_create_candidate_config(payload, user_uuid)])
+
     config = db.model_configs.create(
         user_uuid=user_uuid,
         config_name=payload.config_name,
@@ -206,12 +267,15 @@ def get_active_model_config(
     current_user: dict = Depends(get_current_user),
     db: DatabaseFacade = Depends(get_db),
 ) -> ActiveConfigResponse:
-    """获取当前用户激活的模型配置。没有激活配置时返回 config=None。"""
+    """获取当前用户激活的模型配置。config 表示主模型，configs 表示全部 active 配置。"""
     user_uuid: str = current_user["uuid"]
-    config = db.model_configs.get_active_for_user(user_uuid)
-    if config is None:
-        return ActiveConfigResponse(config=None)
-    return ActiveConfigResponse(config=_row_to_item(config))
+    configs = db.model_configs.list_active_for_user(user_uuid)
+    configs = _sort_active_configs(configs)
+    config = configs[0] if configs else None
+    return ActiveConfigResponse(
+        config=_row_to_item(config) if config else None,
+        configs=[_row_to_item(c) for c in configs],
+    )
 
 @router.patch("/model-configs/{config_id}", response_model=ModelConfigItem)
 def update_model_config(
@@ -230,6 +294,13 @@ def update_model_config(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"code": "RESOURCE_NOT_FOUND", "message": "Model config not found"},
         )
+    if existing.get("is_active"):
+        candidate = _updated_candidate_config(existing, payload)
+        active_configs = [
+            candidate if c["config_id"] == config_id else c
+            for c in db.model_configs.list_active_for_user(user_uuid)
+        ]
+        _validate_active_configs(active_configs)
 
     updated = db.model_configs.update_for_user(
         config_id=config_id,
@@ -256,10 +327,26 @@ def activate_model_config(
     current_user: dict = Depends(get_current_user),
     db: DatabaseFacade = Depends(get_db),
 ) -> ModelConfigItem:
-    """激活指定的模型配置（同时取消其他配置的激活状态）。"""
+    """切换指定模型配置的激活状态。
+
+    运行时最多两个 active 配置；当 active 配置为两个时，至少一个必须是视觉模型。
+    """
     user_uuid: str = current_user["uuid"]
 
-    config = db.model_configs.set_active_for_user(config_id, user_uuid)
+    existing = db.model_configs.get_for_user(config_id, user_uuid)
+    if existing is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "RESOURCE_NOT_FOUND", "message": "Model config not found"},
+        )
+
+    if existing.get("is_active"):
+        config = db.model_configs.set_active_status_for_user(config_id, user_uuid, is_active=False)
+    else:
+        active_configs = db.model_configs.list_active_for_user(user_uuid)
+        _validate_active_configs(active_configs + [existing])
+        config = db.model_configs.set_active_for_user(config_id, user_uuid)
+
     if config is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -326,6 +413,7 @@ async def fetch_models(
 @router.post("/model-configs/{config_id}/test-connection", response_model=TestConnectionResponse)
 async def test_connection_with_config(
     config_id: str,
+    payload: TestConnectionRequest | None = Body(default=None),
     current_user: dict = Depends(get_current_user),
     db: DatabaseFacade = Depends(get_db),
 ) -> TestConnectionResponse:
@@ -341,10 +429,10 @@ async def test_connection_with_config(
     from backend.config.model import test_connection
 
     result = await test_connection(
-        api_key=config["api_key"] or None,
-        base_url=config["base_url"] or None,
-        model_name=config["model_name"] or None,
-        supports_vision=bool(config.get("supports_vision", False)),
+        api_key=(payload.api_key if payload and payload.api_key else config["api_key"]) or None,
+        base_url=(payload.base_url if payload and payload.base_url else config["base_url"]) or None,
+        model_name=(payload.model_name if payload and payload.model_name else config["model_name"]) or None,
+        supports_vision=payload.supports_vision if payload is not None else bool(config.get("supports_vision", False)),
     )
     return TestConnectionResponse(**result)
 

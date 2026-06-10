@@ -726,6 +726,7 @@ export interface UpdateModelConfigRequest {
 
 export interface ActiveConfigResponse {
   config: ModelConfigItem | null
+  configs: ModelConfigItem[]
 }
 
 export interface TestConnectionRequest {
@@ -785,9 +786,10 @@ export async function testConnectionWithParams(payload: TestConnectionRequest): 
   })
 }
 
-export async function testConnectionWithConfig(configId: string): Promise<TestConnectionResponse> {
+export async function testConnectionWithConfig(configId: string, payload?: TestConnectionRequest): Promise<TestConnectionResponse> {
   return request<TestConnectionResponse>(`/settings/model-configs/${encodeURIComponent(configId)}/test-connection`, {
     method: 'POST',
+    ...(payload ? { body: JSON.stringify(payload) } : {}),
   })
 }
 

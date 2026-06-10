@@ -158,6 +158,31 @@ const { projects, loadProjects, resetProjects, upsertProject, removeProject } = 
 const { sidebarOpen, isMobile, handleResize, closeSidebarOnMobile } = useLayout()
 const { chatSidebarOpen, editingSkill, toggleSidebar: toggleChatSidebar, closeEditor } = useChatSkillSidebar()
 
+const LOGOUT_SESSION_STATE_KEYS = ['library-tabs', 'community-tabs']
+const LOGOUT_LOCAL_STATE_KEYS = ['library-sidebar-open']
+const LOGOUT_LOCAL_STATE_PREFIXES = ['preview_windows_', 'chat_cache_']
+
+function removeLocalStorageByPrefix(prefix: string): void {
+  for (let index = localStorage.length - 1; index >= 0; index -= 1) {
+    const key = localStorage.key(index)
+    if (key?.startsWith(prefix)) {
+      localStorage.removeItem(key)
+    }
+  }
+}
+
+function clearLogoutUiStorage(): void {
+  for (const key of LOGOUT_SESSION_STATE_KEYS) {
+    sessionStorage.removeItem(key)
+  }
+  for (const key of LOGOUT_LOCAL_STATE_KEYS) {
+    localStorage.removeItem(key)
+  }
+  for (const prefix of LOGOUT_LOCAL_STATE_PREFIXES) {
+    removeLocalStorageByPrefix(prefix)
+  }
+}
+
 // ── 全局捕获滚动，用于检测任何滚动区域是否向下滚动，控制顶栏半透明背景显隐 ───
 const hasScrolled = ref(false)
 
@@ -309,15 +334,33 @@ function truncateText(str: string, len: number): string {
 }
 
 // ── 登出 ─────────────────────────────────────────────────────────────────────
-async function handleLogout(): Promise<void> {
-  await authLogout()
+function resetOpenUiStateAfterLogout(): void {
+  clearLogoutUiStorage()
   resetProjects()
+  recentSessions.value = []
+  chatSession.value = null
   errorMessage.value = ''
+  sidebarOpen.value = !isMobile.value
+  chatSidebarOpen.value = false
+  closeEditor()
   showUserSkillManager.value = false
   showProjectSkillManager.value = false
   showSettingsDialog.value = false
+  showUserProfileDialog.value = false
   openMenuKey.value = null
   renamingKey.value = null
+  hasScrolled.value = false
+  clearAllNotifications()
+  cancelConfirm()
+}
+
+async function handleLogout(): Promise<void> {
+  try {
+    await authLogout()
+  } catch (error) {
+    console.warn('Logout request failed:', error)
+  }
+  resetOpenUiStateAfterLogout()
   await router.replace({ name: 'overview' })
 }
 

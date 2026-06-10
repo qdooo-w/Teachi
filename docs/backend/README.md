@@ -180,9 +180,9 @@ VALIDATE → LOAD_HISTORY → BUILD_MESSAGES → BUILD_MODEL → CALL_MODEL → 
 |---|---|---|
 | GET | `/settings/model-configs` | 列出用户模型配置 |
 | POST | `/settings/model-configs` | 创建模型配置 |
-| GET | `/settings/model-configs/active` | 获取当前激活配置 |
+| GET | `/settings/model-configs/active` | 获取当前主模型与全部启用配置 |
 | PATCH | `/settings/model-configs/{config_id}` | 更新配置 |
-| POST | `/settings/model-configs/{config_id}/activate` | 激活配置 |
+| POST | `/settings/model-configs/{config_id}/activate` | 切换配置启用状态 |
 | POST | `/settings/model-configs/deactivate` | 停用所有配置 |
 | DELETE | `/settings/model-configs/{config_id}` | 删除配置 |
 | POST | `/settings/model-configs/test-connection` | 用原始参数测试连接 |
@@ -226,11 +226,11 @@ VALIDATE → LOAD_HISTORY → BUILD_MESSAGES → BUILD_MODEL → CALL_MODEL → 
 
 - **物理存储与去重**：支持并发上传图片、文本、PDF 等类型附件，在物理存储上以 SHA-256 哈希命名文件以去重，维护文件的引用计数以进行安全删除。
 - **多模态与工具链配合**：AI 代理会在会话开始或需要时通过 `view_attachment` 读取文件具体内容。
-- **图片叙述生成**：若用户当前激活的主模型不支持视觉，系统会利用辅助视觉模型（可通过环境变量配置 `VISION_MODEL_` 等相关变量）生成图片描述，缓存到 DB 中作为文字背景供主模型使用。
+- **图片叙述生成**：若用户当前主模型不支持视觉，系统会利用启用中的视觉模型配置或环境变量 `VISION_MODEL_` 相关默认配置生成图片描述，缓存到 DB 中作为文字背景供主模型使用。
 
 ### 设置中心
 
-- **模型配置**：用户可创建多个模型配置（API Key、Base URL、Model Name、`user_instruction` 自定义指令、Temperature、Max Tokens、`supports_vision` 视觉支持标记），并激活其中一个。`user_instruction` 在构建 Agent 时作为系统指令注入；`supports_vision` 标记决定测试连接时走视觉还是文本路径，同时影响辅助视觉模型是否启用。支持通过 `fetch-models` 端点从提供商获取可用模型列表，用户可直接选择而无需手动输入模型名称。
+- **模型配置**：用户可创建多个模型配置（API Key、Base URL、Model Name、`user_instruction` 自定义指令、Temperature、Max Tokens、`supports_vision` 视觉支持标记）。运行时最多启用两个模型；当启用两个模型时，至少一个必须是视觉理解模型。主对话优先使用非视觉启用配置，视觉启用配置作为图片理解辅助；若只启用一个视觉模型，则它同时作为主模型和视觉模型。`user_instruction` 在构建 Agent 时作为系统指令注入；`supports_vision` 标记决定测试连接时走视觉还是文本路径，也参与辅助视觉模型选择。支持通过 `fetch-models` 端点从提供商获取可用模型列表，用户可直接选择而无需手动输入模型名称。
 - **账号设置**：支持修改用户名和密码。修改密码后自动清除 refresh token，强制重新登录。
 - **偏好设置**：当前支持 `enter_mode`（发送键模式：`enter` 或 `ctrl_enter`），存储在 `user_preferences` 表中，首次访问返回默认值。
 
