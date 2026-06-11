@@ -6,6 +6,7 @@ import {
   type CommunitySort,
   type CommunityComment,
   type CommunitySkillVersion,
+  type LibraryFileEntry,
   listCommunitySkills,
   getCommunitySkill,
   likeCommunitySkill,
@@ -22,18 +23,18 @@ import {
   listAdminReviews,
   approveAdminReview,
   rejectAdminReview,
+  listCommunitySkillFiles,
+  readCommunitySkillFileContent,
+  listCommunityVersions,
   getCurrentUserId,
   getCurrentUser,
   getErrorMessage,
 } from '../api'
 import { COMMUNITY_PAGE_LIMIT } from '../config'
-import { useProjects } from '../composables/useProjects'
 import { useNotification } from '../composables/useNotification'
 import { confirmDanger } from '../composables/useConfirmDialog'
 import { renderMarkdown } from '../markdown/renderer'
 
-// ── 项目列表（安装到项目时使用） ──────────────────────────────────────────
-const { projects, loadProjects } = useProjects()
 const { showError, showSuccess } = useNotification()
 
 // ── 当前用户 ────────────────────────────────────────────────────────────
@@ -81,6 +82,22 @@ const activeTab = computed(() => tabs.value.find((t) => t.id === activeTabId.val
 /** 当前激活的技能详情 */
 const skillDetail = ref<CommunitySkillDetail | null>(null)
 const detailLoading = ref(false)
+
+const detailFiles = ref<LibraryFileEntry[]>([])
+const detailFilesLoading = ref(false)
+const selectedFileName = ref('SKILL.md')
+const selectedFileContent = ref<string | null>(null)
+const selectedFileLoading = ref(false)
+const expandedDirs = ref<Set<string>>(new Set())
+const dirCache = ref<Map<string, LibraryFileEntry[]>>(new Map())
+
+// 社区技能版本列表与当前选中的版本 ID
+const versionsList = ref<CommunitySkillVersion[]>([])
+const activeVersionId = ref<string | null>(null)
+const selectedVersion = computed(() => {
+  if (!activeVersionId.value) return skillDetail.value?.latest_version
+  return versionsList.value.find(v => v.id === activeVersionId.value) || skillDetail.value?.latest_version
+})
 
 // ── 审核状态 ────────────────────────────────────────────────────────────
 const currentUserRole = ref<string | null>(null)
@@ -235,24 +252,42 @@ async function loadSkills(): Promise<void> {
   }
 }
 
-// ── 加载技能详情（优先用缓存） ──────────────────────────────────────────
+// ── 加载技能详情（含版本及文件列表） ──────────────────────────────────────
 async function loadSkillDetail(skillId: string): Promise<void> {
-  // 命中缓存直接恢复
-  const cached = skillCache.get(skillId)
-  if (cached) {
-    skillDetail.value = cached
-    return
-  }
   detailLoading.value = true
+  detailFiles.value = []
+  selectedFileName.value = 'SKILL.md'
+  selectedFileContent.value = null
+  expandedDirs.value = new Set()
+  dirCache.value = new Map()
+  versionsList.value = []
+  activeVersionId.value = null
+
   try {
-    skillDetail.value = await getCommunitySkill(skillId)
-    if (skillDetail.value) {
-      skillCache.set(skillId, skillDetail.value)
-    }
-    const tab = tabs.value.find((t) => t.skillId === skillId)
-    if (tab && skillDetail.value) {
-      tab.label = skillTitle(skillDetail.value)
-      saveTabs(tabs.value)
+    const detail = await getCommunitySkill(skillId)
+    skillDetail.value = detail
+    if (detail) {
+      skillCache.set(skillId, detail)
+      const tab = tabs.value.find((t) => t.skillId === skillId)
+      if (tab) {
+        tab.label = skillTitle(detail)
+        saveTabs(tabs.value)
+      }
+      
+      // 加载版本列表
+      try {
+        versionsList.value = await listCommunityVersions(skillId)
+      } catch {
+        versionsList.value = []
+      }
+      
+      // 默认选择最新版本并加载其文件结构
+      const defaultVersionId = detail.latest_version?.id
+      if (defaultVersionId) {
+        activeVersionId.value = defaultVersionId
+        await loadVersionRootFiles(skillId, defaultVersionId)
+        await loadVersionFileContent(skillId, defaultVersionId, 'SKILL.md')
+      }
     }
   } catch (e) {
     showError('加载技能详情失败', getErrorMessage(e))
@@ -260,6 +295,121 @@ async function loadSkillDetail(skillId: string): Promise<void> {
     detailLoading.value = false
   }
 }
+
+async function loadVersionRootFiles(skillId: string, versionId: string): Promise<void> {
+  detailFilesLoading.value = true
+  try {
+    const res = await listCommunitySkillFiles(skillId, versionId, '.')
+    // rel_path 格式为 "skill/xxx"，去掉 "skill/" 前缀用于 API 调用
+    detailFiles.value = res.entries
+      .filter((e) => e.name !== 'README.md')
+      .map((e) => ({ ...e, rel_path: e.rel_path.replace(/^skill\//, '') }))
+    dirCache.value.set('.', detailFiles.value)
+  } catch {
+    detailFiles.value = []
+  } finally {
+    detailFilesLoading.value = false
+  }
+}
+
+async function loadVersionFileContent(skillId: string, versionId: string, filePath: string): Promise<void> {
+  selectedFileName.value = filePath
+  selectedFileLoading.value = true
+  try {
+    const res = await readCommunitySkillFileContent(skillId, versionId, filePath)
+    selectedFileContent.value = res.content
+  } catch {
+    selectedFileContent.value = null
+  } finally {
+    selectedFileLoading.value = false
+  }
+}
+
+/** 排序：文件在前，文件夹在后 */
+function sortEntries(entries: LibraryFileEntry[]): LibraryFileEntry[] {
+  const files = entries.filter((e) => !e.is_dir)
+  const dirs = entries.filter((e) => e.is_dir)
+  return [...files, ...dirs]
+}
+
+async function toggleVersionDir(dir: LibraryFileEntry): Promise<void> {
+  if (!skillDetail.value || !activeVersionId.value) return
+  const skillId = skillDetail.value.id
+  const versionId = activeVersionId.value
+
+  if (expandedDirs.value.has(dir.rel_path)) {
+    // 收起：移除该目录及其所有子目录的展开状态和缓存
+    const newExpanded = new Set(expandedDirs.value)
+    const newCache = new Map(dirCache.value)
+    for (const key of newExpanded) {
+      if (key === dir.rel_path || key.startsWith(dir.rel_path + '/')) {
+        newExpanded.delete(key)
+      }
+    }
+    for (const key of newCache.keys()) {
+      if (key === dir.rel_path || key.startsWith(dir.rel_path + '/')) {
+        newCache.delete(key)
+      }
+    }
+    expandedDirs.value = newExpanded
+    dirCache.value = newCache
+  } else {
+    // 展开：加载子目录内容
+    try {
+      const res = await listCommunitySkillFiles(skillId, versionId, dir.rel_path)
+      const entries = sortEntries(
+        res.entries.map((e) => ({ ...e, rel_path: e.rel_path.replace(/^skill\//, '') }))
+      )
+      const newCache = new Map(dirCache.value)
+      newCache.set(dir.rel_path, entries)
+      dirCache.value = newCache
+      const newExpanded = new Set(expandedDirs.value)
+      newExpanded.add(dir.rel_path)
+      expandedDirs.value = newExpanded
+    } catch {
+      // 静默失败
+    }
+  }
+}
+
+async function changeVersion(versionId: string): Promise<void> {
+  if (!skillDetail.value) return
+  activeVersionId.value = versionId
+  selectedFileName.value = 'SKILL.md'
+  selectedFileContent.value = null
+  expandedDirs.value = new Set()
+  dirCache.value = new Map()
+  
+  detailLoading.value = true
+  try {
+    await loadVersionRootFiles(skillDetail.value.id, versionId)
+    await loadVersionFileContent(skillDetail.value.id, versionId, 'SKILL.md')
+  } catch (e) {
+    showError('切换版本失败', getErrorMessage(e))
+  } finally {
+    detailLoading.value = false
+  }
+}
+
+interface FileTreeNode {
+  entry: LibraryFileEntry
+  depth: number
+}
+
+const fileTree = computed<FileTreeNode[]>(() => {
+  const result: FileTreeNode[] = []
+  function walk(entries: LibraryFileEntry[], depth: number) {
+    for (const entry of entries) {
+      result.push({ entry, depth })
+      if (entry.is_dir && expandedDirs.value.has(entry.rel_path)) {
+        const children = dirCache.value.get(entry.rel_path)
+        if (children) walk(children, depth + 1)
+      }
+    }
+  }
+  walk(sortEntries(detailFiles.value), 0)
+  return result
+})
 
 async function loadOwnerReviews(): Promise<void> {
   ownerReviewsLoading.value = true
@@ -342,35 +492,31 @@ async function toggleSkillLike(): Promise<void> {
 }
 
 // ── 安装 ────────────────────────────────────────────────────────────────
+// ── 安装到仓库 ──────────────────────────────────────────────────────────
 const installing = ref(false)
-const installingProject = ref(false)
-const selectedProjectId = ref('')
 const installMsg = ref('')
 
-async function doInstall(target: 'user' | 'project'): Promise<void> {
-  if (!skillDetail.value) return
-  if (target === 'project' && !selectedProjectId.value) return
-
-  if (target === 'user') installing.value = true
-  else installingProject.value = true
+async function doInstallLibrary(): Promise<void> {
+  if (!skillDetail.value || !activeVersionId.value) return
+  installing.value = true
   installMsg.value = ''
 
   try {
-    const payload = target === 'project'
-      ? { target: 'project' as const, pid: selectedProjectId.value }
-      : { target: 'user' as const }
+    const payload = {
+      target: 'library' as const,
+      version_id: activeVersionId.value,
+    }
     const r = await installCommunitySkill(skillDetail.value.id, payload)
     skillDetail.value.downloads = r.downloads
     const inList = skills.value.find((s) => s.id === skillDetail.value!.id)
     if (inList) inList.downloads = r.downloads
-    installMsg.value = `已安装：${r.name}`
+    installMsg.value = `已安装到个人仓库：${r.name}`
     showSuccess(installMsg.value)
   } catch (e) {
     installMsg.value = ''
     showError('安装失败', getErrorMessage(e))
   } finally {
     installing.value = false
-    installingProject.value = false
   }
 }
 
@@ -686,7 +832,6 @@ function cleanupExpiredTabs(): void {
 onMounted(() => {
   document.title = '社区 · Learnova'
   void loadSkills()
-  void loadProjects()
   void getCurrentUser()
     .then((user) => {
       currentUserRole.value = user.role
@@ -1112,311 +1257,418 @@ onBeforeUnmount(() => {
 
       <!-- ── 技能详情标签页 ── -->
       <template v-else-if="activeTab.type === 'skill'">
-        <div class="min-h-0 flex-1 overflow-y-auto">
+        <!-- 顶部栏 -->
+        <div class="flex flex-shrink-0 items-center h-9 px-5 gap-2 bg-white font-hans">
+          <span class="!text-xs font-semibold text-[#1f2937]">{{ skillDetail ? skillTitle(skillDetail) : '加载中...' }}</span>
+          <span
+            v-if="skillDetail"
+            class="rounded-full px-2 py-0.5 !text-xs whitespace-nowrap bg-blue-50 text-blue-600"
+          >
+            社区发布
+          </span>
+          <div class="flex-1"></div>
+          <button
+            v-if="isAuthor"
+            type="button"
+            :disabled="deleting"
+            @click="doDelete"
+            class="!text-xs text-red-500 hover:text-red-700 hover:underline disabled:opacity-40"
+          >
+            {{ deleting ? '删除中...' : '删除发布' }}
+          </button>
+        </div>
+        
+        <!-- 内容 -->
+        <div class="min-h-0 flex-1 flex flex-col overflow-hidden px-5 py-4">
           <!-- 加载态 -->
           <div v-if="detailLoading" class="flex h-full items-center justify-center text-sm text-[#9ca3af]">
             加载中...
           </div>
 
           <template v-else-if="skillDetail">
-            <div class="flex flex-col lg:flex-row" :class="{ 'lg:h-full': !!skillDetail.readme_md }">
-              <!-- 左侧：README 渲染区 -->
-              <div
-                class="min-h-0 overflow-y-auto px-5 py-4 lg:border-r lg:border-[#e5e7eb]"
-                :class="skillDetail.readme_md ? 'flex-1' : 'flex items-center justify-center py-8 lg:flex-1'"
-              >
-                <div v-if="skillDetail.readme_md" class="markdown-body">
-                  <div v-html="renderMarkdown(skillDetail.readme_md)" />
+            <div class="flex-1 flex flex-col lg:flex-row gap-4 min-h-0 overflow-hidden">
+              <!-- 左侧/主体：描述与 README 与文件内容 -->
+              <div class="flex-1 min-w-0 overflow-y-auto flex flex-col gap-4 pr-1.5">
+                <!-- 顶部主要信息（平铺，无容器罩着） -->
+                <div class="flex flex-col gap-3.5 pt-3 pb-5 border-b border-[#e5e7eb]">
+                  <div class="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                    <div>
+                      <h2 class="text-3xl lg:text-4xl font-extrabold text-[#1f2937] tracking-tight truncate font-serif-hans py-1 leading-normal" :title="skillDetail.display_name || skillDetail.name">
+                        {{ skillDetail.display_name || skillDetail.name }}
+                      </h2>
+                      <p v-if="skillDetail.display_name" class="text-sm font-mono text-[#4b5563] mt-2 truncate" :title="skillDetail.name">
+                        <span class="text-[#9ca3af]">SKILL-name:</span> {{ skillDetail.name }}
+                      </p>
+                    </div>
+                    
+                    <!-- 点赞、下载放在左侧的标题展示处 -->
+                    <div class="flex items-center gap-2 flex-shrink-0">
+                      <!-- 点赞 -->
+                      <button
+                        type="button"
+                        class="flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs font-medium transition-all duration-200 active:scale-[0.98] select-none"
+                        :class="skillDetail.liked_by_me
+                          ? 'border-[#dc2626] bg-[#fef2f2] text-[#dc2626] hover:bg-[#fee2e2]'
+                          : 'border-[#d1d5db] bg-white text-[#4b5563] hover:bg-[#f3f4f6]'"
+                        @click="toggleSkillLike"
+                      >
+                        <svg class="h-3.5 w-3.5" :fill="skillDetail.liked_by_me ? 'currentColor' : 'none'" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+                        </svg>
+                        <span>{{ skillDetail.liked_by_me ? '已点赞' : '点赞' }} ({{ skillDetail.likes }})</span>
+                      </button>
+
+                      <!-- 下载/安装量 -->
+                      <div class="flex h-8 items-center gap-1.5 rounded-lg border border-[#e5e7eb] bg-[#f9fafb] px-3 text-xs text-[#4b5563]">
+                        <svg class="h-3.5 w-3.5 text-[#9ca3af]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                        </svg>
+                        <span>下载 {{ skillDetail.downloads }}</span>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <!-- 标签放在下方 -->
+                  <div class="flex flex-wrap gap-1.5">
+                    <template v-if="parseTags(skillDetail.tags).length > 0">
+                      <span
+                        v-for="tag in parseTags(skillDetail.tags)"
+                        :key="tag"
+                        class="rounded bg-[#e5e7eb] px-2.5 py-0.5 text-xs font-medium text-[#4b5563]"
+                      >{{ tag }}</span>
+                    </template>
+                    <span v-else class="text-xs text-[#9ca3af] italic">暂无标签</span>
+                  </div>
                 </div>
-                <span v-else class="text-sm text-[#9ca3af]">暂无 README 内容</span>
+
+                <div v-if="skillDetail.description" class="flex flex-col gap-2.5">
+                  <div class="flex items-center gap-3">
+                    <span class="text-sm font-bold text-[#1f2937] font-hans flex-shrink-0">简介</span>
+                    <div class="flex-1 h-px bg-[#e5e7eb]"></div>
+                  </div>
+                  <p class="text-base text-[#374151] leading-relaxed">{{ skillDetail.description }}</p>
+                </div>
+                
+                <div v-if="skillDetail.description && selectedVersion?.readme_md" class="border-t border-[#e5e7eb]"></div>
+                
+                <div v-if="selectedVersion?.readme_md" class="flex-1">
+                  <span class="inline-block rounded-md bg-[#1f2937] px-2.5 py-0.5 text-[13px] font-bold text-white mb-2 font-hans">详情(README.md)</span>
+                  <div class="markdown-body" v-html="renderMarkdown(selectedVersion.readme_md)"></div>
+                </div>
+                <div v-if="!skillDetail.description && !selectedVersion?.readme_md" class="py-12 text-center text-sm text-[#9ca3af]">
+                  暂无描述和 README 内容
+                </div>
+
+                <!-- 选中文件内容 -->
+                <div v-if="selectedFileName" class="border-t border-[#e5e7eb] pt-6 flex flex-col gap-3">
+                  <div v-if="selectedFileLoading" class="text-xs text-[#9ca3af] py-4">加载中…</div>
+                  
+                  <!-- 黑色外壳罩着，内部仍为白色，左上角标着文件名 -->
+                  <div v-else-if="selectedFileContent !== null" class="bg-[#1f2937] py-4 px-2 flex flex-col gap-3 shadow-md">
+                    <div class="text-xs font-mono font-bold text-white flex items-center justify-between px-1">
+                      <span>{{ selectedFileName.split('/').pop() }}</span>
+                      <span class="text-[10px] text-[#9ca3af] uppercase font-sans tracking-wider">File Content</span>
+                    </div>
+                    
+                    <!-- 内部为白色，且支持 markdown 解析 -->
+                    <div class="bg-white py-4 px-3 overflow-x-auto min-h-[150px]">
+                      <div v-if="selectedFileName.toLowerCase().endsWith('.md')" class="markdown-body text-sm text-[#374151]" v-html="renderMarkdown(selectedFileContent)"></div>
+                      <pre v-else class="whitespace-pre-wrap font-mono text-xs text-[#374151] leading-relaxed">{{ selectedFileContent }}</pre>
+                    </div>
+                  </div>
+                  
+                  <div v-else class="text-xs text-[#9ca3af] py-4">无法读取文件内容</div>
+                </div>
               </div>
 
-              <!-- 右侧：元信息 + 操作 -->
-              <div class="flex-shrink-0 lg:w-[300px] flex flex-col gap-4 px-5 py-4 border-t lg:border-t-0 border-[#e5e7eb]">
-                <!-- 元信息卡片 -->
-                <div class="rounded-xl border border-[#e5e7eb] bg-transparent p-4 space-y-3">
+              <!-- 右侧：属性详情、版本选择、操作与评论区 -->
+              <div class="w-full lg:w-[320px] flex-shrink-0 overflow-y-auto flex flex-col gap-4 pr-1.5">
+                
+                <!-- 属性与版本信息卡片 -->
+                <div class="bg-white rounded-xl border border-[#e5e7eb] p-5 flex flex-col gap-3">
                   <div class="grid grid-cols-[60px_1fr] gap-x-3 gap-y-1.5 text-xs">
-                    <span class="text-[#9ca3af]">版本</span>
-                    <span class="text-[#1f2937] font-medium truncate">{{ skillDetail.latest_version?.version || skillDetail.version || '—' }}</span>
                     <span class="text-[#9ca3af]">作者</span>
                     <span class="text-[#1f2937] truncate">{{ skillDetail.owner_username || skillDetail.owner_uuid?.slice(0, 8) }}</span>
                     <span class="text-[#9ca3af]">大小</span>
-                    <span class="text-[#1f2937]">{{ formatBytes(skillDetail.size_bytes) }}</span>
-                    <span class="text-[#9ca3af]">下载</span>
-                    <span class="text-[#1f2937] tabular-nums">{{ skillDetail.downloads }}</span>
+                    <span class="text-[#1f2937]">{{ formatBytes(selectedVersion?.size_bytes || skillDetail.size_bytes) }}</span>
                     <span class="text-[#9ca3af]">发布</span>
                     <span class="text-[#1f2937] truncate">{{ formatDate(skillDetail.created_at) }}</span>
                     <span class="text-[#9ca3af]">更新</span>
                     <span class="text-[#1f2937]">{{ formatDate(skillDetail.updated_at) }}</span>
                   </div>
 
-                  <!-- 标签 -->
-                  <div v-if="parseTags(skillDetail.tags).length > 0" class="flex flex-wrap gap-1.5 pt-1 border-t border-[#e5e7eb]">
-                    <span
-                      v-for="tag in parseTags(skillDetail.tags)"
-                      :key="tag"
-                      class="rounded-md bg-white px-2 py-0.5 text-xs text-[#6b7280] border border-[#e5e7eb]"
-                    >
-                      {{ tag }}
-                    </span>
-                  </div>
-
                   <!-- 贡献者 -->
                   <div
                     v-if="skillDetail.contributors && skillDetail.contributors.length > 0"
-                    class="pt-1 border-t border-[#e5e7eb]"
+                    class="pt-1.5 border-t border-[#e5e7eb]"
                   >
-                    <div class="text-[10px] text-[#9ca3af] mb-1.5">贡献者</div>
+                    <div class="text-[10px] text-[#9ca3af] mb-1">贡献者</div>
                     <div class="flex flex-wrap gap-1">
                       <span
                         v-for="c in skillDetail.contributors"
                         :key="c.user_uuid"
-                        class="rounded-md bg-white px-2 py-0.5 text-xs text-[#4b5563] border border-[#e5e7eb]"
+                        class="rounded bg-[#f3f4f6] px-2 py-0.5 text-xs text-[#4b5563]"
                       >
                         {{ c.username || c.user_uuid.slice(0, 8) }}
                       </span>
                     </div>
                   </div>
+
+                  <!-- 历史变更说明 (Changelog) -->
+                  <div v-if="selectedVersion?.changelog" class="pt-1.5 border-t border-[#e5e7eb]">
+                    <div class="text-[10px] text-[#9ca3af] mb-1 font-semibold uppercase tracking-wide">版本变更说明 ({{ selectedVersion.version }})</div>
+                    <p class="text-xs text-[#4b5563] whitespace-pre-wrap leading-relaxed">{{ selectedVersion.changelog }}</p>
+                  </div>
                 </div>
 
-                <!-- 操作按钮 -->
-                <div class="space-y-2">
-                  <!-- 点赞 -->
-                  <button
-                    type="button"
-                    class="flex h-10 w-full items-center justify-center gap-2 rounded-xl border text-sm font-medium transition-all duration-200 active:scale-[0.98]"
-                    :class="skillDetail.liked_by_me
-                      ? 'border-[#dc2626] bg-[#fef2f2] text-[#dc2626] hover:bg-[#fee2e2]'
-                      : 'border-[#d1d5db] bg-white text-[#4b5563] hover:bg-[#f3f4f6]'"
-                    @click="toggleSkillLike"
-                  >
-                    <svg class="h-4 w-4" :fill="skillDetail.liked_by_me ? 'currentColor' : 'none'" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
-                    </svg>
-                    <span>{{ skillDetail.liked_by_me ? '已点赞' : '点赞' }} ({{ skillDetail.likes }})</span>
-                  </button>
-
-                  <!-- 安装到我的技能 -->
-                  <button
-                    type="button"
-                    class="flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-[#1f2937] text-sm font-semibold text-white transition-all duration-200 hover:bg-[#111827] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
-                    :disabled="installing"
-                    @click="doInstall('user')"
-                  >
-                    {{ installing ? '安装中...' : '📥 安装到我的技能' }}
-                  </button>
-
-                  <!-- 安装到项目 -->
-                  <div class="flex gap-2">
+                <!-- 操作区 -->
+                <div class="bg-white rounded-xl border border-[#e5e7eb] p-5 flex flex-col gap-3">
+                  <!-- 版本选择下拉框 -->
+                  <div v-if="versionsList.length > 1" class="flex flex-col gap-1.5 mb-1">
+                    <span class="text-xs font-semibold text-[#4b5563]">切换版本</span>
                     <select
-                      v-model="selectedProjectId"
-                      class="h-10 flex-1 rounded-xl border border-[#d1d5db] bg-white px-3 text-sm text-[#374151] outline-none focus:ring-2 focus:ring-[#1f2937]/20"
+                      :value="activeVersionId"
+                      @change="changeVersion(($event.target as HTMLSelectElement).value)"
+                      class="h-9 w-full rounded-xl bg-white px-3 text-sm text-[#374151] outline-none shadow-sm focus:ring-2 focus:ring-[#1f2937]/20 border border-[#e5e7eb] cursor-pointer"
                     >
-                      <option value="">选择项目</option>
-                      <option v-for="p in projects" :key="p.pid" :value="p.pid">
-                        {{ p.projectname }}
+                      <option v-for="v in versionsList" :key="v.id" :value="v.id">
+                        v{{ v.version }} ({{ formatDate(v.created_at) }})
                       </option>
                     </select>
-                    <button
-                      type="button"
-                      class="h-10 flex-shrink-0 rounded-xl bg-[#f3f4f6] px-4 text-sm font-semibold text-[#374151] transition-all duration-200 hover:bg-[#e5e7eb] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
-                      :disabled="installingProject || !selectedProjectId"
-                      @click="doInstall('project')"
-                    >
-                      {{ installingProject ? '...' : '安装到项目' }}
-                    </button>
                   </div>
 
-                  <!-- 安装成功消息 -->
-                  <p
-                    v-if="installMsg"
-                    class="rounded-lg bg-[#f0fdf4] px-3 py-2 text-xs text-[#166534]"
+                  <!-- 安装到个人仓库 -->
+                  <button
+                    class="w-full rounded-xl bg-emerald-600 py-2.5 text-sm text-white font-semibold transition-all duration-200 hover:bg-emerald-700 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+                    type="button"
+                    :disabled="installing"
+                    @click="doInstallLibrary"
                   >
+                    {{ installing ? '安装中...' : '📥 安装到个人仓库' }}
+                  </button>
+
+                  <!-- 安装反馈信息 -->
+                  <p v-if="installMsg" class="rounded-lg bg-[#f0fdf4] px-3 py-2 text-xs text-[#166534] mt-1">
                     {{ installMsg }}
                   </p>
 
-                  <!-- 作者操作：删除 -->
+                  <!-- 删除发布（如果是作者） -->
                   <button
                     v-if="isAuthor"
-                    type="button"
-                    class="flex h-9 w-full items-center justify-center gap-2 rounded-xl border border-[#efb3a7] bg-white text-sm text-[#b91c1c] transition-all duration-200 hover:bg-[#fee2e2] active:scale-[0.98] disabled:opacity-50"
+                    class="w-full h-9 rounded-xl bg-red-600 text-xs text-white font-semibold transition-all duration-200 hover:bg-red-700 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 mt-1"
                     :disabled="deleting"
+                    type="button"
                     @click="doDelete"
                   >
                     {{ deleting ? '删除中...' : '删除发布' }}
                   </button>
                 </div>
-              </div>
-            </div>
 
-            <!-- ═══ 评论区 ═══ -->
-            <div class="border-t border-[#e5e7eb] px-5 py-4">
-              <div class="mb-3 flex items-center justify-between">
-                <span class="text-sm font-semibold text-[#1f2937]">
-                  评论 ({{ totalCommentCount }})
-                </span>
-                <button
-                  type="button"
-                  class="text-xs text-[#6b7280] hover:text-[#1f2937] transition-colors"
-                  @click="loadComments"
-                >
-                  刷新
-                </button>
-              </div>
-
-              <!-- 评论输入框 -->
-              <div class="mb-4 flex gap-2">
-                <textarea
-                  v-model="commentContent"
-                  class="min-h-[44px] flex-1 resize-none rounded-xl border border-[#d1d5db] bg-white px-3.5 py-2.5 text-sm text-[#1f2937] placeholder:text-[#9ca3af] outline-none transition focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20"
-                  placeholder="写下你的评论..."
-                  rows="2"
-                  :disabled="commentSubmitting"
-                />
-                <button
-                  type="button"
-                  class="flex h-10 flex-shrink-0 items-center justify-center rounded-xl bg-[#1f2937] px-5 text-sm font-semibold text-white transition-all duration-200 hover:bg-[#111827] active:scale-95 disabled:cursor-not-allowed disabled:border disabled:border-[#d1d5db] disabled:bg-white disabled:text-[#9ca3af]"
-                  :disabled="commentSubmitting || !commentContent.trim()"
-                  @click="submitComment"
-                >
-                  {{ commentSubmitting ? '...' : '发送' }}
-                </button>
-              </div>
-
-              <!-- 加载态 -->
-              <div v-if="commentsLoading" class="py-8 text-center text-sm text-[#9ca3af]">
-                加载评论中...
-              </div>
-
-              <!-- 空评论 -->
-              <div v-else-if="comments.length === 0" class="py-8 text-center text-sm text-[#9ca3af]">
-                暂无评论，来说两句吧
-              </div>
-
-              <!-- 评论列表 -->
-              <div v-else class="space-y-4">
-                <div
-                  v-for="comment in comments"
-                  :key="comment.id"
-                  class="rounded-xl border border-[#e5e7eb] bg-transparent p-3.5"
-                >
-                  <!-- 顶级评论 -->
-                  <div class="flex items-start justify-between gap-2">
-                    <div class="min-w-0 flex-1">
-                      <div class="mb-1 flex items-center gap-2 text-xs">
-                        <span class="font-semibold text-[#1f2937]">{{ comment.username || comment.user_uuid?.slice(0, 8) }}</span>
-                        <span class="text-[#9ca3af]">{{ formatDate(comment.created_at) }}</span>
-                      </div>
-                      <p class="text-sm text-[#374151] whitespace-pre-wrap break-words">{{ comment.content }}</p>
-                    </div>
+                <!-- 文件结构 -->
+                <div class="bg-white rounded-xl border border-[#e5e7eb] p-5">
+                  <h3 class="text-sm font-semibold text-[#1f2937] mb-3">文件结构 (v{{ selectedVersion?.version || skillDetail.version }})</h3>
+                  <div v-if="detailFilesLoading" class="text-xs text-[#9ca3af] py-2">加载中…</div>
+                  <div v-else-if="fileTree.length === 0" class="text-xs text-[#9ca3af] py-2">暂无文件</div>
+                  <div v-else class="flex flex-col gap-0.5">
+                    <template v-for="node in fileTree" :key="node.entry.rel_path">
+                      <!-- 文件夹 -->
+                      <button
+                        v-if="node.entry.is_dir"
+                        class="flex items-center gap-1.5 text-xs py-0.5 text-left w-full rounded px-1 transition-colors text-[#374151] hover:bg-[#f3f4f6] cursor-pointer"
+                        :style="{ paddingLeft: `${node.depth * 16 + 4}px` }"
+                        type="button"
+                        @click="toggleVersionDir(node.entry)"
+                      >
+                        <span class="text-[10px] w-3 text-center">{{ expandedDirs.has(node.entry.rel_path) ? '▼' : '▶' }}</span>
+                        <span>📁</span>
+                        <span class="truncate font-medium">{{ node.entry.name }}</span>
+                      </button>
+                      <!-- 文件 -->
+                      <button
+                        v-else
+                        class="flex items-center gap-1.5 text-xs py-0.5 text-left w-full rounded px-1 transition-colors"
+                        :style="{ paddingLeft: `${node.depth * 16 + 4}px` }"
+                        :class="selectedFileName === node.entry.rel_path
+                          ? 'bg-[#e5e7eb] text-[#1f2937]'
+                          : 'text-[#374151] hover:bg-[#f3f4f6] cursor-pointer'"
+                        type="button"
+                        @click="loadVersionFileContent(skillDetail.id, activeVersionId!, node.entry.rel_path)"
+                      >
+                        <span>📄</span>
+                        <span class="truncate">{{ node.entry.name }}</span>
+                        <span class="ml-auto text-[9px] text-[#9ca3af] tabular-nums">{{ formatBytes(node.entry.size) }}</span>
+                      </button>
+                    </template>
                   </div>
+                </div>
 
-                  <!-- 操作行 -->
-                  <div class="mt-2 flex items-center gap-3 text-xs">
+                <!-- 评论区：放在右侧的下方 -->
+                <div class="bg-white rounded-xl border border-[#e5e7eb] p-5 flex flex-col">
+                  <div class="mb-3 flex items-center justify-between">
+                    <span class="text-sm font-semibold text-[#1f2937]">
+                      评论 ({{ totalCommentCount }})
+                    </span>
                     <button
                       type="button"
-                      class="flex items-center gap-1 text-[#9ca3af] hover:text-[#dc2626] transition-colors"
-                      :class="{ 'text-[#dc2626]': comment.liked_by_me }"
-                      @click="toggleCommentLike(comment)"
+                      class="text-xs text-[#6b7280] hover:text-[#1f2937] transition-colors"
+                      @click="loadComments"
                     >
-                      <svg class="h-3.5 w-3.5" :fill="comment.liked_by_me ? 'currentColor' : 'none'" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
-                      </svg>
-                      <span>{{ comment.likes || '' }}</span>
-                    </button>
-                    <button
-                      type="button"
-                      class="text-[#9ca3af] hover:text-[#1f2937] transition-colors"
-                      @click="replyingTo = replyingTo === comment.id ? null : comment.id; replyContent = ''"
-                    >
-                      {{ replyingTo === comment.id ? '取消回复' : '回复' }}
-                    </button>
-                    <button
-                      v-if="comment.user_uuid === currentUserId"
-                      type="button"
-                      class="text-[#9ca3af] hover:text-[#b91c1c] transition-colors"
-                      @click="doDeleteComment(comment)"
-                    >
-                      删除
-                    </button>
-                    <button
-                      type="button"
-                      class="text-[#9ca3af] hover:text-[#efb3a7] transition-colors"
-                      @click="openReport(comment)"
-                    >
-                      举报
+                      刷新
                     </button>
                   </div>
 
-                  <!-- 子回复列表 -->
-                  <div
-                    v-if="comment.replies && comment.replies.length > 0"
-                    class="mt-3 space-y-2.5 border-l-2 border-[#f3f4f6] pl-4"
-                  >
+                  <!-- 评论输入框 -->
+                  <div class="mb-4 flex flex-col gap-2">
+                    <textarea
+                      v-model="commentContent"
+                      class="min-h-[50px] w-full resize-none rounded-xl border border-[#d1d5db] bg-white px-3 py-2 text-xs text-[#1f2937] placeholder:text-[#9ca3af] outline-none transition focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20 font-sans"
+                      placeholder="写下你的评论..."
+                      rows="2"
+                      :disabled="commentSubmitting"
+                    />
+                    <button
+                      type="button"
+                      class="flex h-8 items-center justify-center rounded-xl bg-[#1f2937] px-4 text-xs font-semibold text-white transition-all duration-200 hover:bg-[#111827] active:scale-95 disabled:cursor-not-allowed disabled:border disabled:border-[#d1d5db] disabled:bg-white disabled:text-[#9ca3af]"
+                      :disabled="commentSubmitting || !commentContent.trim()"
+                      @click="submitComment"
+                    >
+                      {{ commentSubmitting ? '...' : '发送' }}
+                    </button>
+                  </div>
+
+                  <!-- 加载态 -->
+                  <div v-if="commentsLoading" class="py-4 text-center text-xs text-[#9ca3af]">
+                    加载评论中...
+                  </div>
+
+                  <!-- 空评论 -->
+                  <div v-else-if="comments.length === 0" class="py-4 text-center text-xs text-[#9ca3af]">
+                    暂无评论，来说两句吧
+                  </div>
+
+                  <!-- 评论列表 -->
+                  <div v-else class="space-y-3 max-h-[400px] overflow-y-auto pr-1">
                     <div
-                      v-for="reply in comment.replies"
-                      :key="reply.id"
-                      class="rounded-lg bg-[#f3f4f6]/40 p-3"
+                      v-for="comment in comments"
+                      :key="comment.id"
+                      class="rounded-xl border border-[#e5e7eb] bg-transparent p-3 flex flex-col gap-1.5"
                     >
-                      <div class="mb-1 flex items-center gap-2 text-xs">
-                        <span class="font-semibold text-[#1f2937]">{{ reply.username || reply.user_uuid?.slice(0, 8) }}</span>
-                        <span
-                          v-if="reply.reply_to_username"
-                          class="text-[#6b7280]"
-                        >
-                          回复 @{{ reply.reply_to_username }}
-                        </span>
-                        <span class="text-[#9ca3af]">{{ formatDate(reply.created_at) }}</span>
+                      <!-- 顶级评论 -->
+                      <div class="flex items-start justify-between gap-2">
+                        <div class="min-w-0 flex-1">
+                          <div class="mb-0.5 flex items-center gap-2 text-[10px]">
+                            <span class="font-semibold text-[#1f2937]">{{ comment.username || comment.user_uuid?.slice(0, 8) }}</span>
+                            <span class="text-[#9ca3af] scale-90">{{ formatDate(comment.created_at) }}</span>
+                          </div>
+                          <p class="text-xs text-[#374151] whitespace-pre-wrap break-words leading-relaxed">{{ comment.content }}</p>
+                        </div>
                       </div>
-                      <p class="text-sm text-[#374151] whitespace-pre-wrap break-words">{{ reply.content }}</p>
-                      <div class="mt-2 flex items-center gap-3 text-xs">
+
+                      <!-- 操作行 -->
+                      <div class="flex items-center gap-3 text-[10px]">
                         <button
                           type="button"
                           class="flex items-center gap-1 text-[#9ca3af] hover:text-[#dc2626] transition-colors"
-                          :class="{ 'text-[#dc2626]': reply.liked_by_me }"
-                          @click="toggleCommentLike(reply)"
+                          :class="{ 'text-[#dc2626]': comment.liked_by_me }"
+                          @click="toggleCommentLike(comment)"
                         >
-                          <svg class="h-3.5 w-3.5" :fill="reply.liked_by_me ? 'currentColor' : 'none'" stroke="currentColor" viewBox="0 0 24 24">
+                          <svg class="h-3 w-3" :fill="comment.liked_by_me ? 'currentColor' : 'none'" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
                           </svg>
-                          <span>{{ reply.likes || '' }}</span>
+                          <span>{{ comment.likes || '' }}</span>
                         </button>
                         <button
-                          v-if="reply.user_uuid === currentUserId"
+                          type="button"
+                          class="text-[#9ca3af] hover:text-[#1f2937] transition-colors"
+                          @click="replyingTo = replyingTo === comment.id ? null : comment.id; replyContent = ''"
+                        >
+                          {{ replyingTo === comment.id ? '取消' : '回复' }}
+                        </button>
+                        <button
+                          v-if="comment.user_uuid === currentUserId"
                           type="button"
                           class="text-[#9ca3af] hover:text-[#b91c1c] transition-colors"
-                          @click="doDeleteComment(reply)"
+                          @click="doDeleteComment(comment)"
                         >
                           删除
                         </button>
                         <button
                           type="button"
                           class="text-[#9ca3af] hover:text-[#efb3a7] transition-colors"
-                          @click="openReport(reply)"
+                          @click="openReport(comment)"
                         >
                           举报
                         </button>
                       </div>
-                    </div>
-                  </div>
 
-                  <!-- 内联回复输入框 -->
-                  <div v-if="replyingTo === comment.id" class="mt-3 flex gap-2">
-                    <textarea
-                      v-model="replyContent"
-                      class="min-h-[40px] flex-1 resize-none rounded-lg border border-[#d1d5db] bg-white px-3 py-2 text-sm text-[#1f2937] placeholder:text-[#9ca3af] outline-none transition focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20"
-                      :placeholder="`回复 @${comment.username || '...'}...`"
-                      rows="2"
-                      :disabled="replySubmitting"
-                    />
-                    <button
-                      type="button"
-                      class="flex h-9 flex-shrink-0 items-center justify-center rounded-lg bg-[#1f2937] px-4 text-xs font-semibold text-white transition-all duration-200 hover:bg-[#111827] active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
-                      :disabled="replySubmitting || !replyContent.trim()"
-                      @click="submitReply(comment.id, comment.user_uuid)"
-                    >
-                      {{ replySubmitting ? '...' : '回复' }}
-                    </button>
+                      <!-- 子回复列表 -->
+                      <div
+                        v-if="comment.replies && comment.replies.length > 0"
+                        class="mt-1.5 space-y-1.5 border-l-2 border-[#f3f4f6] pl-2.5"
+                      >
+                        <div
+                          v-for="reply in comment.replies"
+                          :key="reply.id"
+                          class="rounded bg-[#f3f4f6]/40 p-2 text-xs flex flex-col gap-1"
+                        >
+                          <div class="mb-0.5 flex items-center gap-1.5 text-[10px]">
+                            <span class="font-semibold text-[#1f2937]">{{ reply.username || reply.user_uuid?.slice(0, 8) }}</span>
+                            <span v-if="reply.reply_to_username" class="text-[#6b7280]">
+                              回复 @{{ reply.reply_to_username }}
+                            </span>
+                            <span class="text-[#9ca3af] scale-90">{{ formatDate(reply.created_at) }}</span>
+                          </div>
+                          <p class="text-xs text-[#374151] whitespace-pre-wrap break-words leading-relaxed">{{ reply.content }}</p>
+                          <div class="flex items-center gap-3 text-[10px]">
+                            <button
+                              type="button"
+                              class="flex items-center gap-1 text-[#9ca3af] hover:text-[#dc2626] transition-colors"
+                              :class="{ 'text-[#dc2626]': reply.liked_by_me }"
+                              @click="toggleCommentLike(reply)"
+                            >
+                              <svg class="h-3 w-3" :fill="reply.liked_by_me ? 'currentColor' : 'none'" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+                              </svg>
+                              <span>{{ reply.likes || '' }}</span>
+                            </button>
+                            <button
+                              v-if="reply.user_uuid === currentUserId"
+                              type="button"
+                              class="text-[#9ca3af] hover:text-[#b91c1c] transition-colors"
+                              @click="doDeleteComment(reply)"
+                            >
+                              删除
+                            </button>
+                            <button
+                              type="button"
+                              class="text-[#9ca3af] hover:text-[#efb3a7] transition-colors"
+                              @click="openReport(reply)"
+                            >
+                              举报
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      <!-- 内联回复输入框 -->
+                      <div v-if="replyingTo === comment.id" class="mt-2 flex gap-1.5">
+                        <textarea
+                          v-model="replyContent"
+                          class="min-h-[36px] flex-1 resize-none rounded-lg border border-[#d1d5db] bg-white px-2.5 py-1.5 text-xs text-[#1f2937] placeholder:text-[#9ca3af] outline-none transition focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20 font-sans"
+                          :placeholder="`回复 @${comment.username || '...'}...`"
+                          rows="2"
+                          :disabled="replySubmitting"
+                        />
+                        <button
+                          type="button"
+                          class="flex h-8 flex-shrink-0 items-center justify-center rounded-lg bg-[#1f2937] px-3 text-[10px] font-semibold text-white transition-all duration-200 hover:bg-[#111827] active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+                          :disabled="replySubmitting || !replyContent.trim()"
+                          @click="submitReply(comment.id, comment.user_uuid)"
+                        >
+                          {{ replySubmitting ? '...' : '回复' }}
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
