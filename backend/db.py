@@ -488,7 +488,7 @@ class MessagesFacade(_DataBase):
                 JOIN sessions AS s ON m.sid = s.sid
                 JOIN projects AS p ON s.pid = p.pid
                 LEFT JOIN messages AS a ON m.anchor_msg_id = a.msg_id
-                WHERE m.sid = ? AND p.user_uuid = ?
+                WHERE m.sid = ? AND p.user_uuid = ? AND m.version = 0
                 ORDER BY COALESCE(a.timestamp, m.timestamp) DESC, m.timestamp DESC
                 LIMIT ? OFFSET ?
                 """,
