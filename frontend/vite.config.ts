@@ -33,7 +33,7 @@ export default defineConfig(({ mode }) => {
         '/tools': backendTarget,
         '/health': backendTarget,
         '/community': spaFallback,
-        '/library': backendTarget,
+        '/library': spaFallback,
         '/owner': backendTarget,
         '/admin': backendTarget,
         '/settings': backendTarget,
