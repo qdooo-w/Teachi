@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import SkillManagerDialog from './components/SkillManagerDialog.vue'
+import ChatSkillSidebar from './components/ChatSkillSidebar.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
 import UserProfileDialog from './components/UserProfileDialog.vue'
 import RowMenu from './components/RowMenu.vue'
@@ -24,8 +25,10 @@ import { useProjects } from './composables/useProjects'
 import { useLayout } from './composables/useLayout'
 import { useProjectSkills } from './composables/useProjectSkills'
 import { useUserSkills } from './composables/useUserSkills'
+import { useChatSkillSidebar } from './composables/useChatSkillSidebar'
 import { PREVIEW_PROJECT_LIMIT, API_BASE_URL } from './config'
 import { useNotification } from './composables/useNotification'
+import { confirmDanger, useConfirmDialog } from './composables/useConfirmDialog'
 
 // ── 认证（状态 / 行为均来自 composable，模板继续使用同名 ref） ───────────────
 const {
@@ -54,6 +57,11 @@ const {
   clearAllNotifications,
   toggleNotificationExpanded,
 } = useNotification()
+const {
+  confirmState,
+  resolveConfirm,
+  cancelConfirm,
+} = useConfirmDialog()
 
 // 监听旧的 errorMessage 变化以支持 legacy code
 watch(errorMessage, (newVal) => {
@@ -124,10 +132,11 @@ async function handleSubmitAuth(): Promise<void> {
 const router = useRouter()
 const route = useRoute()
 
-// ── 路由层级深度：overview/community=0，subject=1，chat=2 ──────────────────
+// ── 路由层级深度：overview/community/library=0，subject=1，chat=2 ──────────────────
 const ROUTE_DEPTH: Record<string, number> = {
   overview: 0,
   community: 0,
+  library: 0,
   subject: 1,
   chat: 2,
 }
@@ -147,6 +156,38 @@ watch(route, (to, from) => {
 
 const { projects, loadProjects, resetProjects, upsertProject, removeProject } = useProjects()
 const { sidebarOpen, isMobile, handleResize, closeSidebarOnMobile } = useLayout()
+const { chatSidebarOpen, editingSkill, toggleSidebar: toggleChatSidebar, closeEditor } = useChatSkillSidebar()
+
+const projectLastActive = ref<Record<string, number>>({})
+
+const openCommunity = (): void => {
+  window.open('/community', '_blank')
+}
+
+const LOGOUT_SESSION_STATE_KEYS = ['library-tabs', 'community-tabs']
+const LOGOUT_LOCAL_STATE_KEYS = ['library-sidebar-open']
+const LOGOUT_LOCAL_STATE_PREFIXES = ['preview_windows_', 'chat_cache_']
+
+function removeLocalStorageByPrefix(prefix: string): void {
+  for (let index = localStorage.length - 1; index >= 0; index -= 1) {
+    const key = localStorage.key(index)
+    if (key?.startsWith(prefix)) {
+      localStorage.removeItem(key)
+    }
+  }
+}
+
+function clearLogoutUiStorage(): void {
+  for (const key of LOGOUT_SESSION_STATE_KEYS) {
+    sessionStorage.removeItem(key)
+  }
+  for (const key of LOGOUT_LOCAL_STATE_KEYS) {
+    localStorage.removeItem(key)
+  }
+  for (const prefix of LOGOUT_LOCAL_STATE_PREFIXES) {
+    removeLocalStorageByPrefix(prefix)
+  }
+}
 
 // ── 全局捕获滚动，用于检测任何滚动区域是否向下滚动，控制顶栏半透明背景显隐 ───
 const hasScrolled = ref(false)
@@ -163,7 +204,22 @@ watch(route, () => {
   hasScrolled.value = false
 })
 
-const previewProjects = computed(() => projects.value.slice(0, PREVIEW_PROJECT_LIMIT))
+// 切换项目/会话或页面时，关闭技能编辑器，但不关闭侧边栏
+watch(
+  () => [route.params.pid, route.params.sid] as const,
+  () => {
+    closeEditor()
+  }
+)
+
+const previewProjects = computed(() => {
+  const sorted = [...projects.value].sort((a, b) => {
+    const timeA = projectLastActive.value[a.pid] ?? (a.timestamp || a.created_at || 0)
+    const timeB = projectLastActive.value[b.pid] ?? (b.timestamp || b.created_at || 0)
+    return timeB - timeA
+  })
+  return sorted.slice(0, PREVIEW_PROJECT_LIMIT)
+})
 
 const subjectProject = computed(() => {
   const pid = route.params.pid as string | undefined
@@ -205,10 +261,6 @@ const openMenuKey = ref<string | null>(null)
 const renamingKey = ref<string | null>(null)
 const renameSubmitting = ref(false)
 
-const confirmDelete = ref<{ id: string; name: string } | null>(null)
-const deleteSubmitting = ref(false)
-const deleteError = ref('')
-
 function projectKey(_scope: 'sidebar', pid: string): string {
   return `sidebar:project:${pid}`
 }
@@ -244,47 +296,25 @@ async function submitProjectRename(project: ProjectItem, nextName: string): Prom
   }
 }
 
-function askDeleteProject(project: ProjectItem): void {
+async function askDeleteProject(project: ProjectItem): Promise<void> {
   openMenuKey.value = null
-  deleteError.value = ''
-  confirmDelete.value = { id: project.pid, name: project.projectname }
-}
-
-function cancelDelete(): void {
-  if (deleteSubmitting.value) return
-  confirmDelete.value = null
-  deleteError.value = ''
-}
-
-async function performDelete(): Promise<void> {
-  const target = confirmDelete.value
-  if (!target || deleteSubmitting.value) return
-
-  deleteSubmitting.value = true
-  deleteError.value = ''
+  const confirmed = await confirmDanger({
+    title: '删除科目',
+    message: `确定删除「${project.projectname}」？该科目下的所有会话和消息也会被一并删除，操作不可恢复。`,
+    confirmText: '删除',
+  })
+  if (!confirmed) return
   try {
-    await deleteProject(target.id)
+    await deleteProject(project.pid)
     // 如果正在查看被删除的项目或其会话，回到总览
-    if (route.params.pid === target.id) {
+    if (route.params.pid === project.pid) {
       await router.replace({ name: 'overview' })
     }
-    removeProject(target.id)
-    confirmDelete.value = null
+    removeProject(project.pid)
   } catch (error) {
-    deleteError.value = getErrorMessage(error)
-  } finally {
-    deleteSubmitting.value = false
+    showGlobalError('删除科目失败', getErrorMessage(error))
   }
 }
-
-const deleteDialogContent = computed(() => {
-  const target = confirmDelete.value
-  if (!target) return null
-  return {
-    title: '删除科目',
-    message: `确定删除「${target.name}」？该科目下的所有会话和消息也会被一并删除，操作不可恢复。`,
-  }
-})
 
 // ── Skill 管理对话框（用户级 / 项目级） ─────────────────────────────────────
 const showUserSkillManager = ref(false)
@@ -325,17 +355,33 @@ function truncateText(str: string, len: number): string {
 }
 
 // ── 登出 ─────────────────────────────────────────────────────────────────────
-async function handleLogout(): Promise<void> {
-  await authLogout()
+function resetOpenUiStateAfterLogout(): void {
+  clearLogoutUiStorage()
   resetProjects()
+  recentSessions.value = []
+  chatSession.value = null
   errorMessage.value = ''
+  sidebarOpen.value = !isMobile.value
+  chatSidebarOpen.value = false
+  closeEditor()
   showUserSkillManager.value = false
   showProjectSkillManager.value = false
   showSettingsDialog.value = false
+  showUserProfileDialog.value = false
   openMenuKey.value = null
   renamingKey.value = null
-  confirmDelete.value = null
-  deleteError.value = ''
+  hasScrolled.value = false
+  clearAllNotifications()
+  cancelConfirm()
+}
+
+async function handleLogout(): Promise<void> {
+  try {
+    await authLogout()
+  } catch (error) {
+    console.warn('Logout request failed:', error)
+  }
+  resetOpenUiStateAfterLogout()
   await router.replace({ name: 'overview' })
 }
 
@@ -431,9 +477,15 @@ async function loadRecentSessions(): Promise<void> {
   }
   loadingRecent.value = true
   try {
+    const activeTimes: Record<string, number> = {}
     const promises = projects.value.map(async (p) => {
       try {
         const list = await listSessions(p.pid)
+        const maxSessionTime = list.length > 0
+          ? Math.max(...list.map((s) => s.timestamp))
+          : 0
+        activeTimes[p.pid] = Math.max(maxSessionTime, p.timestamp || p.created_at || 0)
+
         return list.map((s) => ({
           ...s,
           pid: p.pid,
@@ -441,10 +493,12 @@ async function loadRecentSessions(): Promise<void> {
         }))
       } catch (err) {
         console.error(`App.vue 加载科目 ${p.projectname} 的会话失败:`, err)
+        activeTimes[p.pid] = p.timestamp || p.created_at || 0
         return []
       }
     })
     const allLists = await Promise.all(promises)
+    projectLastActive.value = activeTimes
     const combined = allLists.flat()
     combined.sort((a, b) => b.timestamp - a.timestamp)
     recentSessions.value = combined.slice(0, 6)
@@ -634,7 +688,13 @@ watch(
             : '-translate-x-full overflow-hidden border-none md:w-0 md:translate-x-0',
         ]"
       >
-        <div class="flex h-full w-56 flex-shrink-0 flex-col px-2.5 py-4">
+        <div
+          :class="[
+            'flex h-full w-56 flex-shrink-0 flex-col px-2.5 py-4',
+            'transition-opacity duration-150',
+            sidebarOpen ? 'opacity-100 delay-100' : 'opacity-0',
+          ]"
+        >
           <div class="mb-5 mt-2 flex items-center justify-center gap-2 px-2">
             <button
               class="flex items-center gap-1 text-left"
@@ -662,6 +722,23 @@ watch(
           </div>
 
           <button
+            class="mx-1 mb-1.5 flex h-8 items-center justify-start gap-1.5 rounded-xl pl-4 pr-2 text-left transition-all duration-200 active:scale-95"
+            :class="[
+              $route.name === 'library'
+                ? 'bg-[#1f2937] text-white font-medium shadow-sm'
+                : 'bg-[#f3f4f6]/80 text-[#4b5563] hover:bg-[#e5e7eb] hover:text-[#1f2937]'
+            ]"
+            type="button"
+            title="Skill仓库"
+            @click="closeSidebarOnMobile(); router.push({ name: 'library' })"
+          >
+            <svg class="h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-6 4h4" />
+            </svg>
+            <span class="text-xs whitespace-nowrap font-mono font-medium tracking-wide">Skill仓库</span>
+          </button>
+
+          <button
             class="mx-1 mb-3 flex h-8 items-center justify-start gap-1.5 rounded-xl pl-4 pr-2 text-left transition-all duration-200 active:scale-95"
             :class="[
               $route.name === 'community'
@@ -669,13 +746,13 @@ watch(
                 : 'bg-[#f3f4f6]/80 text-[#4b5563] hover:bg-[#e5e7eb] hover:text-[#1f2937]'
             ]"
             type="button"
-            title="技能社区"
-            @click="closeSidebarOnMobile(); router.push({ name: 'community' })"
+            title="Skill社区"
+            @click="closeSidebarOnMobile(); openCommunity()"
           >
             <svg class="h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
             </svg>
-            <span class="text-xs whitespace-nowrap font-hans">技能社区</span>
+            <span class="text-xs whitespace-nowrap font-mono font-medium tracking-wide">Skill社区</span>
           </button>
 
           <div class="no-scrollbar flex-1 overflow-y-auto">
@@ -822,9 +899,11 @@ watch(
           <div
             class="flex min-w-0 items-center gap-3 overflow-hidden pointer-events-auto px-3 py-1 rounded-full transition-all duration-300 scale-90 origin-left"
             :class="[
-              hasScrolled || isMobile
-                ? 'bg-white/80 backdrop-blur-md border border-[#e5e7eb] shadow-sm'
-                : 'bg-transparent border border-transparent'
+              editingSkill
+                ? 'bg-transparent border border-transparent'
+                : hasScrolled || isMobile
+                  ? 'bg-white/80 backdrop-blur-md border border-[#e5e7eb] shadow-sm'
+                  : 'bg-transparent border border-transparent'
             ]"
           >
             <button
@@ -845,6 +924,9 @@ watch(
               <template v-else-if="$route.name === 'community'">
                 <span class="text-[#1f2937] font-semibold text-sm">技能社区</span>
               </template>
+              <template v-else-if="$route.name === 'library'">
+                <span class="text-[#1f2937] font-semibold text-sm">我的仓库</span>
+              </template>
               <template v-else-if="$route.name === 'subject' && subjectProject">
                 <span class="cursor-pointer text-[#9ca3af] hover:text-[#1f2937] transition-colors" @click="router.push({ name: 'overview' })">科目</span>
                 <span class="text-[#9ca3af]">/</span>
@@ -856,42 +938,6 @@ watch(
                 <span class="text-[#1f2937] font-semibold">{{ truncateText(chatSession.sessionname, 25) }}</span>
               </template>
             </div>
-          </div>
-
-          <div
-            class="flex items-center gap-1.5 pointer-events-auto p-1 rounded-full transition-all duration-300 scale-90 origin-right"
-            :class="[
-              hasScrolled || isMobile
-                ? 'bg-white/80 backdrop-blur-md border border-[#e5e7eb] shadow-sm'
-                : 'bg-transparent border border-transparent'
-            ]"
-          >
-            <!-- 新建对话：仅保留一个加号 -->
-            <button
-              v-if="$route.name === 'chat'"
-              class="flex h-8 w-8 items-center justify-center rounded-full border border-[#d1d5db] bg-white text-[#4b5563] transition-all duration-200 hover:bg-[#e5e7eb] active:scale-95"
-              type="button"
-              title="新建对话"
-              @click="router.push({ name: 'subject', params: { pid: $route.params.pid } })"
-            >
-              <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-              </svg>
-            </button>
-            
-            <!-- Skills 管理：整合为统一的单一按钮（概览页隐藏） -->
-            <button
-              v-if="$route.name !== 'overview' && $route.name !== 'community'"
-              class="flex h-8 items-center gap-1 rounded-full border border-[#d1d5db] bg-white px-3 text-xs font-semibold text-[#4b5563] transition-all duration-200 hover:bg-[#e5e7eb] active:scale-95"
-              type="button"
-              title="管理您的技能"
-              @click="projectSkillSpace ? (showProjectSkillManager = true) : (showUserSkillManager = true)"
-            >
-              <svg class="h-3.5 w-3.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
-              </svg>
-              <span>Skills</span>
-            </button>
           </div>
         </header>
         <!-- 全局错误提示已移至顶栏下方悬浮显示 -->
@@ -916,6 +962,60 @@ watch(
 
         </div>
       </section>
+
+      <!-- 会话技能侧边栏（仅 chat/subject 路由生效） -->
+      <ChatSkillSidebar v-if="$route.name === 'chat' || $route.name === 'subject'" />
+
+      <!-- 右上角固定按钮组（z-index 高于侧边栏） -->
+      <div v-if="$route.name === 'chat' || $route.name === 'subject'" class="fixed top-3 right-4 z-50 flex items-center gap-1.5">
+        <!-- 关闭技能编辑按钮（仅聊天页编辑时显示） -->
+        <button
+          v-if="editingSkill && $route.name === 'chat'"
+          class="flex h-8 w-8 items-center justify-center rounded-full border border-[#d1d5db] bg-white text-[#4b5563] transition-all duration-200 hover:bg-[#e5e7eb] active:scale-95"
+          type="button"
+          title="关闭编辑"
+          @click="closeEditor"
+        >
+          <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
+            <path d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+
+        <!-- 新建对话按钮（仅聊天页显示） -->
+        <button
+          v-if="$route.name === 'chat'"
+          class="flex h-8 w-8 items-center justify-center rounded-full border border-[#d1d5db] bg-white text-[#4b5563] transition-all duration-200 hover:bg-[#e5e7eb] active:scale-95"
+          type="button"
+          title="新建对话"
+          @click="router.push({ name: 'subject', params: { pid: $route.params.pid } })"
+        >
+          <svg class="h-4 w-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+          </svg>
+        </button>
+
+        <!-- 技能侧边栏切换按钮 -->
+        <button
+          class="flex h-8 w-8 items-center justify-center rounded-full border border-[#d1d5db] bg-white text-[#4b5563] transition-all duration-200 hover:bg-[#e5e7eb] active:scale-95"
+          type="button"
+          :title="chatSidebarOpen ? '收起技能面板' : '展开技能面板'"
+          @click="toggleChatSidebar"
+        >
+          <svg
+            class="h-4 w-4 transition-transform duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)]"
+            :class="chatSidebarOpen ? 'rotate-180' : 'rotate-0'"
+            aria-hidden="true"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            viewBox="0 0 24 24"
+          >
+            <path d="M15 18l-6-6 6-6" />
+          </svg>
+        </button>
+      </div>
     </section>
 
     <Transition name="dialog-fade" appear>
@@ -942,15 +1042,14 @@ watch(
     </Transition>
     <Transition name="dialog-fade" appear>
       <ConfirmDialog
-        v-if="confirmDelete && deleteDialogContent"
-        :title="deleteDialogContent.title"
-        :message="deleteDialogContent.message"
-        confirm-text="删除"
-        danger
-        :submitting="deleteSubmitting"
-        :error="deleteError"
-        @confirm="performDelete"
-        @cancel="cancelDelete"
+        v-if="confirmState.open"
+        :title="confirmState.title"
+        :message="confirmState.message"
+        :confirm-text="confirmState.confirmText"
+        :cancel-text="confirmState.cancelText"
+        :tone="confirmState.tone"
+        @confirm="resolveConfirm"
+        @cancel="cancelConfirm"
       />
     </Transition>
 

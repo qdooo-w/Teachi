@@ -25,7 +25,7 @@ users
 data
 tests/*
 !tests/test_community_zip_upload.py
+!tests/test_migrate_legacy_db.py
 AGENTS.md
 archived_skill
 # Some configuration files
-

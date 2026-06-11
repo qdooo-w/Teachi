@@ -24,6 +24,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '社区' },
   },
   {
+    path: '/library',
+    name: 'library',
+    component: () => import('../views/LibraryView.vue'),
+    meta: { title: '我的仓库' },
+  },
+  {
     path: '/set-password',
     name: 'set-password',
     component: () => import('../views/SetPasswordView.vue'),

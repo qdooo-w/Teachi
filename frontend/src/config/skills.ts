@@ -1,6 +1,6 @@
-export const SKILL_NAME_PATTERN = /^[\u4e00-\u9fa5a-zA-Z0-9]+(-[\u4e00-\u9fa5a-zA-Z0-9]+)*$/
+export const SKILL_NAME_PATTERN = /^(?=.*[\p{L}\p{N}])[\p{L}\p{N}_-]+$/u
 export const SKILL_NAME_MAX = 64
-export const SKILL_RESERVED = new Set(['anthropic', 'claude'])
+export const SKILL_RESERVED = new Set(['anthropic', 'claude', 'system'])
 export const SKILL_RESOURCE_DIRS = ['references', 'assets', 'examples', 'templates'] as const
 export const SKILL_TEXT_EXTENSIONS = ['.md', '.txt', '.json', '.yaml', '.yml'] as const
 

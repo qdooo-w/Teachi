@@ -5,6 +5,7 @@ import {
   type CommunitySkillDetail,
   type CommunitySort,
   type CommunityComment,
+  type CommunitySkillVersion,
   listCommunitySkills,
   getCommunitySkill,
   likeCommunitySkill,
@@ -15,12 +16,20 @@ import {
   deleteCommunityComment,
   likeCommunityComment,
   reportCommunityComment,
+  listOwnerReviews,
+  approveOwnerReview,
+  rejectOwnerReview,
+  listAdminReviews,
+  approveAdminReview,
+  rejectAdminReview,
   getCurrentUserId,
+  getCurrentUser,
   getErrorMessage,
 } from '../api'
 import { COMMUNITY_PAGE_LIMIT } from '../config'
 import { useProjects } from '../composables/useProjects'
 import { useNotification } from '../composables/useNotification'
+import { confirmDanger } from '../composables/useConfirmDialog'
 import { renderMarkdown } from '../markdown/renderer'
 
 // ── 项目列表（安装到项目时使用） ──────────────────────────────────────────
@@ -33,7 +42,7 @@ const currentUserId = ref<string | null>(getCurrentUserId())
 // ── 标签页系统（模块级持久化，路由切换不丢失） ──────────────────────────
 interface Tab {
   id: string
-  type: 'main' | 'skill'
+  type: 'main' | 'skill' | 'owner-reviews' | 'admin-reviews'
   label: string
   skillId?: string
   lastAccessed: number
@@ -51,7 +60,9 @@ function loadTabs(): Tab[] {
     if (raw) {
       const parsed: Tab[] = JSON.parse(raw)
       const now = Date.now()
-      const valid = parsed.filter((t) => t.type === 'main' || (t.type === 'skill' && now - t.lastAccessed < TAB_TTL))
+      const valid = parsed.filter(
+        (t) => t.type === 'main' || t.type === 'owner-reviews' || t.type === 'admin-reviews' || (t.type === 'skill' && now - t.lastAccessed < TAB_TTL)
+      )
       if (valid.length > 0 && valid[0].type === 'main') return valid
     }
   } catch { /* ignore */ }
@@ -70,6 +81,18 @@ const activeTab = computed(() => tabs.value.find((t) => t.id === activeTabId.val
 /** 当前激活的技能详情 */
 const skillDetail = ref<CommunitySkillDetail | null>(null)
 const detailLoading = ref(false)
+
+// ── 审核状态 ────────────────────────────────────────────────────────────
+const currentUserRole = ref<string | null>(null)
+const ownerReviews = ref<CommunitySkillVersion[]>([])
+const adminReviews = ref<CommunitySkillVersion[]>([])
+const ownerReviewsLoading = ref(false)
+const adminReviewsLoading = ref(false)
+const ownerReviewNote = ref('')
+const adminReviewNote = ref('')
+const reviewingVersionId = ref<string | null>(null)
+
+const isSystemAdmin = computed(() => currentUserRole.value === 'admin')
 
 function openTab(tab: Tab): void {
   tab.lastAccessed = Date.now()
@@ -92,8 +115,22 @@ function openSkillTab(skill: CommunitySkillSummary): void {
   activeTabId.value = newTab.id
 }
 
+function ensureReviewTabs(): void {
+  if (!tabs.value.some((t) => t.id === 'owner-reviews')) {
+    tabs.value.push({ id: 'owner-reviews', type: 'owner-reviews', label: '我的审核', lastAccessed: Date.now() })
+  }
+  if (isSystemAdmin.value && !tabs.value.some((t) => t.id === 'admin-reviews')) {
+    tabs.value.push({ id: 'admin-reviews', type: 'admin-reviews', label: '社区审核', lastAccessed: Date.now() })
+  }
+  if (!isSystemAdmin.value) {
+    tabs.value = tabs.value.filter((t) => t.id !== 'admin-reviews')
+    if (activeTabId.value === 'admin-reviews') activeTabId.value = 'main'
+  }
+  saveTabs(tabs.value)
+}
+
 function closeTab(tabId: string): void {
-  if (tabId === 'main') return
+  if (tabId === 'main' || tabId === 'owner-reviews' || tabId === 'admin-reviews') return
   const idx = tabs.value.findIndex((t) => t.id === tabId)
   if (idx === -1) return
 
@@ -173,6 +210,10 @@ function formatDate(ts: number): string {
   return d.toLocaleDateString('zh-CN')
 }
 
+function reviewTitle(version: CommunitySkillVersion): string {
+  return version.skill_name || version.skill_id.slice(0, 8)
+}
+
 // ── 加载技能列表 ──────────────────────────────────────────────────────────
 async function loadSkills(): Promise<void> {
   loading.value = true
@@ -217,6 +258,68 @@ async function loadSkillDetail(skillId: string): Promise<void> {
     showError('加载技能详情失败', getErrorMessage(e))
   } finally {
     detailLoading.value = false
+  }
+}
+
+async function loadOwnerReviews(): Promise<void> {
+  ownerReviewsLoading.value = true
+  try {
+    ownerReviews.value = await listOwnerReviews()
+  } catch (e) {
+    showError('加载我的审核失败', getErrorMessage(e))
+  } finally {
+    ownerReviewsLoading.value = false
+  }
+}
+
+async function loadAdminReviews(): Promise<void> {
+  if (!isSystemAdmin.value) return
+  adminReviewsLoading.value = true
+  try {
+    adminReviews.value = await listAdminReviews()
+  } catch (e) {
+    showError('加载社区审核失败', getErrorMessage(e))
+  } finally {
+    adminReviewsLoading.value = false
+  }
+}
+
+async function decideOwnerReview(version: CommunitySkillVersion, action: 'approve' | 'reject'): Promise<void> {
+  reviewingVersionId.value = version.id
+  try {
+    if (action === 'approve') {
+      await approveOwnerReview(version.id, ownerReviewNote.value.trim())
+      showSuccess('已通过 Owner 审核，等待社区管理员审核')
+    } else {
+      await rejectOwnerReview(version.id, ownerReviewNote.value.trim())
+      showSuccess('已拒绝该发布请求')
+    }
+    ownerReviewNote.value = ''
+    await loadOwnerReviews()
+  } catch (e) {
+    showError('审核操作失败', getErrorMessage(e))
+  } finally {
+    reviewingVersionId.value = null
+  }
+}
+
+async function decideAdminReview(version: CommunitySkillVersion, action: 'approve' | 'reject'): Promise<void> {
+  reviewingVersionId.value = version.id
+  try {
+    if (action === 'approve') {
+      await approveAdminReview(version.id, adminReviewNote.value.trim())
+      showSuccess('已通过社区审核并上架')
+      await loadSkills()
+    } else {
+      await rejectAdminReview(version.id, adminReviewNote.value.trim())
+      showSuccess('已拒绝该发布请求')
+    }
+    adminReviewNote.value = ''
+    await loadAdminReviews()
+  } catch (e) {
+    showError('审核操作失败', getErrorMessage(e))
+  } finally {
+    reviewingVersionId.value = null
   }
 }
 
@@ -276,7 +379,12 @@ const deleting = ref(false)
 
 async function doDelete(): Promise<void> {
   if (!skillDetail.value) return
-  if (!confirm(`确定要删除社区中的 "${skillTitle(skillDetail.value)}" 吗？此操作不可撤销。`)) return
+  const confirmed = await confirmDanger({
+    title: '删除社区技能',
+    message: `确定要删除社区中的 "${skillTitle(skillDetail.value)}" 吗？此操作不可撤销。`,
+    confirmText: '删除',
+  })
+  if (!confirmed) return
   deleting.value = true
   try {
     await deleteCommunitySkill(skillDetail.value.id)
@@ -391,7 +499,13 @@ async function toggleCommentLike(comment: CommunityComment): Promise<void> {
 }
 
 async function doDeleteComment(comment: CommunityComment): Promise<void> {
-  if (!skillDetail.value || !confirm('确定要删除这条评论吗？')) return
+  if (!skillDetail.value) return
+  const confirmed = await confirmDanger({
+    title: '删除评论',
+    message: '确定要删除这条评论吗？',
+    confirmText: '删除',
+  })
+  if (!confirmed) return
   try {
     await deleteCommunityComment(skillDetail.value.id, comment.id)
     await loadComments()
@@ -512,6 +626,10 @@ watch(activeTabId, async (newId) => {
     replyingTo.value = null
     await loadSkillDetail(tab.skillId)
     await loadComments()
+  } else if (tab?.type === 'owner-reviews') {
+    await loadOwnerReviews()
+  } else if (tab?.type === 'admin-reviews') {
+    await loadAdminReviews()
   }
 })
 
@@ -539,7 +657,7 @@ function cleanupExpiredTabs(): void {
   const before = tabs.value.length
   const removedIds: string[] = []
   tabs.value = tabs.value.filter((t) => {
-    if (t.type === 'main') return true
+    if (t.type === 'main' || t.type === 'owner-reviews' || t.type === 'admin-reviews') return true
     if (now - t.lastAccessed > TAB_TTL) {
       if (t.skillId) {
         skillCache.delete(t.skillId)
@@ -569,6 +687,18 @@ onMounted(() => {
   document.title = '社区 · Learnova'
   void loadSkills()
   void loadProjects()
+  void getCurrentUser()
+    .then((user) => {
+      currentUserRole.value = user.role
+      ensureReviewTabs()
+      void loadOwnerReviews()
+      if (isSystemAdmin.value) void loadAdminReviews()
+    })
+    .catch(() => {
+      currentUserRole.value = null
+      ensureReviewTabs()
+      void loadOwnerReviews()
+    })
   // 立即清理一次过期标签，然后每 10 分钟检查
   cleanupExpiredTabs()
   cleanupTimer = setInterval(cleanupExpiredTabs, 10 * 60 * 1000)
@@ -618,7 +748,7 @@ onBeforeUnmount(() => {
       >
         <span class="max-w-[160px] truncate">{{ tab.label }}</span>
         <span
-          v-if="tab.type !== 'main'"
+          v-if="tab.type === 'skill'"
           class="ml-0.5 flex h-4 w-4 items-center justify-center rounded-full text-[#9ca3af] hover:bg-[#e5e7eb] hover:text-[#1f2937] transition-colors flex-shrink-0"
           @click.stop="closeTab(tab.id)"
         >
@@ -634,7 +764,7 @@ onBeforeUnmount(() => {
       <!-- ── 主界面标签页：技能列表 ── -->
       <template v-if="activeTab.type === 'main'">
         <!-- 筛选栏 -->
-        <div class="flex flex-shrink-0 items-center gap-2 px-5 py-2 bg-white">
+        <div class="flex flex-shrink-0 items-center h-9 px-5 gap-2 bg-white font-hans">
           <select
             :value="sort"
             class="h-7 py-0 leading-none border-0 border-b-2 border-[#e5e7eb] bg-transparent pl-0 pr-4 text-xs text-[#4b5563] outline-none cursor-pointer hover:border-[#1f2937] transition-colors duration-200 font-hans"
@@ -798,6 +928,184 @@ onBeforeUnmount(() => {
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
               </svg>
             </button>
+          </div>
+        </div>
+      </template>
+
+      <!-- ── Owner 审核标签页 ── -->
+      <template v-else-if="activeTab.type === 'owner-reviews'">
+        <div class="flex flex-shrink-0 items-center h-9 px-5 gap-2 bg-white font-hans">
+          <span class="!text-xs font-semibold text-[#1f2937]">我的审核</span>
+          <span class="!text-xs text-[#9ca3af]">待技能管理者确认的发布请求</span>
+          <div class="flex-1"></div>
+          <button
+            type="button"
+            class="!text-xs text-[#6b7280] hover:text-[#1f2937] hover:underline"
+            @click="loadOwnerReviews"
+          >
+            刷新
+          </button>
+          <span class="text-xs text-[#9ca3af]">共 {{ ownerReviews.length }} 条</span>
+        </div>
+
+        <div class="min-h-0 flex-1 overflow-y-auto px-5 py-4 font-hans">
+          <div v-if="ownerReviewsLoading" class="py-16 text-center text-sm text-[#9ca3af]">
+            加载中...
+          </div>
+          <div v-else-if="ownerReviews.length === 0" class="py-16 text-center text-sm text-[#9ca3af]">
+            暂无待处理的 Owner 审核。
+          </div>
+          <div v-else class="space-y-4">
+            <div
+              v-for="review in ownerReviews"
+              :key="review.id"
+              class="rounded-xl border border-[#e5e7eb] bg-white p-4"
+            >
+              <div class="flex flex-col gap-4 lg:flex-row lg:items-start">
+                <div class="min-w-0 flex-1">
+                  <div class="mb-2 flex flex-wrap items-center gap-2">
+                    <span class="text-sm font-semibold text-[#1f2937]">{{ reviewTitle(review) }}</span>
+                    <span class="rounded-md bg-[#f3f4f6] px-1.5 py-0.5 text-[10px] tabular-nums text-[#6b7280]">v{{ review.version }}</span>
+                    <span class="rounded-md bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-700">{{ review.status }}</span>
+                    <span class="text-xs text-[#9ca3af]">{{ formatDate(review.created_at) }}</span>
+                  </div>
+                  <div v-if="parseTags(review.tags).length > 0" class="mb-3 flex flex-wrap gap-1.5">
+                    <span
+                      v-for="tag in parseTags(review.tags)"
+                      :key="tag"
+                      class="rounded-md bg-[#f3f4f6] px-2 py-0.5 text-xs text-[#6b7280]"
+                    >
+                      {{ tag }}
+                    </span>
+                  </div>
+                  <div v-if="review.changelog" class="mb-3 rounded-lg bg-[#f9fafb] px-3 py-2">
+                    <div class="mb-1 text-[10px] font-semibold uppercase tracking-wide text-[#9ca3af]">Changelog</div>
+                    <p class="whitespace-pre-wrap text-xs leading-relaxed text-[#374151]">{{ review.changelog }}</p>
+                  </div>
+                  <div v-if="review.readme_md" class="rounded-lg border border-[#e5e7eb] bg-[#fafafa] p-3">
+                    <div class="mb-2 text-[10px] font-semibold uppercase tracking-wide text-[#9ca3af]">README</div>
+                    <div class="markdown-body max-h-[320px] overflow-y-auto text-sm" v-html="renderMarkdown(review.readme_md)" />
+                  </div>
+                </div>
+
+                <div class="w-full flex-shrink-0 lg:w-[260px]">
+                  <label class="mb-1.5 block text-xs font-semibold text-[#4b5563]">审核备注</label>
+                  <textarea
+                    v-model="ownerReviewNote"
+                    rows="4"
+                    class="mb-3 w-full resize-none rounded-xl border border-[#d1d5db] bg-white px-3 py-2 text-xs text-[#1f2937] placeholder:text-[#9ca3af] outline-none focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20"
+                    placeholder="可选"
+                  ></textarea>
+                  <div class="flex gap-2">
+                    <button
+                      type="button"
+                      class="h-9 flex-1 rounded-xl border border-[#efb3a7] bg-white text-xs font-semibold text-[#b91c1c] transition hover:bg-[#fee2e2] active:scale-95 disabled:opacity-50"
+                      :disabled="reviewingVersionId === review.id"
+                      @click="decideOwnerReview(review, 'reject')"
+                    >
+                      拒绝
+                    </button>
+                    <button
+                      type="button"
+                      class="h-9 flex-1 rounded-xl bg-[#1f2937] text-xs font-semibold text-white transition hover:bg-[#111827] active:scale-95 disabled:opacity-50"
+                      :disabled="reviewingVersionId === review.id"
+                      @click="decideOwnerReview(review, 'approve')"
+                    >
+                      通过
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </template>
+
+      <!-- ── 系统管理员审核标签页 ── -->
+      <template v-else-if="activeTab.type === 'admin-reviews'">
+        <div class="flex flex-shrink-0 items-center h-9 px-5 gap-2 bg-white font-hans">
+          <span class="!text-xs font-semibold text-[#1f2937]">社区审核</span>
+          <span class="!text-xs text-[#9ca3af]">待社区管理员上架确认的发布请求</span>
+          <div class="flex-1"></div>
+          <button
+            type="button"
+            class="!text-xs text-[#6b7280] hover:text-[#1f2937] hover:underline"
+            @click="loadAdminReviews"
+          >
+            刷新
+          </button>
+          <span class="text-xs text-[#9ca3af]">共 {{ adminReviews.length }} 条</span>
+        </div>
+
+        <div class="min-h-0 flex-1 overflow-y-auto px-5 py-4 font-hans">
+          <div v-if="adminReviewsLoading" class="py-16 text-center text-sm text-[#9ca3af]">
+            加载中...
+          </div>
+          <div v-else-if="adminReviews.length === 0" class="py-16 text-center text-sm text-[#9ca3af]">
+            暂无待处理的社区审核。
+          </div>
+          <div v-else class="space-y-4">
+            <div
+              v-for="review in adminReviews"
+              :key="review.id"
+              class="rounded-xl border border-[#e5e7eb] bg-white p-4"
+            >
+              <div class="flex flex-col gap-4 lg:flex-row lg:items-start">
+                <div class="min-w-0 flex-1">
+                  <div class="mb-2 flex flex-wrap items-center gap-2">
+                    <span class="text-sm font-semibold text-[#1f2937]">{{ reviewTitle(review) }}</span>
+                    <span class="rounded-md bg-[#f3f4f6] px-1.5 py-0.5 text-[10px] tabular-nums text-[#6b7280]">v{{ review.version }}</span>
+                    <span class="rounded-md bg-sky-50 px-1.5 py-0.5 text-[10px] text-sky-700">{{ review.status }}</span>
+                    <span class="text-xs text-[#9ca3af]">{{ formatDate(review.created_at) }}</span>
+                  </div>
+                  <div v-if="parseTags(review.tags).length > 0" class="mb-3 flex flex-wrap gap-1.5">
+                    <span
+                      v-for="tag in parseTags(review.tags)"
+                      :key="tag"
+                      class="rounded-md bg-[#f3f4f6] px-2 py-0.5 text-xs text-[#6b7280]"
+                    >
+                      {{ tag }}
+                    </span>
+                  </div>
+                  <div v-if="review.changelog" class="mb-3 rounded-lg bg-[#f9fafb] px-3 py-2">
+                    <div class="mb-1 text-[10px] font-semibold uppercase tracking-wide text-[#9ca3af]">Changelog</div>
+                    <p class="whitespace-pre-wrap text-xs leading-relaxed text-[#374151]">{{ review.changelog }}</p>
+                  </div>
+                  <div v-if="review.readme_md" class="rounded-lg border border-[#e5e7eb] bg-[#fafafa] p-3">
+                    <div class="mb-2 text-[10px] font-semibold uppercase tracking-wide text-[#9ca3af]">README</div>
+                    <div class="markdown-body max-h-[320px] overflow-y-auto text-sm" v-html="renderMarkdown(review.readme_md)" />
+                  </div>
+                </div>
+
+                <div class="w-full flex-shrink-0 lg:w-[260px]">
+                  <label class="mb-1.5 block text-xs font-semibold text-[#4b5563]">审核备注</label>
+                  <textarea
+                    v-model="adminReviewNote"
+                    rows="4"
+                    class="mb-3 w-full resize-none rounded-xl border border-[#d1d5db] bg-white px-3 py-2 text-xs text-[#1f2937] placeholder:text-[#9ca3af] outline-none focus:border-[#1f2937] focus:ring-2 focus:ring-[#1f2937]/20"
+                    placeholder="可选"
+                  ></textarea>
+                  <div class="flex gap-2">
+                    <button
+                      type="button"
+                      class="h-9 flex-1 rounded-xl border border-[#efb3a7] bg-white text-xs font-semibold text-[#b91c1c] transition hover:bg-[#fee2e2] active:scale-95 disabled:opacity-50"
+                      :disabled="reviewingVersionId === review.id"
+                      @click="decideAdminReview(review, 'reject')"
+                    >
+                      拒绝
+                    </button>
+                    <button
+                      type="button"
+                      class="h-9 flex-1 rounded-xl bg-[#1f2937] text-xs font-semibold text-white transition hover:bg-[#111827] active:scale-95 disabled:opacity-50"
+                      :disabled="reviewingVersionId === review.id"
+                      @click="decideAdminReview(review, 'approve')"
+                    >
+                      上架
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </template>

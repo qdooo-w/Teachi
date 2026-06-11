@@ -30,6 +30,7 @@ import {
   SKILL_DESCRIPTION_MAX,
   SKILL_DISPLAY_NAME_MAX,
 } from '../config'
+import { confirmDanger, confirmWarning } from '../composables/useConfirmDialog'
 
 const props = defineProps<{
   space: FileSpace
@@ -192,8 +193,12 @@ function resetEditor(): void {
   markClean()
 }
 
-function confirmDiscard(message = '有未保存的更改，确定要切换吗？'): boolean {
-  return !dirty.value || confirm(message)
+async function confirmDiscard(message = '有未保存的更改，确定要切换吗？'): Promise<boolean> {
+  return !dirty.value || await confirmWarning({
+    title: '未保存的更改',
+    message,
+    confirmText: '继续',
+  })
 }
 
 async function loadSkills(): Promise<void> {
@@ -247,7 +252,7 @@ function loadSkillForm(content: string, folderName: string): void {
 
 async function openFile(relPath: string, askBeforeSwitch = true): Promise<void> {
   if (!selectedName.value) return
-  if (askBeforeSwitch && !confirmDiscard()) return
+  if (askBeforeSwitch && !await confirmDiscard()) return
   const pathError = validateSkillRelativePath(relPath, true)
   if (pathError) {
     errorMsg.value = pathError
@@ -280,7 +285,7 @@ async function openFile(relPath: string, askBeforeSwitch = true): Promise<void> 
 }
 
 async function selectSkill(name: string): Promise<void> {
-  if (!confirmDiscard()) return
+  if (!await confirmDiscard()) return
   isNew.value = false
   selectedName.value = name
   selectedPath.value = 'SKILL.md'
@@ -291,8 +296,8 @@ async function selectSkill(name: string): Promise<void> {
   await openFile('SKILL.md', false)
 }
 
-function startNew(): void {
-  if (!confirmDiscard('有未保存的更改，确定要新建吗？')) return
+async function startNew(): Promise<void> {
+  if (!await confirmDiscard('有未保存的更改，确定要新建吗？')) return
   isNew.value = true
   selectedName.value = null
   selectedPath.value = null
@@ -465,7 +470,12 @@ async function save(): Promise<void> {
 async function remove(skillName?: string): Promise<void> {
   const targetName = skillName || selectedName.value
   if (!targetName) return
-  if (!confirm(`确定要删除技能 "${targetName}" 吗？此操作不可撤销。`)) return
+  const confirmed = await confirmDanger({
+    title: '删除技能',
+    message: `确定要删除技能 "${targetName}" 吗？此操作不可撤销。`,
+    confirmText: '删除',
+  })
+  if (!confirmed) return
   deleting.value = true
   errorMsg.value = ''
   publishMsg.value = ''
@@ -487,7 +497,12 @@ async function remove(skillName?: string): Promise<void> {
 
 async function removeFile(relPath: string): Promise<void> {
   if (!selectedName.value || relPath === 'SKILL.md') return
-  if (!confirm(`确定要删除文件 "${relPath}" 吗？此操作不可撤销。`)) return
+  const confirmed = await confirmDanger({
+    title: '删除文件',
+    message: `确定要删除文件 "${relPath}" 吗？此操作不可撤销。`,
+    confirmText: '删除',
+  })
+  if (!confirmed) return
   deletingFile.value = true
   errorMsg.value = ''
   publishMsg.value = ''
@@ -516,7 +531,7 @@ function askTargetFolder(defaultFolder: '' | SkillResourceDir = ''): '' | SkillR
 
 async function addFile(defaultFolder: '' | SkillResourceDir = ''): Promise<void> {
   if (!selectedName.value) return
-  if (!confirmDiscard()) return
+  if (!await confirmDiscard()) return
   errorMsg.value = ''
   publishMsg.value = ''
   const folder = askTargetFolder(defaultFolder)
@@ -565,7 +580,12 @@ async function addFolder(): Promise<void> {
 
 async function publishToCommunity(): Promise<void> {
   if (!canPublish.value || !selectedName.value) return
-  if (!confirm(`将 "${selectedName.value}" 发布到社区，让所有用户可见并下载？`)) return
+  const confirmed = await confirmWarning({
+    title: '发布到社区',
+    message: `将 "${selectedName.value}" 发布到社区，让所有用户可见并下载？`,
+    confirmText: '发布',
+  })
+  if (!confirmed) return
 
   publishing.value = true
   errorMsg.value = ''
@@ -580,8 +600,8 @@ async function publishToCommunity(): Promise<void> {
   }
 }
 
-function handleClose(): void {
-  if (!confirmDiscard('有未保存的更改，确定要关闭吗？')) return
+async function handleClose(): Promise<void> {
+  if (!await confirmDiscard('有未保存的更改，确定要关闭吗？')) return
   emit('close')
 }
 
@@ -795,7 +815,7 @@ onBeforeUnmount(() => {
                           v-if="isNew"
                           v-model="form.name"
                           class="h-9 w-full rounded-xl border border-slate-200/80 bg-slate-50/50 px-3 text-xs outline-none transition duration-150 focus:bg-white focus:border-slate-400 focus:ring-2 focus:ring-slate-900/5"
-                          placeholder="my-skill-name（小写字母、数字、连字符）"
+                          placeholder="中文-name_01"
                           type="text"
                         />
                         <div v-else class="flex h-9 items-center rounded-xl border border-slate-200 bg-slate-100/50 px-3 text-xs font-medium text-slate-700">
@@ -1027,4 +1047,3 @@ onBeforeUnmount(() => {
   opacity: 0;
 }
 </style>
-

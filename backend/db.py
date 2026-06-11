@@ -488,7 +488,7 @@ class MessagesFacade(_DataBase):
                 JOIN sessions AS s ON m.sid = s.sid
                 JOIN projects AS p ON s.pid = p.pid
                 LEFT JOIN messages AS a ON m.anchor_msg_id = a.msg_id
-                WHERE m.sid = ? AND p.user_uuid = ?
+                WHERE m.sid = ? AND p.user_uuid = ? AND m.version = 0
                 ORDER BY COALESCE(a.timestamp, m.timestamp) DESC, m.timestamp DESC
                 LIMIT ? OFFSET ?
                 """,
@@ -829,11 +829,56 @@ class ModelConfigsFacade(_DataBase):
             rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
-    def get_active_for_user(self, user_uuid: str) -> dict | None:
-        """获取用户当前激活的模型配置。如果没有激活配置则返回 None。"""
+    def list_active_for_user(self, user_uuid: str) -> list[dict]:
+        """获取用户当前激活的全部模型配置。
+
+        运行时最多允许两条 active，校验由 settings 路由负责；这里按普通模型优先、
+        创建时间升序返回，便于调用方稳定选出主模型。
+        """
         with self._cursor() as cursor:
             cursor.execute(
-                f"SELECT {self._COLUMNS} FROM user_model_configs WHERE user_uuid = ? AND is_active = 1 LIMIT 1",
+                f"""
+                SELECT {self._COLUMNS}
+                FROM user_model_configs
+                WHERE user_uuid = ? AND is_active = 1
+                ORDER BY supports_vision ASC, created_at ASC
+                """,
+                (user_uuid,),
+            )
+            rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+
+    def get_active_for_user(self, user_uuid: str) -> dict | None:
+        """获取用户当前主模型配置。如果没有激活配置则返回 None。
+
+        当用户同时激活普通模型和视觉模型时，普通模型作为主模型，视觉模型
+        只作为图片理解辅助模型使用。
+        """
+        with self._cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT {self._COLUMNS}
+                FROM user_model_configs
+                WHERE user_uuid = ? AND is_active = 1
+                ORDER BY supports_vision ASC, created_at ASC
+                LIMIT 1
+                """,
+                (user_uuid,),
+            )
+            row = cursor.fetchone()
+        return self._row_to_dict(row)
+
+    def get_active_vision_for_user(self, user_uuid: str) -> dict | None:
+        """获取用户当前激活的视觉辅助模型配置。"""
+        with self._cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT {self._COLUMNS}
+                FROM user_model_configs
+                WHERE user_uuid = ? AND is_active = 1 AND supports_vision = 1
+                ORDER BY created_at ASC
+                LIMIT 1
+                """,
                 (user_uuid,),
             )
             row = cursor.fetchone()
@@ -900,29 +945,30 @@ class ModelConfigsFacade(_DataBase):
         return self.get_for_user(config_id, user_uuid)
 
     def set_active_for_user(self, config_id: str, user_uuid: str) -> dict | None:
-        """将指定配置设为激活状态，同时取消该用户其他配置的激活状态。
+        """将指定配置标记为激活状态，不再自动取消其他配置。
 
-        使用 CASE WHEN 单条 SQL 原子完成切换，避免两条 UPDATE 之间的并发窗口。
-        若目标不存在或不属于该用户，不执行任何写入，直接返回 None。
+        active 组合合法性由 settings 路由在调用前校验。
         """
-        # 先验证目标配置存在且属于该用户
+        return self.set_active_status_for_user(config_id, user_uuid, is_active=True)
+
+    def set_active_status_for_user(self, config_id: str, user_uuid: str, *, is_active: bool) -> dict | None:
+        """设置单条模型配置的激活状态。"""
         target = self.get_for_user(config_id, user_uuid)
         if target is None:
             return None
 
         now_ts = self._now_timestamp()
         with self._cursor() as cursor:
-            # 单条 SQL 原子操作：属于该用户的所有配置，目标设为 1，其余设为 0
             cursor.execute(
                 """
                 UPDATE user_model_configs
-                SET is_active = CASE WHEN config_id = ? THEN 1 ELSE 0 END,
-                    updated_at = ?
-                WHERE user_uuid = ?
-                  AND (is_active = 1 OR config_id = ?)
+                SET is_active = ?, updated_at = ?
+                WHERE config_id = ? AND user_uuid = ?
                 """,
-                (config_id, now_ts, user_uuid, config_id),
+                (1 if is_active else 0, now_ts, config_id, user_uuid),
             )
+            if cursor.rowcount == 0:
+                return None
         return self.get_for_user(config_id, user_uuid)
 
     def deactivate_all_for_user(self, user_uuid: str) -> bool:
@@ -946,11 +992,8 @@ class ModelConfigsFacade(_DataBase):
         return affected > 0
 
     def user_model_config_supports_vision(self, user_uuid: str) -> bool:
-        """检查用户当前激活的配置是否支持视觉。"""
-        active_config = self.get_active_for_user(user_uuid)
-        if active_config is None:
-            return False
-        return bool(active_config.get("supports_vision", 0))
+        """检查用户当前是否激活了视觉模型配置。"""
+        return self.get_active_vision_for_user(user_uuid) is not None
 
 class UserPreferencesFacade(_DataBase):
     """用户偏好设置管理。"""
@@ -1445,6 +1488,7 @@ class UserLibrarySkillsFacade(_DataBase):
         tags: str,
         version: str,
         changelog: str,
+        source: str = "runtime",
         community_skill_id: str | None,
         local_path: str,
         size_bytes: int,
@@ -1461,6 +1505,7 @@ class UserLibrarySkillsFacade(_DataBase):
             tags: 标签 JSON 数组
             version: 版本号
             changelog: 变更说明
+            source: 来源类型 (runtime / zip / community / fork)
             community_skill_id: 关联的社区技能 ID，为空表示来自运行层
             local_path: 本地文件路径
             size_bytes: 文件大小
@@ -1475,10 +1520,10 @@ class UserLibrarySkillsFacade(_DataBase):
             cursor.execute(
                 """
                 INSERT INTO user_library_skills
-                (id, user_uuid, name, display_name, description, readme_md, tags, version, changelog, community_skill_id, local_path, size_bytes, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, user_uuid, name, display_name, description, readme_md, tags, version, changelog, source, community_skill_id, local_path, size_bytes, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (skill_id, user_uuid, name, display_name, description, readme_md, tags, version, changelog, community_skill_id, local_path, size_bytes, now_ts, now_ts)
+                (skill_id, user_uuid, name, display_name, description, readme_md, tags, version, changelog, source, community_skill_id, local_path, size_bytes, now_ts, now_ts)
             )
         record = self.get_by_id(skill_id)
         if record is None:
@@ -1493,23 +1538,90 @@ class UserLibrarySkillsFacade(_DataBase):
 
     def get_latest_by_name(self, user_uuid: str, name: str) -> dict | None:
         """
-        按技能唯一标识名称 and 用户 UUID 获取仓库中最新的记录
+        按技能唯一标识名称或显示名称 and 用户 UUID 获取仓库中最新的记录
         
         【调用链】
         - 被用于 `GET /library/skills/parse-runtime` 接口，用以做同名技能的匹配与表单自动预填。
         """
         with self._cursor() as cursor:
             cursor.execute(
-                "SELECT * FROM user_library_skills WHERE user_uuid = ? AND name = ? ORDER BY created_at DESC LIMIT 1",
-                (user_uuid, name)
+                """
+                SELECT * FROM user_library_skills 
+                WHERE user_uuid = ? AND (name = ? OR display_name = ?) 
+                ORDER BY created_at DESC LIMIT 1
+                """,
+                (user_uuid, name, name)
             )
             return self._row_to_dict(cursor.fetchone())
 
-    def list_by_user(self, user_uuid: str) -> list[dict]:
-        """获取该用户个人仓库下的所有技能列表"""
+    def list_by_user_filtered(
+        self,
+        user_uuid: str,
+        *,
+        keyword: str | None = None,
+        tags: list[str] | None = None,
+        sort: str = "newest",
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[dict]:
+        """获取用户仓库技能列表，支持关键词/标签筛选、排序与分页"""
+        where_clauses = ["user_uuid = ?"]
+        params: list[Any] = [user_uuid]
+
+        if keyword:
+            kw = f"%{keyword}%"
+            where_clauses.append("(name LIKE ? OR display_name LIKE ? OR description LIKE ?)")
+            params.extend([kw, kw, kw])
+
+        if tags:
+            for tag in tags:
+                where_clauses.append("tags LIKE ?")
+                params.append(f'%"{tag}"%')
+
+        where_sql = " AND ".join(where_clauses)
+
+        sort_map = {
+            "newest": "created_at DESC",
+            "oldest": "created_at ASC",
+            "name-asc": "name COLLATE NOCASE ASC",
+            "name-desc": "name COLLATE NOCASE DESC",
+        }
+        order_sql = sort_map.get(sort, "created_at DESC")
+
         with self._cursor() as cursor:
-            cursor.execute("SELECT * FROM user_library_skills WHERE user_uuid = ? ORDER BY created_at DESC", (user_uuid,))
+            cursor.execute(
+                f"SELECT * FROM user_library_skills WHERE {where_sql} ORDER BY {order_sql} LIMIT ? OFFSET ?",
+                params + [limit, offset],
+            )
             return [dict(row) for row in cursor.fetchall()]
+
+    def count_by_user(
+        self,
+        user_uuid: str,
+        *,
+        keyword: str | None = None,
+        tags: list[str] | None = None,
+    ) -> int:
+        """统计符合筛选条件的用户仓库技能总数"""
+        where_clauses = ["user_uuid = ?"]
+        params: list[Any] = [user_uuid]
+
+        if keyword:
+            kw = f"%{keyword}%"
+            where_clauses.append("(name LIKE ? OR display_name LIKE ? OR description LIKE ?)")
+            params.extend([kw, kw, kw])
+
+        if tags:
+            for tag in tags:
+                where_clauses.append("tags LIKE ?")
+                params.append(f'%"{tag}"%')
+
+        where_sql = " AND ".join(where_clauses)
+
+        with self._cursor() as cursor:
+            cursor.execute(f"SELECT COUNT(*) FROM user_library_skills WHERE {where_sql}", params)
+            row = cursor.fetchone()
+            return row[0] if row else 0
 
     def update_community_skill_id(self, library_id: str, community_skill_id: str) -> bool:
         """
@@ -1525,6 +1637,82 @@ class UserLibrarySkillsFacade(_DataBase):
                 (community_skill_id, now_ts, library_id)
             )
             return cursor.rowcount > 0
+
+    def update_meta(
+        self,
+        library_id: str,
+        user_uuid: str,
+        *,
+        name: str | None = None,
+        display_name: str | None = None,
+        description: str | None = None,
+        readme_md: str | None = None,
+        tags: str | None = None,
+        version: str | None = None,
+    ) -> bool:
+        """更新个人仓库技能的展示元数据。
+        
+        只更新非 None 的字段，带有 user_uuid 权限校验。
+        """
+        updates = []
+        params = []
+        if name is not None:
+            updates.append("name = ?")
+            params.append(name)
+        if display_name is not None:
+            updates.append("display_name = ?")
+            params.append(display_name)
+        if description is not None:
+            updates.append("description = ?")
+            params.append(description)
+        if readme_md is not None:
+            updates.append("readme_md = ?")
+            params.append(readme_md)
+        if tags is not None:
+            updates.append("tags = ?")
+            params.append(tags)
+        if version is not None:
+            updates.append("version = ?")
+            params.append(version)
+            
+        if not updates:
+            return False
+            
+        now_ts = self._now_timestamp()
+        updates.append("updated_at = ?")
+        params.append(now_ts)
+        
+        sql = f"UPDATE user_library_skills SET {', '.join(updates)} WHERE id = ? AND user_uuid = ?"
+        params.extend([library_id, user_uuid])
+        
+        with self._cursor() as cursor:
+            cursor.execute(sql, tuple(params))
+            return cursor.rowcount > 0
+
+    def list_by_user(self, user_uuid: str) -> list[dict]:
+        """获取指定用户的全部仓库技能列表，用以向后兼容测试。"""
+        return self.list_by_user_filtered(user_uuid)
+
+    def delete_for_user(self, skill_id: str, user_uuid: str) -> bool:
+        """删除单条仓库技能记录（含权限校验）。"""
+        with self._cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM user_library_skills WHERE id = ? AND user_uuid = ?",
+                (skill_id, user_uuid),
+            )
+            return cursor.rowcount > 0
+
+    def delete_bulk_for_user(self, skill_ids: list[str], user_uuid: str) -> int:
+        """批量删除仓库技能记录，返回实际删除数量。"""
+        if not skill_ids:
+            return 0
+        placeholders = ",".join("?" for _ in skill_ids)
+        with self._cursor() as cursor:
+            cursor.execute(
+                f"DELETE FROM user_library_skills WHERE id IN ({placeholders}) AND user_uuid = ?",
+                (*skill_ids, user_uuid),
+            )
+            return cursor.rowcount
 
 class ReviewLogsFacade(_DataBase):
     """
@@ -2067,6 +2255,7 @@ class DatabaseFacade:
                 tags TEXT NOT NULL DEFAULT '[]',
                 version TEXT NOT NULL,
                 changelog TEXT DEFAULT '',
+                source TEXT NOT NULL DEFAULT 'runtime',
                 community_skill_id TEXT,
                 local_path TEXT NOT NULL,
                 size_bytes INTEGER NOT NULL DEFAULT 0,
@@ -2202,6 +2391,12 @@ class DatabaseFacade:
                 cursor.execute("ALTER TABLE user_model_configs ADD COLUMN presence_penalty REAL")
             if "response_format" not in mc_cols:
                 cursor.execute("ALTER TABLE user_model_configs ADD COLUMN response_format TEXT")
+
+            # user_library_skills.source — 记录技能来源
+            cursor.execute("PRAGMA table_info(user_library_skills)")
+            lib_cols = {row[1] for row in cursor.fetchall()}
+            if "source" not in lib_cols:
+                cursor.execute("ALTER TABLE user_library_skills ADD COLUMN source TEXT NOT NULL DEFAULT 'runtime'")
 
         logger.info("Database setup completed")
 

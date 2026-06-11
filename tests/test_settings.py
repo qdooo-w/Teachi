@@ -32,6 +32,7 @@ def settings_app(tmp_path, monkeypatch):
     facade.setup_database()
 
     app = FastAPI()
+    app.state.facade = facade
     app.dependency_overrides[get_db] = lambda: facade
     app.include_router(auth_router)
     app.include_router(settings_router)
@@ -47,8 +48,11 @@ def sclient(settings_app):
 
 
 def _reg(client, email='user@test.com', username='testuser', password='password123'):
-    r = client.post('/auth/register', json={'username': username, 'email': email, 'password': password})
-    assert r.status_code == 201
+    from backend.auth import hash_password
+
+    facade = client.app.state.facade
+    if facade.users.get_by_email(email) is None:
+        facade.users.create(username=username, email=email, password_hash=hash_password(password))
     r = client.post('/auth/login', json={'email': email, 'password': password})
     assert r.status_code == 200
     return r.json()['access_token']
@@ -162,6 +166,83 @@ class TestModelConfigUserInstruction:
         token = _reg(sclient)
         r = sclient.post('/settings/model-configs', headers=auth_headers(token), json={'config_name': 'NoInst'})
         assert r.json()['user_instruction'] == ''
+
+
+class TestModelConfigActivationRules:
+    def _create_config(self, client, token, name: str, *, supports_vision: bool = False, is_active: bool = False):
+        r = client.post('/settings/model-configs', headers=auth_headers(token), json={
+            'config_name': name,
+            'model_name': name,
+            'supports_vision': supports_vision,
+            'is_active': is_active,
+        })
+        assert r.status_code == 201, r.text
+        return r.json()
+
+    def test_second_active_model_must_be_vision(self, sclient):
+        token = _reg(sclient)
+        text_a = self._create_config(sclient, token, 'text-a')
+        text_b = self._create_config(sclient, token, 'text-b')
+        vision = self._create_config(sclient, token, 'vision-a', supports_vision=True)
+
+        r = sclient.post(f"/settings/model-configs/{text_a['config_id']}/activate", headers=auth_headers(token))
+        assert r.status_code == 200
+        assert r.json()['is_active'] is True
+
+        r = sclient.post(f"/settings/model-configs/{text_b['config_id']}/activate", headers=auth_headers(token))
+        assert r.status_code == 400
+        assert r.json()['detail']['code'] == 'ACTIVE_MODEL_REQUIRES_VISION'
+
+        r = sclient.post(f"/settings/model-configs/{vision['config_id']}/activate", headers=auth_headers(token))
+        assert r.status_code == 200
+        assert r.json()['is_active'] is True
+
+        r = sclient.post(f"/settings/model-configs/{text_b['config_id']}/activate", headers=auth_headers(token))
+        assert r.status_code == 400
+        assert r.json()['detail']['code'] == 'ACTIVE_MODEL_LIMIT'
+
+        r = sclient.post(f"/settings/model-configs/{text_a['config_id']}/activate", headers=auth_headers(token))
+        assert r.status_code == 200
+        assert r.json()['is_active'] is False
+
+        r = sclient.post(f"/settings/model-configs/{text_b['config_id']}/activate", headers=auth_headers(token))
+        assert r.status_code == 200
+        assert r.json()['is_active'] is True
+
+        r = sclient.get('/settings/model-configs/active', headers=auth_headers(token))
+        assert r.status_code == 200
+        data = r.json()
+        assert len(data['configs']) == 2
+        assert data['config']['config_id'] == text_b['config_id']
+        assert {c['config_id'] for c in data['configs']} == {text_b['config_id'], vision['config_id']}
+
+    def test_create_active_pair_rejects_two_text_models(self, sclient):
+        token = _reg(sclient)
+        self._create_config(sclient, token, 'text-a', is_active=True)
+
+        r = sclient.post('/settings/model-configs', headers=auth_headers(token), json={
+            'config_name': 'text-b',
+            'supports_vision': False,
+            'is_active': True,
+        })
+        assert r.status_code == 400
+        assert r.json()['detail']['code'] == 'ACTIVE_MODEL_REQUIRES_VISION'
+
+        vision = self._create_config(sclient, token, 'vision-a', supports_vision=True, is_active=True)
+        assert vision['is_active'] is True
+
+    def test_active_vision_mark_cannot_be_removed_from_pair(self, sclient):
+        token = _reg(sclient)
+        text = self._create_config(sclient, token, 'text-a')
+        vision = self._create_config(sclient, token, 'vision-a', supports_vision=True)
+        sclient.post(f"/settings/model-configs/{text['config_id']}/activate", headers=auth_headers(token))
+        sclient.post(f"/settings/model-configs/{vision['config_id']}/activate", headers=auth_headers(token))
+
+        r = sclient.patch(f"/settings/model-configs/{vision['config_id']}", headers=auth_headers(token), json={
+            'supports_vision': False,
+        })
+        assert r.status_code == 400
+        assert r.json()['detail']['code'] == 'ACTIVE_MODEL_REQUIRES_VISION'
 
 
 class TestFetchModels:

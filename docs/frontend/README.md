@@ -34,17 +34,20 @@ frontend/
    │  ├─ useAuth.ts         token / bootstrapping / preparing / 登录 / 登出 / onTokenReady 钩子
    │  ├─ useCommunity.ts    社区搜索词、触发搜索、上传弹层状态（模块级单例）
    │  ├─ useLayout.ts       sidebarOpen / isMobile / handleResize / closeSidebarOnMobile
-   │  ├─ usePreferences.ts  发送键偏好（enter_mode）模块级单例，跨 SettingsDialog / ChatView 共享
-   │  ├─ useProjects.ts     模块级 projects 单例 + load/upsert/remove/prepend/reset，loadProjects 去重并发
-   │  └─ useProjectSkills.ts 每个 pid 的技能列表缓存 + refresh，跨 App.vue / ChatView 共享
+   │  ├─ usePreferences.ts      发送键偏好（enter_mode）模块级单例，跨 SettingsDialog / ChatView 共享
+   │  ├─ useProjects.ts         模块级 projects 单例 + load/upsert/remove/prepend/reset，loadProjects 去重并发
+   │  ├─ useProjectSkills.ts    每个 pid 的技能列表缓存 + refresh，跨 App.vue / ChatView 共享
+   │  └─ useChatSkillSidebar.ts 聊天页内联编辑状态单例（chatSidebarOpen / editingSkill），跨 App / ChatView / ChatSkillSidebar 共享
    ├─ views/
    │  ├─ OverviewView.vue   `/`：科目卡片总览 + 新建科目
    │  ├─ SubjectView.vue    `/projects/:pid`：该科目会话列表 + 首条消息创建会话
    │  ├─ ChatView.vue       `/projects/:pid/sessions/:sid`：消息流 + composer + SSE 主循环 + skill picker
-   │  └─ CommunityView.vue  `/community`：社区技能列表、ZIP 上传、详情、安装与作者删除
+   │  ├─ CommunityView.vue  `/community`：社区技能列表、ZIP 上传、详情、安装与作者删除
+   │  └─ LibraryView.vue    `/library`：我的技能仓库，含导入控制台、队列配置、标签页管理器与表单编辑
    ├─ components/
    │  ├─ ConfirmDialog.vue         二次确认对话框（危险操作，含删除回合）
    │  ├─ EditPromptDialog.vue      编辑后重放：textarea + Ctrl/⌘+Enter 提交 / Esc 取消
+   │  ├─ LibraryUploadDialog.vue  技能仓库 ZIP 上传模态框（支持拖拽与多文件）
    │  ├─ MediaPreviewDialog.vue    图片/文件预览模态框（缩放、重置视图）
    │  ├─ MessageContent.vue        Markdown 消息渲染与代码块复制、Mermaid 延迟渲染
    │  ├─ RenameInline.vue          行内重命名输入（回车提交 / Esc 取消）
@@ -52,7 +55,9 @@ frontend/
    │  ├─ SettingsDialog.vue        设置中心对话框（模型配置、账号设置、偏好设置）
    │  ├─ SkillChips.vue            已选技能的 chip 行（发送时随消息带走）
    │  ├─ SkillManagerDialog.vue    用户级 / 项目级技能管理对话框（结构化表单 + 原始兜底）
-   │  └─ SkillPicker.vue           @ 触发的技能下拉选择器，支持搜索与键盘导航
+   │  ├─ SkillPicker.vue           @ 触发的技能下拉选择器，支持搜索与键盘导航
+   │  ├─ ChatSkillSidebar.vue      聊天页内联技能侧边栏（用户级 + 项目级技能列表）
+   │  └─ SkillEditorPanel.vue      技能内联编辑面板（文件树 + 结构化表单 / Markdown 编辑）
    └─ markdown/
       ├─ renderer.ts       markdown-it 单例 + KaTeX + 代码块 / 链接 / mermaid 自定义渲染 + DOMPurify
       ├─ highlight.ts      highlight.js 按需注册语言
@@ -75,11 +80,15 @@ main.ts
     ├─ skills.ts                     ── 依赖 api.ts 的通用文件 API
     └─ <RouterView>
         ├─ views/OverviewView.vue    ── useProjects / useLayout + Row/Rename/Confirm
-        ├─ views/SubjectView.vue     ── useProjects / useLayout + listSessions/createSession/...
+        ├─ views/SubjectView.vue     ── useProjects / useLayout + useChatSkillSidebar(editingSkill / closeEditor)
+                                       + SkillEditorPanel(内联编辑) + listSessions/createSession/...
         ├─ views/ChatView.vue        ── useAuth(preparing) + useProjects + usePreferences
+                                       + useChatSkillSidebar(editingSkill / closeEditor)
                                        + listSessions + sendChatMessage/stopChatGeneration
-                                       + SkillPicker/Chips + MediaPreviewDialog
-        └─ views/CommunityView.vue   ── useCommunity + 社区 skill 列表 / ZIP 上传 / 详情 / 安装 / 作者删除
+                                       + SkillPicker/Chips + SkillEditorPanel(内联编辑)
+                                       + MediaPreviewDialog
+        ├─ views/CommunityView.vue   ── useCommunity + 社区 skill 列表 / ZIP 上传 / 详情 / 安装 / 作者删除
+        └─ views/LibraryView.vue     ── 技能仓库主视图（导入控制台、队列、待配置标签页、元数据表单编辑、发布/Fork等）
 ```
 
 - `api.ts` 是所有后端通信的唯一出口，封装 `fetch` + 401 自动刷新、JWT 本地存储、SSE 帧解析、通用文件 API
@@ -96,12 +105,14 @@ main.ts
 | `/projects/:pid` | `SubjectView` | 动态（科目名） | 该项目会话列表；视图独占 |
 | `/projects/:pid/sessions/:sid` | `ChatView` | 动态（科目 / 会话） | 消息 / 草稿 / SSE 全部随视图卸载释放 |
 | `/community` | `CommunityView` | `社区` | 社区技能列表、ZIP 上传、详情、安装；视图独占 |
+| `/library` | `LibraryView` | `我的仓库` | 个人仓库列表、导入控制台、待配置表单；视图独占 |
 | `/:pathMatch(.*)*` | — | — | 404 重定向到 `/` |
 
 - `ChatView` 用 `:key="${pid}:${sid}"` 强制按会话重建，避免切换 sid 时状态串联
 - SubjectView 创建首条消息时跳转到 `/projects/:pid/sessions/:sid?initial=<text>`，ChatView 挂载后消费 `initial`、调 `router.replace` 去掉 query 再发送
 - `document.title` 由 `router.afterEach`（静态）+ SubjectView / ChatView 的 watcher（动态）合力设置
 - `App.vue` 的面包屑和 header 按钮按 `$route.name` 分支显示；项目技能按钮在 `route.params.pid` 存在时显示（subject 与 chat 两个视图都可用）
+- 右上角固定按钮组在 chat / subject 路由下均显示：技能侧边栏切换按钮（两个路由都可用）、关闭编辑按钮和新建对话按钮（仅 chat 路由可用）
 - 侧边栏标题区有「社区」入口，跳转到 `/community`
 
 ## 已完成的功能
@@ -166,7 +177,7 @@ Skill 在后端是 `skills/<name>/` 文件夹约定，核心入口为 `SKILL.md`
   - 新建文件只允许 `.md`、`.txt`、`.json`、`.yaml`、`.yml`，暂不支持嵌套目录
 - 右栏编辑器：
   - `SKILL.md` 使用结构化表单
-  - `name`（受限 `^[\u4e00-\u9fa5a-zA-Z0-9]+(-[\u4e00-\u9fa5a-zA-Z0-9]+)*$`，支持中文、大小写字母、数字和连字符，长度 ≤ 64，不含保留词 `anthropic` / `claude`）
+  - `name`（支持 Unicode 字母/数字、中文、下划线和中划线，至少包含一个字母/数字/中文，长度 ≤ 64，不含保留词 `anthropic` / `claude` / `system`）
   - `description`（≤ 1024）
   - `license`、`compatibility`（≤ 500）作为高级字段折叠
   - `body` 仅提示字符 / 行数，不做硬限制
@@ -186,6 +197,38 @@ type FileSpace =
 ```
 
 对应后端路径 `/users/{user_id}/files` 或 `/projects/{pid}/files`。
+
+### 5.5 聊天页内联技能编辑（ChatSkillSidebar + SkillEditorPanel）
+
+聊天页提供侧边栏 + 内联编辑器，无需离开会话即可快速查看和编辑技能。
+
+**状态管理**：`useChatSkillSidebar.ts` 模块级单例，维护 `chatSidebarOpen`（侧边栏开关）和 `editingSkill`（当前编辑的技能信息）。跨 App.vue / ChatView.vue / ChatSkillSidebar.vue 三个组件共享。
+
+**交互流程**：
+
+1. **打开侧边栏**：App.vue 顶栏右侧箭头按钮（chat / subject 路由均可用）→ `toggleSidebar()` → `ChatSkillSidebar` 从左侧推挤展开（`w-0` ↔ `w-[260px]`，300ms 过渡）
+2. **选择技能**：侧边栏展示用户级 / 项目级技能列表 → 点击某技能 → `openEditor(space, name, displayName)` → 设置 `editingSkill`
+3. **渲染编辑器**：ChatView / SubjectView 检测到 `editingSkill` 非 null → 渲染 `SkillEditorPanel`（带滑入动画），同时隐藏聊天/科目内容
+4. **关闭编辑器**：App.vue 顶栏 X 按钮（仅 chat 路由显示）→ 直接调用 `closeEditor()` → 内容滑回（带滑出动画）
+5. **切换会话自动关闭**：`onBeforeRouteUpdate` 钩子中调用 `closeEditor()`，确保切换会话时编辑状态不会残留
+
+**SkillEditorPanel 功能**：
+
+- 文件树浏览（与 SkillManagerDialog 共享逻辑）
+- SKILL.md 结构化表单编辑 / 其它文件 Markdown 或原始文本编辑
+- 新建文件 / 删除文件
+- 未保存修改检测（dirty 状态）+ 关闭前确认弹窗
+- Ctrl/Cmd+S 快捷保存
+- 无独立标题栏，关闭按钮统一由 App.vue 顶栏提供
+
+**动画效果**：
+
+| 动画 | 实现方式 | 时长 |
+|------|---------|------|
+| 侧边栏推挤展开/收起 | CSS `transition-all` + 宽度切换 | 300ms |
+| 编辑器从左侧滑入 | `<Transition name="skill-editor">` + `translateX(-100%→0)` | 300ms enter / 250ms leave |
+| 编辑器向右滑出 | 同上 + `translateX(0→100%)` | 250ms leave |
+| 聊天内容淡入 | Transition `mode="out-in"` 自动处理 | 与编辑器互补 |
 
 ### 6. 社区技能广场
 
@@ -273,7 +316,7 @@ Mermaid 渲染失败降级为可见 of error 卡片而不是白屏。
 
 - 侧边栏「设置」按钮点击可打开 `SettingsDialog`（设置中心）。
 - 支持三大功能标签页：
-  1. **模型配置**：列出用户创建的所有自定义模型配置，支持创建、更新、激活、删除配置，提供连接连通性测试（已存配置或临时参数均可验证），支持开启/关闭支持视觉（`supports_vision`，已完全移除并替换了旧版 `is_vision_assistant` 选项）。模型名称字段旁提供「获取模型列表」按钮，可从提供商实时拉取可用模型并从下拉菜单中选择，避免用户查文档找模型名称。
+  1. **模型配置**：列出用户创建的所有自定义模型配置，支持创建、更新、启用/停用、删除配置，提供连接连通性测试（已存配置或临时参数均可验证），支持开启/关闭支持视觉（`supports_vision`，已完全移除并替换了旧版 `is_vision_assistant` 选项）。左侧运行概览显示当前启用组合、主模型/视觉角色和视觉标记；运行时最多启用两个模型，启用两个时至少一个必须是视觉模型。模型名称字段旁提供「获取模型列表」按钮，可从提供商实时拉取可用模型并从下拉菜单中选择，避免用户查文档找模型名称。
   2. **账号设置**：支持获取当前用户账号信息、修改用户名以及更改账号密码。
   3. **偏好设置**：支持配置发送按键行为，包括“Enter 发送，Shift+Enter 换行”和“Ctrl+Enter 发送，Enter 换行”，设置实时持久化并自适应作用于 Composer。
 
@@ -284,7 +327,25 @@ Mermaid 渲染失败降级为可见 of error 卡片而不是白屏。
 - **物理文件哈希去重与友好名称映射**：后端在物理存储上根据 SHA-256 哈希命名和去重，防止同会话内相同文件重复落盘；同时自动为文件命名为“图片1.png”、“文档2.txt”等，以防底层物理存储路径或 UUID 暴露给大模型。
 - **非图片附件卡片展示**：在已发送的消息中，非图片文件（如 PDF、TXT、JSON、CSV、HTML 等）以独立的卡片形式美观展示，卡片包含文件类型图标、文件名和文件大小等基本信息。
 - **图片附件预览模态框**：无论是在聊天消息气泡中的已发送图片，还是在 Chat Composer 输入框上方待发送的文件列表中，点击图片即可打开高保真预览模态框，支持查看大图及便捷关闭。
-- **多模态与工具链配合**：AI 代理会在会话开始或需要时自动调用 `list_attachment` 获取会话内所有已上传文件列表，并可通过 `view_attachment` 读取文件具体内容。若主模型不支持视觉多模态，系统会自动调用视觉辅助模型对图片进行内容理解与叙述缓存。
+- **多模态与工具链配合**：AI 代理会在会话开始或需要时自动调用 `list_attachment` 获取会话内所有已上传文件列表，并可通过 `view_attachment` 读取文件具体内容。若主模型不支持视觉多模态，系统会自动调用已启用的视觉模型或环境默认视觉模型对图片进行内容理解与叙述缓存。
+
+### 13. 我的技能仓库（Library）与导入控制台
+
+`/library` 路由下的 `LibraryView.vue` 实现了统一的个人技能仓库管理和导入控制台功能：
+
+- **全局标签页系统与状态流转**：主页面复用 Tab 管理多个视图状态：
+  - `main`：展示仓库中个人所有已保存技能的卡片列表，支持搜索和排序。卡片支持点击查看详情，提供安装到运行层、Fork 为新技能以进行二次开发等选项。
+  - `skill`：展示已保存的单个技能详情，支持对 README 进行 Markdown 编辑或通过内联文件树直接编辑技能目录下的物理文件。
+  - `import-console`（常驻标签页）：批量技能导入管理中心。
+  - `pending-import`（待配置页签）：在标签页左侧渲染**紫色闪烁小圆点 `●`**，提示为未正式入库的临时状态。
+- **导入控制台（Import Console）功能**：
+  - **ZIP 拖拽多文件并发上传**：用户可以通过拖放 ZIP 文件包或点击打开 `LibraryUploadDialog.vue` 进行并发上传解析。
+  - **运行层技能收集 Combobox**：提供支持拼音/英文/中文检索的 Combobox 下拉框，列出本地运行层中尚未导入仓库的技能（通过 `GET /library/skills/unimported` 过滤）。
+  - 用户确认上传/收集解析成功后，点击**「开始配置并清空队列」**按钮，清空队列并在全局 tabs 中为每个任务打开一个 `pending-import` 标签页，并自动切换至第一个。
+- **待配置页签与表单编辑**：
+  - **智能模板匹配与加载（Template Loader）**：表单顶部支持检索并应用个人仓库中已有技能作为配置模板。如果检测到同名技能，系统会自动选中匹配，并提示可直接应用。应用后一键覆盖 displayName、description、tags 和 README。
+  - **元数据与全宽 README 编辑**：表单允许设置显示名、简短描述（1024字限制）、多选标签，并且提供可切换 Write/Preview 模式的全宽 README 编辑器。
+  - **动作操作栏**：底部固定悬浮操作栏提供**[确认保存并导入]**（调用更新 API 写入 DB 与 README 物理文件，完成入库并自动变更为正常技能 Tab）和**[放弃导入]**（二次确认后销毁 Tab）操作。
 
 ## 尚未实现 / 有意省略
 

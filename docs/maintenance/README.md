@@ -52,3 +52,153 @@ uv run python scripts/cleanup_orphans.py
 uv run python scripts/cleanup_orphans.py --strict
 ```
 *(注：`--strict` 会额外检查消息 ID 之间的软关联有效性)*
+
+---
+
+## 3. 设置社区管理员 (`scripts/set_admin.py`)
+
+**脚本位置**：`scripts/set_admin.py`
+
+### 功能描述
+根据用户邮箱在 SQLite 数据库中查找已有用户，并将 `users.role` 更新为 `admin`。社区管理员审核接口会读取该字段进行后端权限校验。
+
+### 运行方式
+使用默认 `DATABASE_PATH`：
+```bash
+uv run python scripts/set_admin.py user@example.com
+```
+
+指定数据库路径：
+```bash
+uv run python scripts/set_admin.py user@example.com --db data/project.db
+```
+
+### 输出与错误
+- 成功：输出实际使用的数据库绝对路径、用户 UUID、用户名、邮箱，以及角色变化。
+- 用户已是管理员：输出 `User is already admin`，退出码为 0。
+- 邮箱不存在或数据库路径不存在：输出错误信息，退出码为 1。
+
+### 注意事项
+- 参数必须是已经注册用户的邮箱。
+- 如果目标数据库缺少 `users.role` 字段，脚本会直接退出并提示可能传错了旧库路径，不会自动改动旧库结构。
+- `--db` 路径相对于项目根目录解析。项目根目录下的新库通常是 `data/project.db`；`../data/project.db` 会指向父目录的另一个数据库。
+- 如果用户已经打开前端页面，更新后需要刷新页面，让前端重新通过 `/auth/me` 读取最新 `role`。
+
+---
+
+## 4. 创建默认测试用户 (`scripts/add_user.py`)
+
+**脚本位置**：`scripts/add_user.py`
+
+### 功能描述
+用于在当前 SQLite 数据库中快速创建一个本地测试用户。脚本会读取 `.env` 中的 `DATABASE_PATH`；如果未配置，则默认写入 `data/project.db`。
+
+当前脚本内置创建的用户为：
+
+| 字段 | 值 |
+|---|---|
+| 用户名 | `user` |
+| 邮箱 | `user@example.com` |
+| 密码 | `admin114514` |
+
+### 运行方式
+```bash
+uv run python scripts/add_user.py
+```
+
+### 输出与错误
+- 成功：输出数据库路径、用户 UUID、用户名和邮箱。
+- 用户已存在：输出已存在用户的信息，不会重复创建。
+- 创建失败：输出错误信息，退出码为 1。
+
+### 常见流程
+如果刚换了一个新数据库，可以按顺序初始化数据库、创建默认用户、设置社区管理员：
+
+```bash
+uv run python -m backend.db
+uv run python scripts/add_user.py
+uv run python scripts/set_admin.py user@example.com --db data/project.db
+```
+
+### 注意事项
+- 该脚本当前不接受命令行参数；如需创建其他邮箱、用户名或密码，需要修改脚本末尾的 `username`、`email`、`password` 默认值，或通过前端注册。
+- `set_admin.py --db` 的路径应指向同一个数据库。项目根目录下通常使用 `data/project.db`。
+
+---
+
+## 5. 旧库精简迁移 (`scripts/migrate_legacy_db.py`)
+
+**脚本位置**：`scripts/migrate_legacy_db.py`
+
+### 功能描述
+将父目录旧库 `../data/project.db` 迁移到当前项目的新数据库 Schema，同时删除社区、skill 仓库、审核日志、nonce 等不需要保留的内容，只保留用户信息和用户对话记录相关数据。
+
+脚本不会原地修改旧库。默认输出到 `data/project.migrated.db`。
+
+### 保留范围
+- `users`
+- `projects`
+- `sessions`
+- `messages`
+- `attachments`
+- `user_model_configs`
+- `user_preferences`
+
+### 跳过范围
+- `nonces`
+- `community_skills`
+- `community_skill_versions`
+- `community_skill_likes`
+- `community_skill_comments`
+- `community_comment_likes`
+- `community_comment_reports`
+- `community_skill_contributors`
+- `community_skill_admins`
+- `user_library_skills`
+- `skill_review_logs`
+
+### 字段兼容
+迁移时会使用当前 `DatabaseFacade.setup_database()` 创建新库 Schema，并为旧库缺失字段补默认值，例如：
+
+- `users.role` 默认 `user`
+- `users.self_description`、`users.major`、`users.head_file` 默认 `NULL`
+- `attachments.file_hash` 默认空字符串
+- `attachments.file_size` 默认 `0`
+- `user_model_configs.supports_vision` 默认 `0`
+- `user_model_configs.top_p`、`frequency_penalty`、`presence_penalty`、`response_format` 默认 `NULL`
+
+### 运行方式
+默认从 `../data/project.db` 读取旧库，生成 `data/project.migrated.db`：
+
+```bash
+uv run python scripts/migrate_legacy_db.py --replace
+```
+
+指定输入输出路径：
+
+```bash
+uv run python scripts/migrate_legacy_db.py \
+  --source ../data/project.db \
+  --target data/project.db \
+  --replace
+```
+
+### 验证方式
+运行迁移脚本测试：
+
+```bash
+uv run pytest tests/test_migrate_legacy_db.py
+```
+
+检查迁移后数据库：
+
+```bash
+sqlite3 data/project.migrated.db "PRAGMA integrity_check;"
+sqlite3 data/project.migrated.db "PRAGMA foreign_key_check;"
+```
+
+### 注意事项
+- `--replace` 只会替换目标库，不会修改源库。
+- 源库和目标库路径必须不同，脚本会拒绝同路径迁移。
+- 如果要覆盖当前应用数据库，先确认服务已停止，并备份现有 `data/project.db`。
+- 迁移脚本只处理数据库记录，不复制 `data/` 下的物理附件文件；旧附件记录中的 `file_path` 会按原值保留。

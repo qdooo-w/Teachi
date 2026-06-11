@@ -3,9 +3,9 @@ import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import RowMenu from '../components/RowMenu.vue'
 import RenameInline from '../components/RenameInline.vue'
-import ConfirmDialog from '../components/ConfirmDialog.vue'
 import SkillPicker from '../components/SkillPicker.vue'
 import SkillChips from '../components/SkillChips.vue'
+import SkillEditorPanel from '../components/SkillEditorPanel.vue'
 import {
   createSession,
   deleteSession,
@@ -20,6 +20,7 @@ import { useProjects } from '../composables/useProjects'
 import { useLayout } from '../composables/useLayout'
 import { useProjectSkills } from '../composables/useProjectSkills'
 import { useUserSkills } from '../composables/useUserSkills'
+import { useChatSkillSidebar } from '../composables/useChatSkillSidebar'
 import { readSkill, PROJECT_DESC_SKILL, parseSkillFile, type SkillMeta } from '../skills'
 import {
   SUBJECT_DESC_COLLAPSE_LIMIT,
@@ -31,11 +32,13 @@ import {
   PLACEHOLDERS,
 } from '../config'
 import { usePreferences } from '../composables/usePreferences'
+import { confirmDanger } from '../composables/useConfirmDialog'
 
 const route = useRoute()
 const router = useRouter()
 const { projects, loadProjects } = useProjects()
 const { closeSidebarOnMobile } = useLayout()
+const { editingSkill, closeEditor } = useChatSkillSidebar()
 
 const pid = computed(() => route.params.pid as string)
 const currentProject = computed<ProjectItem | null>(() =>
@@ -338,9 +341,6 @@ async function loadProjectDesc(currentPid: string): Promise<void> {
 const openMenuKey = ref<string | null>(null)
 const renamingKey = ref<string | null>(null)
 const renameSubmitting = ref(false)
-const confirmDelete = ref<{ id: string; name: string } | null>(null)
-const deleteSubmitting = ref(false)
-const deleteError = ref('')
 
 function sessionKey(sid: string): string {
   return `session:${sid}`
@@ -459,31 +459,19 @@ async function submitSessionRename(session: SessionItem, nextName: string): Prom
   }
 }
 
-function askDeleteSession(session: SessionItem): void {
+async function askDeleteSession(session: SessionItem): Promise<void> {
   openMenuKey.value = null
-  deleteError.value = ''
-  confirmDelete.value = { id: session.sid, name: session.sessionname }
-}
-
-function cancelDelete(): void {
-  if (deleteSubmitting.value) return
-  confirmDelete.value = null
-  deleteError.value = ''
-}
-
-async function performDelete(): Promise<void> {
-  if (!confirmDelete.value || deleteSubmitting.value) return
-  const target = confirmDelete.value
-  deleteSubmitting.value = true
-  deleteError.value = ''
+  const confirmed = await confirmDanger({
+    title: '删除会话',
+    message: `确定删除「${session.sessionname}」？会话内所有消息会被一并删除，操作不可恢复。`,
+    confirmText: '删除',
+  })
+  if (!confirmed) return
   try {
-    await deleteSession(target.id)
-    sessions.value = sessions.value.filter((s) => s.sid !== target.id)
-    confirmDelete.value = null
+    await deleteSession(session.sid)
+    sessions.value = sessions.value.filter((s) => s.sid !== session.sid)
   } catch (error) {
-    deleteError.value = getErrorMessage(error)
-  } finally {
-    deleteSubmitting.value = false
+    errorMessage.value = getErrorMessage(error)
   }
 }
 
@@ -538,7 +526,17 @@ watch(
 </script>
 
 <template>
-  <div class="absolute inset-0 flex flex-col overflow-y-auto px-4 pt-16 md:px-6">
+  <!-- 技能内联编辑器 / 科目内容切换（带滑入滑出动画） -->
+  <Transition name="skill-editor" mode="out-in">
+    <SkillEditorPanel
+      v-if="editingSkill"
+      :key="editingSkill.space.kind === 'user' ? ('user-' + editingSkill.space.userId + '-' + editingSkill.name) : ('project-' + editingSkill.space.pid + '-' + editingSkill.name)"
+      :space="editingSkill.space"
+      :skill-name="editingSkill.name"
+      :display-name="editingSkill.displayName"
+      @close="closeEditor"
+    />
+    <div v-else key="subject" class="absolute inset-0 flex flex-col overflow-y-auto px-4 pt-16 md:px-6">
     <div v-if="currentProject" class="mx-auto flex w-full max-w-3xl flex-1 flex-col">
       <div class="mb-8">
         <h2 class="mb-2 text-3xl font-bold">{{ currentProject.projectname }}</h2>
@@ -795,19 +793,9 @@ watch(
         </div>
       </div>
     </div>
-  </div>
-
-  <Transition name="dialog-fade" appear>
-    <ConfirmDialog
-      v-if="confirmDelete"
-      :title="'删除会话'"
-      :message="`确定删除「${confirmDelete.name}」？会话内所有消息会被一并删除，操作不可恢复。`"
-      :error="deleteError"
-      :submitting="deleteSubmitting"
-      @confirm="performDelete"
-      @cancel="cancelDelete"
-    />
+    </div>
   </Transition>
+
 </template>
 
 <style scoped>
@@ -907,5 +895,21 @@ watch(
 .create-panel:not(.expanded) .create-fields-inner > * {
   opacity: 0;
   transition: opacity 0.2s ease;
+}
+
+/* ── 技能编辑器滑入滑出动画 ── */
+.skill-editor-enter-active {
+  transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.25s ease;
+}
+.skill-editor-leave-active {
+  transition: transform 0.25s cubic-bezier(0.4, 0, 1, 1), opacity 0.2s ease;
+}
+.skill-editor-enter-from {
+  transform: translateX(-100%);
+  opacity: 0;
+}
+.skill-editor-leave-to {
+  transform: translateX(100%);
+  opacity: 0;
 }
 </style>

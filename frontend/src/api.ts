@@ -77,6 +77,11 @@ interface MessageListResponse {
   messages: MessageItem[]
 }
 
+export interface DisplayMessagePage {
+  messages: DisplayMessage[]
+  rawCount: number
+}
+
 interface StreamEvent {
   type: string
   content?: string
@@ -403,6 +408,14 @@ export async function listDisplayMessages(
   limit?: number,
   offset?: number
 ): Promise<DisplayMessage[]> {
+  return (await listDisplayMessagePage(sid, limit, offset)).messages
+}
+
+export async function listDisplayMessagePage(
+  sid: string,
+  limit?: number,
+  offset?: number
+): Promise<DisplayMessagePage> {
   let url = `/sessions/${encodeURIComponent(sid)}/messages`
   const params: string[] = []
   if (limit !== undefined) params.push(`limit=${limit}`)
@@ -410,10 +423,13 @@ export async function listDisplayMessages(
   if (params.length > 0) url += `?${params.join('&')}`
 
   const response = await request<MessageListResponse>(url)
-  return response.messages
-    .filter((message) => message.version === 0)
-    .map(parseMessage)
-    .filter((message): message is DisplayMessage => message !== null)
+  return {
+    rawCount: response.messages.length,
+    messages: response.messages
+      .filter((message) => message.version === 0)
+      .map(parseMessage)
+      .filter((message): message is DisplayMessage => message !== null),
+  }
 }
 
 export interface MessageVersionItem {
@@ -726,6 +742,7 @@ export interface UpdateModelConfigRequest {
 
 export interface ActiveConfigResponse {
   config: ModelConfigItem | null
+  configs: ModelConfigItem[]
 }
 
 export interface TestConnectionRequest {
@@ -785,9 +802,10 @@ export async function testConnectionWithParams(payload: TestConnectionRequest): 
   })
 }
 
-export async function testConnectionWithConfig(configId: string): Promise<TestConnectionResponse> {
+export async function testConnectionWithConfig(configId: string, payload?: TestConnectionRequest): Promise<TestConnectionResponse> {
   return request<TestConnectionResponse>(`/settings/model-configs/${encodeURIComponent(configId)}/test-connection`, {
     method: 'POST',
+    ...(payload ? { body: JSON.stringify(payload) } : {}),
   })
 }
 
@@ -867,6 +885,18 @@ export interface CommunitySkillVersion {
   downloads: number
   status: string
   submitted_by: string
+  created_at: number
+  skill_name?: string
+}
+
+export interface ReviewLog {
+  id: string
+  version_id: string
+  reviewer_uuid: string
+  action: string
+  from_status: string
+  to_status: string
+  note: string
   created_at: number
 }
 
@@ -1032,6 +1062,44 @@ export async function getCommunityLeaderboard(limit = 10): Promise<CommunitySkil
   return response.skills
 }
 
+// ── 社区审核 ──────────────────────────────────────────────────────────────────
+
+export async function listOwnerReviews(): Promise<CommunitySkillVersion[]> {
+  return request<CommunitySkillVersion[]>('/owner/reviews')
+}
+
+export async function approveOwnerReview(versionId: string, note = ''): Promise<ReviewLog> {
+  return request<ReviewLog>(`/owner/reviews/${encodeURIComponent(versionId)}/approve`, {
+    method: 'POST',
+    body: JSON.stringify({ note }),
+  })
+}
+
+export async function rejectOwnerReview(versionId: string, note = ''): Promise<ReviewLog> {
+  return request<ReviewLog>(`/owner/reviews/${encodeURIComponent(versionId)}/reject`, {
+    method: 'POST',
+    body: JSON.stringify({ note }),
+  })
+}
+
+export async function listAdminReviews(): Promise<CommunitySkillVersion[]> {
+  return request<CommunitySkillVersion[]>('/admin/reviews')
+}
+
+export async function approveAdminReview(versionId: string, note = ''): Promise<ReviewLog> {
+  return request<ReviewLog>(`/admin/reviews/${encodeURIComponent(versionId)}/approve`, {
+    method: 'POST',
+    body: JSON.stringify({ note }),
+  })
+}
+
+export async function rejectAdminReview(versionId: string, note = ''): Promise<ReviewLog> {
+  return request<ReviewLog>(`/admin/reviews/${encodeURIComponent(versionId)}/reject`, {
+    method: 'POST',
+    body: JSON.stringify({ note }),
+  })
+}
+
 // ── 仓库技能 ──────────────────────────────────────────────────────────────────
 
 export interface UserLibrarySkill {
@@ -1044,6 +1112,7 @@ export interface UserLibrarySkill {
   tags: string
   version: string
   changelog: string
+  source: 'runtime' | 'zip' | 'community' | 'fork'
   community_skill_id: string | null
   local_path: string
   size_bytes: number
@@ -1059,6 +1128,193 @@ export async function uploadLibrarySkillZip(file: File): Promise<UserLibrarySkil
       'Content-Type': 'application/zip',
     },
     body: file,
+  })
+}
+
+export interface LibrarySkillListResponse {
+  skills: UserLibrarySkill[]
+  total: number
+  limit: number
+  offset: number
+  sort: string
+}
+
+export type LibrarySkillSort = 'newest' | 'oldest' | 'name-asc' | 'name-desc'
+
+/** 获取当前用户的仓库技能列表，支持筛选/排序/分页 */
+export async function listLibrarySkills(params: {
+  keyword?: string
+  tag?: string[]
+  sort?: LibrarySkillSort
+  limit?: number
+  offset?: number
+} = {}): Promise<LibrarySkillListResponse> {
+  const search = new URLSearchParams()
+  if (params.keyword) search.set('keyword', params.keyword)
+  if (params.tag && params.tag.length > 0) {
+    for (const t of params.tag) search.append('tag', t)
+  }
+  if (params.sort) search.set('sort', params.sort)
+  if (params.limit !== undefined) search.set('limit', String(params.limit))
+  if (params.offset !== undefined) search.set('offset', String(params.offset))
+  return request<LibrarySkillListResponse>(`/library/skills?${search.toString()}`)
+}
+
+/** 获取单条仓库技能详情 */
+export async function getLibrarySkill(libraryId: string): Promise<UserLibrarySkill> {
+  return request<UserLibrarySkill>(`/library/skills/${encodeURIComponent(libraryId)}`)
+}
+
+export interface LibraryPublishForm {
+  library_skill: UserLibrarySkill
+  community_skill: CommunitySkillSummary | null
+  latest_approved_version: CommunitySkillVersion | null
+  suggested_version: string
+}
+
+/** 获取仓库技能发布到社区的表单预填数据 */
+export async function getLibraryPublishForm(libraryId: string): Promise<LibraryPublishForm> {
+  return request<LibraryPublishForm>(`/library/skills/${encodeURIComponent(libraryId)}/publish-form`)
+}
+
+/** 将仓库技能提交到社区审核流 */
+export async function publishLibrarySkill(
+  libraryId: string,
+  payload: { version: string; changelog: string },
+): Promise<CommunitySkillVersion> {
+  return request<CommunitySkillVersion>(`/library/skills/${encodeURIComponent(libraryId)}/publish`, {
+    method: 'POST',
+    headers: nonceHeaders(),
+    body: JSON.stringify(payload),
+  })
+}
+
+/** 将仓库技能安装到运行层 */
+export async function installLibrarySkill(
+  libraryId: string,
+  payload: { target: 'user' | 'project'; pid?: string | null },
+): Promise<{ name: string; target: string; installed: boolean }> {
+  return request<{ name: string; target: string; installed: boolean }>(
+    `/library/skills/${encodeURIComponent(libraryId)}/install`,
+    {
+      method: 'POST',
+      headers: nonceHeaders(),
+      body: JSON.stringify(payload),
+    },
+  )
+}
+
+/** Fork 仓库技能，可选覆盖元数据 */
+export async function forkLibrarySkill(
+  libraryId: string,
+  overrides?: { name?: string; display_name?: string; description?: string; readme_md?: string; tags?: string },
+): Promise<UserLibrarySkill> {
+  return request<UserLibrarySkill>(`/library/skills/${encodeURIComponent(libraryId)}/fork`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...nonceHeaders() },
+    body: JSON.stringify(overrides ?? {}),
+  })
+}
+
+/** 仓库技能文件列表条目 */
+export interface LibraryFileEntry {
+  name: string
+  rel_path: string
+  is_dir: boolean
+  size: number
+}
+
+/** 列出仓库技能的文件 */
+export async function listLibrarySkillFiles(
+  libraryId: string,
+  path: string = '.',
+): Promise<{ path: string; entries: LibraryFileEntry[] }> {
+  const params = new URLSearchParams({ path })
+  return request<{ path: string; entries: LibraryFileEntry[] }>(
+    `/library/skills/${encodeURIComponent(libraryId)}/files?${params}`,
+  )
+}
+
+/** 读取仓库技能的文件内容 */
+export async function readLibrarySkillFileContent(
+  libraryId: string,
+  path: string,
+): Promise<{ path: string; content: string }> {
+  const params = new URLSearchParams({ path })
+  return request<{ path: string; content: string }>(
+    `/library/skills/${encodeURIComponent(libraryId)}/files/content?${params}`,
+  )
+}
+
+/** 收集本地技能到仓库 */
+export async function collectLibrarySkill(payload: {
+  skill_name: string
+  template_id?: string | null
+  name?: string | null
+  display_name?: string | null
+  description?: string | null
+  readme_md?: string | null
+  tags?: string | null
+}): Promise<UserLibrarySkill> {
+  return request<UserLibrarySkill>('/library/skills/collect', {
+    method: 'POST',
+    headers: nonceHeaders(),
+    body: JSON.stringify(payload),
+  })
+}
+
+/** 获取同名已入库的模板匹配建议 */
+export async function matchLibrarySkillTemplate(skillName: string): Promise<{
+  skill_name: string
+  matched: UserLibrarySkill | null
+}> {
+  return request<{ skill_name: string; matched: UserLibrarySkill | null }>(
+    `/library/skills/match-template?skill_name=${encodeURIComponent(skillName)}`
+  )
+}
+
+/** 读取运行层技能配置以辅助填充表单 */
+export async function parseRuntimeSkill(skillName: string): Promise<{
+  frontmatter: any
+  readme_md?: string
+  latest_in_library: UserLibrarySkill | null
+}> {
+  return request<{ frontmatter: any; readme_md?: string; latest_in_library: UserLibrarySkill | null }>(
+    `/library/skills/parse-runtime?skill_name=${encodeURIComponent(skillName)}`
+  )
+}
+
+/** 更新仓库技能的展示元数据 */
+export async function updateLibrarySkillMeta(
+  libraryId: string,
+  payload: {
+    name?: string | null
+    display_name?: string | null
+    description?: string | null
+    readme_md?: string | null
+    tags?: string | null
+  }
+): Promise<UserLibrarySkill> {
+  return request<UserLibrarySkill>(`/library/skills/${encodeURIComponent(libraryId)}/meta`, {
+    method: 'PUT',
+    headers: nonceHeaders(),
+    body: JSON.stringify(payload),
+  })
+}
+
+/** 删除单条仓库技能 */
+export async function deleteLibrarySkill(libraryId: string): Promise<void> {
+  await request<void>(`/library/skills/${encodeURIComponent(libraryId)}`, {
+    method: 'DELETE',
+  })
+}
+
+/** 批量删除仓库技能 */
+export async function bulkDeleteLibrarySkills(skillIds: string[]): Promise<{ deleted: number }> {
+  return request<{ deleted: number }>('/library/skills/bulk-delete', {
+    method: 'POST',
+    headers: nonceHeaders(),
+    body: JSON.stringify({ skill_ids: skillIds }),
   })
 }
 

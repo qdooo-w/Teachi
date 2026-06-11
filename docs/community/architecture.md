@@ -64,6 +64,7 @@
 │  │  tags ◄────────── 继承 (收集时="[]")    │    library_id = version_id                        │    │
 │  │  version ◄──────── 继承 (收集时="1.0.0")│                                                   │    │
 │  │  changelog ◄───── 继承 (收集时固定值)   │                                                   │    │
+│  │  source ◄──────── 显式记录来源          │                                                   │    │
 │  │  community_skill_id ────────────────────│──── 有值=来自社区，空=来自运行层                   │    │
 │  │  local_path                             │                                                   │    │
 │  │  size_bytes                             │                                                   │    │
@@ -105,11 +106,11 @@
 | 编号 | 流转 | 文件操作 | DB 操作 | 继承规则 |
 |---|---|---|---|---|
 | ① | **Publish** (仓库→社区) | 复制到 `archived_skill/{id}/{ver}/` | 新建 `community_skill_versions`；首次发布额外新建 `community_skills` + `community_skill_admins` | name/desc/tags/readme_md 继承自仓库；version/changelog 用户填写 |
-| ② | **Collect** (运行层→仓库) | 复制到 `library/{id}/skill/` + 创建 `README.md` | 新建 `user_library_skills` | name 从 SKILL.md 读取；其他元数据从模板继承（最佳匹配或用户选择）；readme_md 从模板继承或从零生成；version="1.0.0" 固定；community_skill_id=null |
+| ② | **Collect** (运行层→仓库) | 复制到 `library/{id}/skill/` + 创建 `README.md` | 新建 `user_library_skills`，`source="runtime"` | name 从 SKILL.md 读取；其他元数据从模板继承（最佳匹配或用户选择）；readme_md 从模板继承或从零生成；version="1.0.0" 固定；community_skill_id=null |
 | ③ | **Install from Library** (仓库→运行层) | 复制到 `skills/{name}/` | **无写入** | 全部继承，name 作为目录名 |
-| ④ | **Install to Library** (社区→仓库) | 复制到 `library/{version_id}/skill/` | 新建 `user_library_skills` | 全部继承自社区版本；`community_skill_id` 建立关联；复用 `version_id` 作为 `library_id` |
+| ④ | **Install to Library** (社区→仓库) | 复制到 `library/{version_id}/skill/` | 新建 `user_library_skills`，`source="community"` | 全部继承自社区版本；`community_skill_id` 建立关联；复用 `version_id` 作为 `library_id` |
 | ⑤ | **Install** (社区→运行层) | 复制到 `skills/{name}/` | 更新 `downloads` 计数 | 全部继承，name 作为目录名 |
-| ⑥ | **Fork** (仓库→仓库) | 复制到 `library/{new_id}/skill/` | 新建 `user_library_skills` | 继承原有元数据作为模板；新的 `library_id`；保留 `community_skill_id` 关联 |
+| ⑥ | **Fork** (仓库→仓库) | 复制到 `library/{new_id}/skill/` | 新建 `user_library_skills`，`source="fork"` | 元数据默认继承源记录，可通过请求体覆盖；version 继承（不重置）；保留 `community_skill_id` 关联 |
 
 ### UUID 复用规则
 
@@ -351,7 +352,7 @@ PENDING_OWNER ──(Owner 审核通过)──▶ PENDING_ADMIN ──(Admin 审
 │         SKILL.md │     │    → data/{user_uuid}/{pid}/skills/{name}│
 │         ...      │     │                                          │
 └──────────────────┘     │  target="library":                       │
-                         │    → data/{user_uuid}/library/{version_id}/ │
+                         │    → data/{user_uuid}/library/{version_id}/│
                          │      skill/                              │
                          │    + 创建 user_library_skills 记录       │
                          │    + version_id 复用为 library_id        │
@@ -423,8 +424,6 @@ PENDING_OWNER ──(Owner 审核通过)──▶ PENDING_ADMIN ──(Admin 审
 
 ### 5. 仓库 → 运行层 (Install from Library)
 
-### 4. 仓库 → 运行层 (Install from Library)
-
 **触发**: 用户在仓库面板中点击「安装到运行层」
 
 **请求**: `POST /library/skills/{library_id}/install`
@@ -449,7 +448,7 @@ data/{user_uuid}/{pid}/skills/{name}/ (target=project)
 
 ---
 
-### 5. 发布表单预填 (Publish Form)
+### 6. 发布表单预填 (Publish Form)
 
 **触发**: 用户打开发布对话框时自动加载
 
@@ -484,7 +483,7 @@ data/{user_uuid}/{pid}/skills/{name}/ (target=project)
 
 ---
 
-### 6. 社区技能详情 (Community Detail)
+### 7. 社区技能详情 (Community Detail)
 
 **请求**: `GET /community/skills/{skill_id}`
 
@@ -724,18 +723,20 @@ users (uuid)
 | 删除评论 | 评论操作菜单 | `DELETE /community/skills/{id}/comments/{cid}` | 确认删除 |
 | 评论点赞 | 评论操作按钮 | `POST /community/comments/{cid}/like` | 点击赞 |
 | 评论举报 | 评论操作按钮 | `POST /community/comments/{cid}/report` | 填写举报原因 |
-| 仓库列表 | `LibraryPanel.vue` (待建) | `GET /library/skills` | 打开仓库面板 |
+| 仓库列表 | `LibraryView.vue` | `GET /library/skills` | 打开仓库页面 / 筛选排序 |
+| 仓库详情 | `LibraryView.vue` 弹层 | `GET /library/skills/{id}` | 点击仓库卡片 |
+| 安装到运行层 | 详情弹层按钮 | `POST /library/skills/{id}/install` | 点击安装按钮 |
+| Fork 技能 | 详情弹层按钮 | `POST /library/skills/{id}/fork` | 点击 Fork 按钮 |
+| ZIP 上传 | `LibraryUploadDialog.vue` | `POST /library/skills/upload` | 点击「上传 ZIP」按钮 |
 | 模板匹配 | 收集面板 | `GET /library/skills/match-template?skill_name=xxx` | 收集前自动匹配 |
-| 收集技能 | `CollectPanel.vue` (待建) | `POST /library/skills/collect` | 确认收集 |
-| Fork 技能 | 仓库面板按钮 | `POST /library/skills/{id}/fork` | 修改后重新发布前 |
-| 发布表单 | `PublishPanel.vue` (待建) | `GET /library/skills/{id}/publish-form` | 打开发布面板 |
-| 发布提交 | `PublishPanel.vue` | `POST /library/skills/{id}/publish` | 填写版本号后提交 |
+| 收集技能 | `LibraryView.vue` (待导入标签页) | `POST /library/skills/collect` | 确认收集 |
+| 发布表单 | `LibraryView.vue` (发布标签页) | `GET /library/skills/{id}/publish-form` | 打开发布面板 |
+| 发布提交 | `LibraryView.vue` (发布标签页) | `POST /library/skills/{id}/publish` | 填写版本号后提交 |
 | Owner审核 | `OwnerReviewPanel.vue` (待建) | `GET /owner/reviews` | 打开Owner审核面板 |
 | Owner审核操作 | 审核面板按钮 | `POST /owner/reviews/{id}/approve\|reject` | 审核决策 |
 | Admin审核 | `AdminReviewPanel.vue` (待建) | `GET /admin/reviews` | 打开Admin审核面板 |
 | Admin审核操作 | 审核面板按钮 | `POST /admin/reviews/{id}/approve\|reject` | 审核决策 |
 | 排行榜 | `LeaderboardPanel.vue` (待建) | `GET /community/leaderboard` | 点击排行榜入口 |
-| 仓库文件编辑 | `LibraryFileEditor.vue` (待建) | `GET/PUT /library/skills/{id}/files` | 编辑仓库内文件 |
 | 用户搜索 | 贡献者添加弹层 | `GET /users/search?q=xxx` | 搜索用户 |
 | 贡献者管理 | 详情弹层设置 | `GET/POST/DELETE /community/skills/{id}/contributors` | 管理贡献者 |
 | 举报列表 | `AdminReportPanel.vue` (待建) | `GET /admin/community/reports` | 管理员查看举报 |
@@ -777,15 +778,20 @@ users (uuid)
 | 前端 | ZIP 上传 | ✅ |
 | 前端 | 点赞/评论/举报 UI | ✅ |
 
+### ✅ 已就位 (前端 — 仓库模块)
+
+| 组件 | 说明 |
+|---|---|
+| 仓库面板 | `LibraryView.vue` — 卡片网格列表 + 筛选/排序/分页 + 详情弹层（安装/Fork） |
+| ZIP 上传弹窗 | `LibraryUploadDialog.vue` — 批量拖拽上传 + 进度条 + 队列管理 |
+| 收集面板 | `LibraryView.vue` 待导入标签页 — 运行层→仓库的导入与模板匹配配置表单 |
+| 发布面板 | `LibraryView.vue` 社区发布标签页 — 仓库→社区的发布表单 (版本号/changelog) |
+
 ### ❌ 缺失 (前端)
 
 | 组件 | 说明 |
 |---|---|
-| 仓库面板 | 用户个人技能仓库管理界面 |
-| 收集面板 | 运行层→仓库的收集表单 |
-| 发布面板 | 仓库→社区的发布表单 (版本号/changelog) |
-| Owner 审核面板 | 技能管理员审核界面 |
-| Admin 审核面板 | 全局管理员审核界面 |
 | 排行榜面板 | 热门/最新技能排行 |
 | 贡献者管理 UI | 添加/移除贡献者的界面 |
 | 举报管理 UI | 管理员查看/处理举报的界面 |
+| 仓库/社区技能修改界面 |

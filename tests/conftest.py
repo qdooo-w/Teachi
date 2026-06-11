@@ -1,12 +1,26 @@
-﻿"""社区功能测试公共工具：每个测试用独立 sqlite + 独立 data 目录。
+"""社区功能测试公共工具：每个测试用独立 sqlite + 独立 data 目录。
 通过 monkeypatch 把 backend.community.db 与 backend.config.BASE_DIR 切换到 tmp 路径，避免污染开发数据库。"""
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+
+_SEATABLE_TEST_ENV = {
+    "SEATABLE_SERVER_URL": "https://test.example.com",
+    "SEATABLE_API_TOKEN": "test-token",
+    "SEATABLE_BASE_UUID": "test-uuid",
+    "SEATABLE_TABLE_NAME": "test-table",
+    "SEATABLE_COLUMN_EMAIL": "email",
+    "SEATABLE_COLUMN_CODE": "code",
+    "SEATABLE_COLUMN_STATUS": "status",
+    "SEATABLE_COLUMN_EXPIRES": "expires",
+}
+for key, value in _SEATABLE_TEST_ENV.items():
+    os.environ.setdefault(key, value)
 
 
 @pytest.fixture

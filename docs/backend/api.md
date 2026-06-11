@@ -4,6 +4,8 @@
 
 ## 近期变更
 
+- 2026-06-10：恢复 `user_library_skills.source` 字段（`runtime` / `zip` / `community` / `fork`），所有入库路径显式写入来源。Fork API 改为支持可选请求体覆盖元数据，version 默认继承而非重置。
+- 2026-06-09：仓库模块前后端贯通。① `GET /library/skills` 新增筛选/排序/分页支持；② 新增 `POST /library/skills/upload`（ZIP 上传至仓库），复用 `transfer.py` 内已有校验逻辑；③ 前端完成 `LibraryView.vue`（卡片网格 + 详情弹层 + 安装/Fork）+ `LibraryUploadDialog.vue`（批量拖拽上传）；④ `/library` 入口已加入顶部导航栏和侧栏。
 - 2026-06-08（续）：精简 `user_library_skills` 表，删除 `source` 字段，改用 `community_skill_id` 推断来源。新增模板匹配 API（`GET /library/skills/match-template`）和 Fork API（`POST /library/skills/{id}/fork`）。更新 Collect API 支持 `template_id` 参数。删除数据结构中的 `source` 字段。
 - 2026-06-08：补全社区生态缺失 API：排行榜（`GET /community/leaderboard`）、用户名搜索（`GET /users/search`）、贡献者管理（`GET/POST/DELETE /community/skills/{id}/contributors`）、举报列表（`GET /admin/community/reports`）、仓库文件编辑（`GET/PUT /library/skills/{id}/files`）。补充数据结构定义：`UserSummary`、`CommunitySkillVersion`、`CommunitySkillContributor`、`CommunityCommentReport`、`SkillReviewLog`、`UserLibrarySkill`、`FileListEntry`。
 - 2026-06-04：新增「获取模型列表」API（`POST /settings/model-configs/fetch-models`），允许用户从 OpenAI 兼容提供商获取可用模型名称列表，便于在模型配置中直接选择而无需查阅文档。
@@ -243,6 +245,7 @@ FastAPI 和后端当前可能返回两类错误体：
 | `tags` | string | 标签 JSON 数组 |
 | `version` | string | 当前版本号 |
 | `changelog` | string | 变更说明 |
+| `source` | string | 来源类型：`runtime`（运行层收集）/ `zip`（ZIP 上传）/ `community`（社区安装）/ `fork`（仓库复制） |
 | `community_skill_id` | string \| null | 关联的社区技能 ID（有值=来自社区，空=来自运行层收集） |
 | `local_path` | string | 本地文件路径 |
 | `size_bytes` | int | 文件大小 |
@@ -1494,15 +1497,70 @@ zip 约束：
 | 422 | `{ code: "NO_SKILL_MD", message: "Missing SKILL.md" }` | 缺少 SKILL.md |
 | 400/409 | nonce 相关错误 | 见上文 nonce 规则 |
 
+### POST `/library/skills/upload`
+
+意义：上传 ZIP 技能包到个人仓库。支持通过原始二进制流上传，后端校验 ZIP 结构与内容安全性后解压并创建仓库记录。
+
+认证：需要 `Authorization: Bearer <access_token>`，并携带 nonce 请求头。
+
+请求体：原始 ZIP 文件字节流。
+
+必须携带：
+
+| 位置 | 名称 | 值 | 说明 |
+|---|---|---|---|
+| Header | `Content-Type` | `application/zip` / `application/x-zip-compressed` / `application/octet-stream` | ZIP 文件 MIME 类型 |
+| Header | `Content-Length` | int | 文件大小（用于预检），不超过 40MB |
+
+**校验规则**：
+1. Content-Length 不能超过 `SKILL_ZIP_MAX_BYTES`（默认 40MB）
+2. ZIP 必须包含 `SKILL.md`，且其 frontmatter 解析成功
+3. 根文件仅限文本类型（`.md`/`.txt`/`.json`/`.yaml`/`.yml`）+ 图片
+4. 子目录仅限 `references/`、`assets/`、`examples/`、`templates/`
+5. 禁止符号链接、加密条目、路径穿越（`..`）
+
+成功返回：`201 Created`
+
+返回体：`UserLibrarySkill`（`community_skill_id` 为 null，`version` 固定为 `"1.0.0"`，`changelog` 为 `"Uploaded via zip"`）
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 400 | `{ code: "ZIP_VALIDATION_ERROR", message: ... }` | ZIP 文件损坏或不合法 |
+| 413 | `{ code: "ZIP_VALIDATION_ERROR", message: ... }` | 文件超过大小限制 |
+| 415 | `{ code: "UNSUPPORTED_FILE_TYPE", message: ... }` | Content-Type 不是 ZIP 类型 |
+| 422 | `{ code: "ZIP_VALIDATION_ERROR", message: ... }` | ZIP 结构不符合技能包规范 |
+| 422 | `{ code: "SKILL_PARSE_ERROR", message: ... }` | SKILL.md 解析失败 |
+| 400/409 | nonce 相关错误 | 见上文 nonce 规则 |
+
 ### GET `/library/skills`
 
-意义：获取当前用户的个人仓库技能列表。
+意义：获取当前用户的个人仓库技能列表，支持关键词/标签筛选、排序与分页。
 
 认证：需要 `Authorization: Bearer <access_token>`。
 
+查询参数：
+
+| 名称 | 类型 | 必填 | 默认值 | 说明 |
+|---|---|---|---|---|
+| `keyword` | string | 否 | — | 搜索关键词（匹配 name/display_name/description），最长 200 字符 |
+| `tag` | string[] | 否 | `[]` | 标签筛选（可重复传参，AND 逻辑），最多 50 个 |
+| `sort` | string | 否 | `newest` | 排序方式：`newest`（最新）/ `oldest`（最早）/ `name-asc`（名称 A-Z）/ `name-desc`（名称 Z-A） |
+| `limit` | int | 否 | 20 | 每页数量，1-100 |
+| `offset` | int | 否 | 0 | 起始偏移 |
+
 成功返回：`200 OK`
 
-返回体：`UserLibrarySkill[]`，按 `created_at` 降序排列。
+返回体：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `skills` | `UserLibrarySkill[]` | 当前页技能列表 |
+| `total` | int | 符合筛选条件的总数 |
+| `limit` | int | 当前分页 limit |
+| `offset` | int | 当前分页 offset |
+| `sort` | string | 当前排序方式 |
 
 ### GET `/library/skills/{library_id}`
 
@@ -1604,7 +1662,7 @@ zip 约束：
 
 ### POST `/library/skills/{library_id}/fork`
 
-意义：Fork 仓库技能，创建新的副本。用于修改从社区安装的技能后重新发布。
+意义：Fork 仓库技能，创建新的副本。不经过运行层，直接从仓库层复制文件。
 
 认证：需要 `Authorization: Bearer <access_token>`，并携带 nonce 请求头。
 
@@ -1612,16 +1670,26 @@ zip 约束：
 
 | 名称 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `library_id` | string | 是 | 仓库技能 ID |
+| `library_id` | string | 是 | 源仓库技能 ID |
 
-请求体：无
+请求体（可选）：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `name` | string | 否 | 技能标识名，不传则继承源记录 |
+| `display_name` | string | 否 | 显示名，不传则继承 |
+| `description` | string | 否 | 描述，不传则继承 |
+| `readme_md` | string | 否 | README，不传则继承 |
+| `tags` | string | 否 | 标签 JSON 数组，不传则继承 |
+| `version` | string | 否 | 版本号，不传则继承源记录版本 |
 
 **行为**：
 - 创建新的 `library_id`（新 UUID）
-- 复制 skill 文件夹
-- 继承原有元数据（name, display_name, description, tags, readme_md）
+- 复制 skill 文件夹：`library/{old_id}/skill/` → `library/{new_id}/skill/`
+- 元数据默认继承源记录，请求体中的字段可覆盖
+- version 默认继承（不重置），changelog 固定为 `"Fork"`
+- `source` 写入 `"fork"`
 - 保留 `community_skill_id` 关联
-- version 重置为 "1.0.0"，changelog 重置为 "Fork"
 
 成功返回：`200 OK`
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 import uuid
 from dataclasses import asdict
 from pathlib import Path
@@ -48,6 +49,18 @@ def _suggest_next_version(current: str | None) -> str:
 class CollectSkillRequest(BaseModel):
     skill_name: str = Field(..., min_length=1, max_length=64)
     template_id: str | None = None  # 可选：指定模板技能 ID
+    name: str | None = Field(None, min_length=1, max_length=64)
+    display_name: str | None = None
+    description: str | None = None
+    readme_md: str | None = None
+    tags: str | None = None
+
+class UpdateLibrarySkillMetaRequest(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=64)
+    display_name: str | None = None
+    description: str | None = None
+    readme_md: str | None = None
+    tags: str | None = None
 
 class PublishFromLibraryRequest(BaseModel):
     version: str = Field(..., pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$")
@@ -56,6 +69,17 @@ class PublishFromLibraryRequest(BaseModel):
 class InstallFromLibraryRequest(BaseModel):
     target: Literal["user", "project"] = "user"
     pid: str | None = None
+
+
+LibrarySkillSort = Literal["newest", "oldest", "name-asc", "name-desc"]
+
+
+class LibrarySkillListResponse(BaseModel):
+    skills: list[dict]
+    total: int
+    limit: int
+    offset: int
+    sort: str
 
 @router.get("/skills/parse-runtime")
 def parse_runtime_skill(
@@ -89,9 +113,18 @@ def parse_runtime_skill(
     # Check if we already have this in library
     latest_lib = db.library.get_latest_by_name(user_uuid=current_user["uuid"], name=skill_name)
 
+    readme_path = skill_dir / "README.md"
+    readme_content = ""
+    if readme_path.is_file():
+        try:
+            readme_content = readme_path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            readme_content = ""
+
     return {
         "frontmatter": asdict(fields),
-        "latest_in_library": latest_lib
+        "readme_md": readme_content,
+        "latest_in_library": latest_lib,
     }
 
 
@@ -170,11 +203,14 @@ def collect_skill_to_library(
     if not template:
         template = db.library.get_latest_by_name(user_uuid=user_uuid, name=skill_name)
 
-    # 从模板继承元数据，无模板时使用默认值
-    display_name = template["display_name"] if template else fields.display_name
-    description = template["description"] if template else ""  # 不从 SKILL.md 提取，留给作者另行填写
-    readme_md = template["readme_md"] if template else (fields.body if fields.body else "")
-    tags = template["tags"] if template else "[]"
+    # 从模板继承元数据，无模板时使用默认值，如果 payload 传入了则优先使用
+    display_name = payload.display_name if payload.display_name is not None else (template["display_name"] if template else fields.display_name)
+    description = payload.description if payload.description is not None else (template["description"] if template else "")
+    readme_md = payload.readme_md if payload.readme_md is not None else (template["readme_md"] if template else (fields.body if fields.body else ""))
+    tags = payload.tags if payload.tags is not None else (template["tags"] if template else "[]")
+    
+    # 优先使用 SKILL.md 中解析出来的 version，其次继承模板版本，最后默认为 "1.0.0"
+    version = fields.version if fields.version else (template["version"] if template else "1.0.0")
 
     library_id = str(uuid.uuid4())
     library_fs = LibraryFile(library_id=library_id, user_uuid=user_uuid, db_facade=db)
@@ -183,15 +219,18 @@ def collect_skill_to_library(
     try:
         _copy_skill_dir(src_dir, dst_dir)
 
+        final_name = payload.name.strip() if (payload.name and payload.name.strip()) else fields.name
+
         record = db.library.create(
             user_uuid=user_uuid,
-            name=fields.name,
+            name=final_name,
             display_name=display_name,
             description=description,
             readme_md=readme_md,
             tags=tags,
-            version="1.0.0",
+            version=version,
             changelog="Initial collect",
+            source="runtime",
             community_skill_id=None,  # 为空表示来自运行层
             local_path=f"data/{user_uuid}/library/{library_id}",
             size_bytes=_directory_size(dst_dir),
@@ -203,13 +242,113 @@ def collect_skill_to_library(
             shutil.rmtree(dst_dir.parent, ignore_errors=True)
         raise HTTPException(status_code=500, detail={"code": "INTERNAL_ERROR", "message": str(e)})
 
-@router.get("/skills")
-def list_library_skills(
+class ForkLibrarySkillRequest(BaseModel):
+    """Fork 时可选覆盖元数据，不传则继承源记录"""
+    name: str | None = Field(None, min_length=1, max_length=64)
+    display_name: str | None = None
+    description: str | None = None
+    readme_md: str | None = None
+    tags: str | None = None
+
+@router.post("/skills/{library_id}/fork", dependencies=[Depends(verify_nonce)])
+def fork_library_skill(
+    library_id: str,
+    payload: ForkLibrarySkillRequest | None = None,
     current_user: dict[str, Any] = Depends(get_current_user),
     db: DatabaseFacade = Depends(get_db),
 ):
+    """
+    Fork 操作：从仓库层复制一份技能到新仓库条目（不经过运行层）
+
+    【数据流】
+    - 输入：源仓库技能 ID (library_id)，可选覆盖元数据
+    - 文件流：library/{old_id}/skill/ -> 复制到 library/{new_id}/skill/
+    - 数据库流：继承源记录的元数据和 version，payload 中的字段优先覆盖
+
+    【调用链】
+    - 客户端请求 -> APIRouter -> fork_library_skill()
+    - 校验源记录归属 -> db.library.get_by_id()
+    - 文件复制 -> _copy_skill_dir()
+    - 创建数据库记录 -> db.library.create()
+    """
     db = _resolve_db(db)
-    return db.library.list_by_user(current_user["uuid"])
+    user_uuid = current_user["uuid"]
+
+    src_record = db.library.get_by_id(library_id)
+    if not src_record or src_record["user_uuid"] != user_uuid:
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "Library skill not found"})
+
+    src_dir = LibraryFile(library_id=library_id, user_uuid=user_uuid, db_facade=db).base_path / "skill"
+    if not src_dir.is_dir():
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "Library skill data missing"})
+
+    # payload 传入的字段覆盖源记录
+    p = payload or ForkLibrarySkillRequest()
+    name = p.name.strip() if p.name else src_record["name"]
+    display_name = p.display_name if p.display_name is not None else src_record["display_name"]
+    description = p.description if p.description is not None else src_record["description"]
+    readme_md = p.readme_md if p.readme_md is not None else src_record["readme_md"]
+    tags = p.tags if p.tags is not None else src_record["tags"]
+    version = src_record["version"]  # 版本号继承自源记录
+
+    new_id = str(uuid.uuid4())
+    dst_dir = LibraryFile(library_id=new_id, user_uuid=user_uuid, db_facade=db).base_path / "skill"
+
+    try:
+        _copy_skill_dir(src_dir, dst_dir)
+
+        record = db.library.create(
+            user_uuid=user_uuid,
+            name=name,
+            display_name=display_name,
+            description=description,
+            readme_md=readme_md,
+            tags=tags,
+            version=version,
+            changelog="Fork",
+            source="fork",
+            community_skill_id=src_record["community_skill_id"],
+            local_path=f"data/{user_uuid}/library/{new_id}",
+            size_bytes=_directory_size(dst_dir),
+            skill_id=new_id,
+        )
+        return record
+    except Exception as e:
+        if dst_dir.parent.exists():
+            shutil.rmtree(dst_dir.parent, ignore_errors=True)
+        raise HTTPException(status_code=500, detail={"code": "INTERNAL_ERROR", "message": str(e)})
+
+@router.get("/skills")
+def list_library_skills(
+    keyword: str | None = Query(None, max_length=200, description="搜索关键词（匹配名称/显示名/描述）"),
+    tag: list[str] = Query(default=[], max_length=50, description="标签筛选（可多选，AND 逻辑）"),
+    sort: LibrarySkillSort = Query("newest", description="排序方式"),
+    limit: int = Query(20, ge=1, le=100, description="每页数量"),
+    offset: int = Query(0, ge=0, description="起始偏移"),
+    current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
+):
+    """获取当前用户仓库技能列表，支持关键词/标签筛选、排序与分页"""
+    db = _resolve_db(db)
+    user_uuid = current_user["uuid"]
+
+    skills = db.library.list_by_user_filtered(
+        user_uuid=user_uuid,
+        keyword=keyword,
+        tags=tag if tag else None,
+        sort=sort,
+        limit=limit,
+        offset=offset,
+    )
+    total = db.library.count_by_user(user_uuid=user_uuid, keyword=keyword, tags=tag if tag else None)
+
+    return {
+        "skills": skills,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "sort": sort,
+    }
 
 @router.post("/skills/{library_id}/publish", dependencies=[Depends(verify_nonce)])
 def publish_from_library(
@@ -463,6 +602,112 @@ def write_library_file(
     library_fs = LibraryFile(library_id=library_id, user_uuid=current_user["uuid"], db_facade=db)
     try:
         library_fs.create_file(f"skill/{payload.path}", payload.content)
+        if payload.path == "SKILL.md":
+            try:
+                from backend.skill_parser import parse_skill_file
+                fields = parse_skill_file(payload.content)
+                db.library.update_meta(
+                    library_id=library_id,
+                    user_uuid=current_user["uuid"],
+                    name=fields.name,
+                    display_name=fields.display_name,
+                    description=fields.description,
+                    version=fields.version,
+                )
+            except Exception:
+                pass
         return {"path": payload.path, "success": True}
     except FileError as e:
         raise HTTPException(status_code=400, detail={"code": "FILE_ERROR", "message": str(e)})
+
+
+@router.put("/skills/{library_id}/meta", dependencies=[Depends(verify_nonce)])
+def update_library_skill_meta(
+    library_id: str,
+    payload: UpdateLibrarySkillMetaRequest,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
+):
+    """更新仓库技能的展示元数据。"""
+    db = _resolve_db(db)
+    user_uuid = current_user["uuid"]
+
+    record = db.library.get_by_id(library_id)
+    if not record or record["user_uuid"] != user_uuid:
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "Library skill not found"})
+
+    db.library.update_meta(
+        library_id=library_id,
+        user_uuid=user_uuid,
+        name=payload.name,
+        display_name=payload.display_name,
+        description=payload.description,
+        readme_md=payload.readme_md,
+        tags=payload.tags,
+    )
+
+    return db.library.get_by_id(library_id)
+
+
+class BulkDeleteRequest(BaseModel):
+    skill_ids: list[str] = Field(..., min_length=1, max_length=100)
+
+
+@router.delete("/skills/{library_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_library_skill(
+    library_id: str,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
+):
+    """删除单条仓库技能及其本地文件。"""
+    db = _resolve_db(db)
+    user_uuid = current_user["uuid"]
+
+    record = db.library.get_by_id(library_id)
+    if not record or record["user_uuid"] != user_uuid:
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "Library skill not found"})
+
+    db.library.delete_for_user(library_id, user_uuid)
+
+    # 清理本地文件
+    try:
+        local_path = record.get("local_path", "")
+        if local_path:
+            skill_dir = Path(local_path)
+            if skill_dir.exists():
+                shutil.rmtree(skill_dir, ignore_errors=True)
+    except Exception:
+        logger.warning("Failed to clean up local files for library skill %s", library_id)
+
+
+@router.post("/skills/bulk-delete")
+def bulk_delete_library_skills(
+    payload: BulkDeleteRequest,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
+):
+    """批量删除仓库技能，返回实际删除数量。"""
+    db = _resolve_db(db)
+    user_uuid = current_user["uuid"]
+
+    # 先查询需要删除的记录以清理文件
+    records = []
+    for sid in payload.skill_ids:
+        record = db.library.get_by_id(sid)
+        if record and record["user_uuid"] == user_uuid:
+            records.append(record)
+
+    deleted = db.library.delete_bulk_for_user(payload.skill_ids, user_uuid)
+
+    # 清理本地文件
+    for record in records:
+        try:
+            local_path = record.get("local_path", "")
+            if local_path:
+                skill_dir = Path(local_path)
+                if skill_dir.exists():
+                    shutil.rmtree(skill_dir, ignore_errors=True)
+        except Exception:
+            logger.warning("Failed to clean up local files for library skill %s", record["id"])
+
+    return {"deleted": deleted}
