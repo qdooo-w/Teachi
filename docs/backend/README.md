@@ -265,6 +265,7 @@ VALIDATE → LOAD_HISTORY → BUILD_MESSAGES → BUILD_MODEL → CALL_MODEL → 
 - 后端按展示语义生成 turn block：一条或多条连续 `user` 消息 + 随后的 `assistant` 回复；`tool_call` / `tool_result` 等非展示消息不会进入前端区块。
 - 轻量索引只返回 `block_id`、`digest`、角色、锚点、附件计数、文本长度和估算高度。前端用它构造完整历史滚动条，并只对可见 block 按需获取正文。
 - `message-block-delta` 根据客户端已知 `block_id + digest` 返回 `upsert` 和 `removed`，用于发送、重放、版本切换和删除回合后的增量同步。
+- 前端右侧 `ScrollNodeChain` 节点链复用同一套 block 顺序、估算/实测高度和正文按需加载协议；后端无需额外提供滚动条或节点链专用接口，hover 预览缺正文时仍通过 `message-blocks` 获取。
 
 ### 技能系统与生命周期
 

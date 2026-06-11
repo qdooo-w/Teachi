@@ -54,7 +54,18 @@
   4. `handleChatScroll()` 只更新虚拟窗口位置，不触发“加载上一页”式的数据拼接。
 * **收益**：滚动条保持完整历史语义，同时把实际 DOM 和昂贵 Markdown 渲染限制在可视区附近。
 
-### 1.7 已知限制
+### 1.7 右侧节点链导航
+
+* **问题描述**：长会话虽然保留了完整原生滚动条，但原生滚动条无法直接表达“当前处于哪个对话回合”，也不能快速预览附近 turn block 的用户问题。
+* **修改方案**：
+  1. `ScrollNodeChain.vue` 作为 ChatView 的右侧辅助导航层，不替换原生滚动条。
+  2. 组件一次性把所有 turn block 节点渲染进同一个内部 `node-track`，外层 `node-viewport` 只裁剪出可见节点段；滚动时只更新 `transform`，避免节点一格一格重绘跳动。
+  3. `ChatView.vue` 用 `blockMetrics.offsets`、实测 block 高度和 `chatContainer.scrollTop` 计算连续的 `scrollNodeVirtualIndex`，中心聚焦节点跟随该小数索引移动。
+  4. 中心聚焦节点使用暗紫色 `#4c1d95`；hover 节点会显示对应 block 的首条 user 消息，正文未缓存时通过 `ensureBlockContents([block.id])` 按需获取。
+  5. 点击节点会调用 `scrollToMessageBlock(index)`，按当前 block offset 平滑滚动到对应回合。
+* **收益**：右侧节点链提供回合级定位和预览，同时继续复用已有 block index / block content 缓存机制，不增加首屏正文加载量。
+
+### 1.8 已知限制
 
 * `estimated_height` 是后端估算值，真实高度会在图片 Blob URL、Markdown 二阶段渲染、LaTeX / Mermaid 完成渲染、版本工具栏出现后由 `ResizeObserver` 修正。
 * 贴底状态下前端会继续保持底部；向上浏览历史时，如果某个 block 从估高切到实测高度，滚动位置可能出现轻微修正。
@@ -73,6 +84,13 @@
   * `ensureVisibleBlockContents()` / `ensureBlockContents()`：只为可见 block 拉取正文。
   * `measureVirtualBlock()`：通过 `ResizeObserver` 记录真实 block 高度。
   * `loadMessages(init)`：初始化走 block index，后续刷新走 block delta，并同步附件。
+  * `scrollNodeItems` / `scrollNodeVirtualIndex` / `calculateScrollNodeVirtualIndex()`：右侧节点链的数据源和连续位置映射。
+  * `handleScrollNodeHover()` / `scrollToMessageBlock()`：节点 hover 按需加载正文，节点点击平滑定位到 turn block。
+* [`ScrollNodeChain.vue`](../../frontend/src/components/ScrollNodeChain.vue)
+  * `node-track`：包含全部 turn block 节点，通过 `transform` 连续移动。
+  * `node-viewport`：裁剪右侧可见节点段，避免视觉上显示全部节点。
+  * `currentIndex`：把当前连续位置四舍五入为中心聚焦节点，使用暗紫色高亮。
+  * `nodeTooltip`：hover 时独立显示用户消息预览，不参与节点轨道滚动。
 * [`api.ts`](../../frontend/src/api.ts)
   * `MessageBlockIndexItem` / `MessageBlockIndexResponse` / `MessageBlockDeltaResponse` / `DisplayMessageBlock`：前端 block 协议类型。
   * `listMessageBlockIndex()`：调用 `GET /sessions/{sid}/message-block-index`。

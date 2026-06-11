@@ -1,0 +1,631 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Learnova Scroll Node Chain Preview</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f3f4f6;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --faint: #9ca3af;
+      --line: #d1d5db;
+      --soft-line: #e5e7eb;
+      --black: #111827;
+      --white: #ffffff;
+      --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      height: 100%;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--text);
+      font-family:
+        ui-sans-serif,
+        system-ui,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        "PingFang SC",
+        "Hiragino Sans GB",
+        "Microsoft YaHei",
+        sans-serif;
+    }
+
+    body {
+      font-size: 15px;
+      line-height: 1.65;
+    }
+
+    .app {
+      position: relative;
+      height: 100vh;
+      overflow: hidden;
+      background: var(--bg);
+    }
+
+    .floating-title {
+      position: absolute;
+      top: 18px;
+      left: 50%;
+      z-index: 20;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      max-width: calc(100vw - 32px);
+      border: 1px solid var(--soft-line);
+      border-radius: 999px;
+      background: rgb(255 255 255 / 0.82);
+      padding: 7px 14px;
+      color: var(--muted);
+      box-shadow: 0 10px 30px rgb(17 24 39 / 0.06);
+      backdrop-filter: blur(16px);
+      white-space: nowrap;
+      pointer-events: none;
+    }
+
+    .floating-title strong {
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 650;
+    }
+
+    .floating-title span {
+      color: var(--faint);
+      font-size: 12px;
+    }
+
+    .chat-scroll {
+      position: absolute;
+      inset: 0;
+      overflow-y: scroll;
+      padding: 86px 98px 140px 24px;
+      scrollbar-gutter: stable;
+    }
+
+    .chat-column {
+      width: min(760px, 100%);
+      margin: 0 auto;
+    }
+
+    .turn {
+      margin-bottom: 42px;
+      scroll-margin-block: 84px;
+    }
+
+    .user-row {
+      display: flex;
+      justify-content: flex-end;
+      margin-bottom: 14px;
+    }
+
+    .user-bubble {
+      max-width: min(85%, 560px);
+      border-radius: 28px;
+      background: var(--white);
+      padding: 9px 16px;
+      color: var(--text);
+      box-shadow: 0 1px 0 rgb(17 24 39 / 0.03);
+    }
+
+    .assistant-row {
+      display: flex;
+      justify-content: flex-start;
+    }
+
+    .assistant-bubble {
+      max-width: min(92%, 680px);
+      padding: 12px 16px;
+      color: #374151;
+    }
+
+    .assistant-bubble p,
+    .user-bubble p {
+      margin: 0;
+    }
+
+    .assistant-bubble p + p {
+      margin-top: 10px;
+    }
+
+    .node-nav {
+      position: absolute;
+      top: 50%;
+      right: 18px;
+      z-index: 30;
+      width: 236px;
+      height: 304px;
+      transform: translateY(-50%);
+      pointer-events: none;
+    }
+
+    .node-spine {
+      position: absolute;
+      top: 0;
+      right: 27px;
+      bottom: 0;
+      width: 1px;
+      border-radius: 999px;
+      background: rgb(31 41 55 / 0.025);
+    }
+
+    .node-viewport {
+      position: absolute;
+      inset: 0;
+      overflow: hidden;
+      pointer-events: none;
+    }
+
+    .node-track {
+      position: absolute;
+      top: 0;
+      right: 0;
+      width: 100%;
+      will-change: transform;
+    }
+
+    .node {
+      position: absolute;
+      right: 0;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      width: 100%;
+      height: 28px;
+      transform: translateY(-50%);
+      appearance: none;
+      border: 0;
+      background: transparent;
+      padding: 0;
+      color: inherit;
+      font: inherit;
+      pointer-events: auto;
+      cursor: pointer;
+    }
+
+    .node-line {
+      width: 13px;
+      height: 3px;
+      border-radius: 999px;
+      background: var(--line);
+      opacity: 0.9;
+      transition:
+        width 160ms var(--ease),
+        height 160ms var(--ease),
+        background-color 160ms var(--ease),
+        opacity 160ms var(--ease),
+        transform 160ms var(--ease);
+    }
+
+    .node.is-current .node-line {
+      width: 15px;
+      height: 4px;
+      background: #4f6df5;
+      opacity: 1;
+    }
+
+    .node:hover .node-line,
+    .node:focus-visible .node-line {
+      width: 28px;
+      height: 3px;
+      background: var(--black);
+      opacity: 1;
+      transform: translateX(-1px);
+    }
+
+    .node:focus-visible {
+      outline: none;
+    }
+
+    .node-tooltip {
+      position: absolute;
+      top: 50%;
+      right: 52px;
+      max-width: 178px;
+      transform: translateY(-50%) translateX(5px);
+      overflow: hidden;
+      border: 1px solid var(--soft-line);
+      border-radius: 10px;
+      background: rgb(255 255 255 / 0.94);
+      padding: 5px 8px;
+      color: var(--text);
+      font-size: 12px;
+      line-height: 1.35;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      opacity: 0;
+      box-shadow: 0 12px 28px rgb(17 24 39 / 0.1);
+      backdrop-filter: blur(14px);
+      pointer-events: none;
+      transition:
+        opacity 150ms var(--ease),
+        top 150ms var(--ease),
+        transform 150ms var(--ease);
+    }
+
+    .node-tooltip::after {
+      content: "";
+      position: absolute;
+      top: 50%;
+      right: -12px;
+      width: 12px;
+      height: 1px;
+      transform: translateY(-50%);
+      background: var(--black);
+      opacity: 0.85;
+    }
+
+    .node-tooltip.is-visible {
+      transform: translateY(-50%) translateX(0);
+      opacity: 1;
+    }
+
+    .composer-preview {
+      position: absolute;
+      right: 24px;
+      bottom: 18px;
+      left: 24px;
+      z-index: 15;
+      display: flex;
+      justify-content: center;
+      pointer-events: none;
+    }
+
+    .composer-shell {
+      width: min(760px, 100%);
+      min-height: 92px;
+      border: 1px solid var(--soft-line);
+      border-radius: 24px;
+      background: rgb(255 255 255 / 0.86);
+      padding: 14px 16px;
+      box-shadow: 0 20px 60px rgb(17 24 39 / 0.08);
+      backdrop-filter: blur(18px);
+      pointer-events: auto;
+    }
+
+    .composer-line {
+      width: 72%;
+      height: 12px;
+      margin-top: 7px;
+      border-radius: 999px;
+      background: #e5e7eb;
+    }
+
+    .composer-line.short {
+      width: 42%;
+      margin-top: 12px;
+      background: #f3f4f6;
+    }
+
+    @media (max-width: 760px) {
+      .chat-scroll {
+        padding-right: 48px;
+        padding-left: 16px;
+      }
+
+      .node-nav {
+        right: 9px;
+        width: 204px;
+      }
+
+      .node-tooltip {
+        right: 46px;
+        max-width: 154px;
+      }
+
+      .floating-title span {
+        display: none;
+      }
+    }
+
+  </style>
+</head>
+<body>
+  <main class="app">
+    <div class="floating-title">
+      <strong>节点链滚动预览</strong>
+      <span>10 nodes</span>
+    </div>
+
+    <section id="chatScroll" class="chat-scroll" aria-label="chat preview">
+      <div id="chatColumn" class="chat-column"></div>
+    </section>
+
+    <nav class="node-nav" aria-label="message node chain">
+      <div class="node-spine" aria-hidden="true"></div>
+      <div id="nodeViewport" class="node-viewport">
+        <div id="nodeTrack" class="node-track"></div>
+      </div>
+      <div id="nodeTooltip" class="node-tooltip" aria-hidden="true"></div>
+    </nav>
+
+    <div class="composer-preview" aria-hidden="true">
+      <div class="composer-shell">
+        <div class="composer-line"></div>
+        <div class="composer-line short"></div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    const turns = [
+      {
+        user: "先帮我整理一下今天要复习的高数重点。",
+        assistant: [
+          "可以先把极限、导数、积分和级数分成四组，每组只保留一个主线问题。",
+          "如果时间有限，优先做错题对应的概念回看，而不是从头重刷讲义。"
+        ]
+      },
+      {
+        user: "把极限里面我最容易混的地方列出来。",
+        assistant: [
+          "重点看等价无穷小的替换条件、洛必达使用前提，以及左右极限不一致时不能直接代入的情况。",
+          "这些点适合配合两三道短题快速校准。"
+        ]
+      },
+      {
+        user: "我想要一个按 45 分钟划分的安排。",
+        assistant: [
+          "第一段做极限和导数错题，第二段集中积分计算，第三段处理级数判敛。",
+          "每段末尾留 5 分钟写下这段最容易复发的错误。"
+        ]
+      },
+      {
+        user: "导数应用部分怎么复习比较稳？",
+        assistant: [
+          "把单调性、极值、凹凸性和拐点放在一张流程图里。题目先判断定义域，再看一阶导和二阶导。",
+          "不要跳过端点和不可导点，它们经常是漏解来源。"
+        ]
+      },
+      {
+        user: "能不能给我一个题目讲解的展示节奏？",
+        assistant: [
+          "先说目标，再列已知条件，然后说明选择某个方法的原因。",
+          "最后把易错点单独拎出来，避免学生只记住计算过程。"
+        ]
+      },
+      {
+        user: "这段答案有点长，滚动的时候右侧节点要怎么显示？",
+        assistant: [
+          "节点链只显示固定数量的索引，不承担原生滚动条的连续像素表达。",
+          "当前视口附近的节点围绕中心焦点更新，hover 时再透露对应用户消息。"
+        ]
+      },
+      {
+        user: "如果消息特别长，节点提示会不会挡住正文？",
+        assistant: [
+          "提示只在右侧节点附近展开，并限制最大宽度。超出部分用省略号处理，避免遮挡主阅读区。",
+          "真正需要完整定位时，可以考虑点击节点跳转到该回合。"
+        ]
+      },
+      {
+        user: "我希望中心节点永远代表当前阅读位置。",
+        assistant: [
+          "这个原型把第 6 个节点作为中心焦点，滚动时更新它映射的 turn block。",
+          "周围节点展示相邻上下文，始终保持 10 个可见节点。"
+        ]
+      },
+      {
+        user: "节点高亮可以只变黑，不要太花。",
+        assistant: [
+          "当前 hover 态只改变横线颜色、长度和左侧文本浮层。",
+          "不加彩色状态，保持 Learnova 的黑白灰主界面语言。"
+        ]
+      },
+      {
+        user: "向上翻历史的时候会怎样？",
+        assistant: [
+          "节点窗口会按当前 scrollTop 重新映射，中心仍然落在当前阅读位置附近。",
+          "如果后续接入真实 block，可以直接用 blockIndex 的顺序和高度计算映射。"
+        ]
+      },
+      {
+        user: "这个方案还能保留原来的虚拟渲染吗？",
+        assistant: [
+          "可以。节点链只是滚动位置表达层，底层仍然可以保持 turn-block virtualization。",
+          "它不要求一次性挂载所有消息，也不改变正文按需加载策略。"
+        ]
+      },
+      {
+        user: "如果用户拖拽节点呢？",
+        assistant: [
+          "原型先支持点击节点跳转。拖拽可以后续加，但会涉及命中区域、惯性和移动端手势。",
+          "先讨论视觉密度和 hover 信息是否合适更稳。"
+        ]
+      },
+      {
+        user: "当前节点和 hover 节点要区分吗？",
+        assistant: [
+          "当前节点保持中灰和略长，hover 节点变黑。",
+          "这样不会把当前阅读位置误认为用户正在主动选择的位置。"
+        ]
+      },
+      {
+        user: "多轮连续 user 消息应该算一个节点吗？",
+        assistant: [
+          "按现在的 block 方案，连续 user 消息加 assistant 回复属于同一个 turn block。",
+          "节点提示可取该 block 第一条用户消息，也可以合并成摘要。"
+        ]
+      },
+      {
+        user: "消息里有图片和公式的时候呢？",
+        assistant: [
+          "节点本身仍只关心 block 索引，不直接渲染图片或公式。",
+          "真实高度变化由虚拟滚动层处理，节点链只消费修正后的 block offset。"
+        ]
+      },
+      {
+        user: "我想让节点线更短一点。",
+        assistant: [
+          "可以把默认宽度控制在 28 到 34 像素，hover 再扩到 56 像素。",
+          "短线会更像导航刻度，长线会更像传统滚动条。"
+        ]
+      },
+      {
+        user: "节点之间的距离还能再密一点吗？",
+        assistant: [
+          "可以，不过 10 个节点如果太密，hover 命中会变差。",
+          "桌面端建议保持 32 到 38 像素间距，移动端可以减少标签展示。"
+        ]
+      },
+      {
+        user: "帮我保留最后一屏贴底的感觉。",
+        assistant: [
+          "底部仍然由原来的 scrollToBottom 控制。节点链只跟随 scrollTop 映射，不干预贴底判断。",
+          "当 stickToBottom 为真时，中心节点会自然映射到最后一个 block 附近。"
+        ]
+      },
+      {
+        user: "如果滚动条被替换，用户还能知道历史长度吗？",
+        assistant: [
+          "只显示 10 个节点会弱化绝对长度感。可以通过节点窗口映射和底部/顶部淡化来表达还有更多内容。",
+          "如果需要更强长度感，可以在透明线中加入极淡的全局位置指示。"
+        ]
+      },
+      {
+        user: "先这样，我想看最终状态。",
+        assistant: [
+          "这个预览保持 10 个节点、中心焦点、hover 显示用户消息、点击跳转。",
+          "后续如果认可方向，再把它拆成 Vue 组件接到真实 blockIndex。"
+        ]
+      }
+    ];
+
+    const chatScroll = document.getElementById("chatScroll");
+    const chatColumn = document.getElementById("chatColumn");
+    const nodeViewport = document.getElementById("nodeViewport");
+    const nodeTrack = document.getElementById("nodeTrack");
+    const nodeTooltip = document.getElementById("nodeTooltip");
+    const NODE_GAP = 28;
+    let currentActiveIndex = null;
+    let hoveredNode = null;
+    let nodeRaf = null;
+
+    function escapeHtml(value) {
+      return value
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+    }
+
+    function renderChat() {
+      chatColumn.innerHTML = turns.map((turn, index) => {
+        const assistant = turn.assistant.map((line) => `<p>${escapeHtml(line)}</p>`).join("");
+        return `
+          <article class="turn" id="turn-${index}" data-turn-index="${index}">
+            <div class="user-row">
+              <div class="user-bubble"><p>${escapeHtml(turn.user)}</p></div>
+            </div>
+            <div class="assistant-row">
+              <div class="assistant-bubble">${assistant}</div>
+            </div>
+          </article>
+        `;
+      }).join("");
+    }
+
+    function currentVirtualIndex() {
+      const maxScroll = Math.max(1, chatScroll.scrollHeight - chatScroll.clientHeight);
+      const progress = Math.min(1, Math.max(0, chatScroll.scrollTop / maxScroll));
+      return progress * (turns.length - 1);
+    }
+
+    function scrollToTurn(index) {
+      const target = document.getElementById(`turn-${index}`);
+      if (!target) return;
+      chatScroll.scrollTo({
+        top: Math.max(0, target.offsetTop - 96),
+        behavior: "smooth"
+      });
+    }
+
+    function nodeCenterWithinNav(node) {
+      const navRect = nodeViewport.getBoundingClientRect();
+      const nodeRect = node.getBoundingClientRect();
+      return nodeRect.top + nodeRect.height / 2 - navRect.top;
+    }
+
+    function updateTooltipPosition() {
+      if (!hoveredNode) return;
+      const top = Math.max(10, Math.min(nodeViewport.clientHeight - 10, nodeCenterWithinNav(hoveredNode)));
+      nodeTooltip.style.top = `${top}px`;
+    }
+
+    function showNodeTooltip(node, turnIndex) {
+      hoveredNode = node;
+      nodeTooltip.textContent = turns[turnIndex].user;
+      updateTooltipPosition();
+      nodeTooltip.classList.add("is-visible");
+    }
+
+    function hideNodeTooltip() {
+      hoveredNode = null;
+      nodeTooltip.classList.remove("is-visible");
+    }
+
+    function renderNodes() {
+      nodeTrack.innerHTML = "";
+      turns.forEach((turn, turnIndex) => {
+        const node = document.createElement("button");
+        node.type = "button";
+        node.className = "node";
+        node.style.top = `${turnIndex * NODE_GAP}px`;
+        node.dataset.turnIndex = String(turnIndex);
+        node.setAttribute("aria-label", "message node");
+        node.innerHTML = '<span class="node-line"></span>';
+        node.addEventListener("mouseenter", () => showNodeTooltip(node, turnIndex));
+        node.addEventListener("focus", () => showNodeTooltip(node, turnIndex));
+        node.addEventListener("mouseleave", hideNodeTooltip);
+        node.addEventListener("blur", hideNodeTooltip);
+        node.addEventListener("click", () => scrollToTurn(turnIndex));
+        nodeTrack.appendChild(node);
+      });
+    }
+
+    function setCurrentNode(activeIndex) {
+      if (currentActiveIndex === activeIndex) return;
+      if (currentActiveIndex !== null) {
+        nodeTrack.querySelector(`[data-turn-index="${currentActiveIndex}"]`)?.classList.remove("is-current");
+      }
+      nodeTrack.querySelector(`[data-turn-index="${activeIndex}"]`)?.classList.add("is-current");
+      currentActiveIndex = activeIndex;
+    }
+
+    function updateNodesNow() {
+      nodeRaf = null;
+      const virtualIndex = currentVirtualIndex();
+      const activeIndex = Math.round(virtualIndex);
+      const centerY = nodeViewport.clientHeight / 2;
+      nodeTrack.style.transform = `translateY(${centerY - virtualIndex * NODE_GAP}px)`;
+      setCurrentNode(activeIndex);
+      updateTooltipPosition();
+    }
+
+    function scheduleNodeUpdate() {
+      if (nodeRaf !== null) return;
+      nodeRaf = window.requestAnimationFrame(updateNodesNow);
+    }
+
+    renderChat();
+    renderNodes();
+    scheduleNodeUpdate();
+    chatScroll.addEventListener("scroll", scheduleNodeUpdate, { passive: true });
+    window.addEventListener("resize", scheduleNodeUpdate);
+    requestAnimationFrame(() => {
+      chatScroll.scrollTop = chatScroll.scrollHeight;
+      scheduleNodeUpdate();
+    });
+  </script>
+</body>
+</html>

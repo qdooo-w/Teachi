@@ -4,7 +4,7 @@
 
 ## 近期变更
 
-- 2026-06-11：新增消息区块展示协议，用于长会话前端虚拟滚动。① `GET /sessions/{sid}/message-block-index` 返回完整轻量 turn-block 索引，不包含完整 `raw_json` 正文；② `POST /sessions/{sid}/message-block-delta` 基于客户端已知 `block_id + digest` 返回变更区块和删除区块；③ `POST /sessions/{sid}/message-blocks` 按 block id 批量返回完整消息正文。聊天页主流程改为“轻量索引 + digest 增量 + 可见区块正文按需加载”。
+- 2026-06-11：新增消息区块展示协议，用于长会话前端虚拟滚动和右侧 turn-block 节点链导航。① `GET /sessions/{sid}/message-block-index` 返回完整轻量 turn-block 索引，不包含完整 `raw_json` 正文；② `POST /sessions/{sid}/message-block-delta` 基于客户端已知 `block_id + digest` 返回变更区块和删除区块；③ `POST /sessions/{sid}/message-blocks` 按 block id 批量返回完整消息正文。聊天页主流程改为“轻量索引 + digest 增量 + 可见区块正文按需加载”，节点链不新增后端接口。
 - 2026-06-10：恢复 `user_library_skills.source` 字段（`runtime` / `zip` / `community` / `fork`），所有入库路径显式写入来源。Fork API 改为支持可选请求体覆盖元数据，version 默认继承而非重置。
 - 2026-06-09：仓库模块前后端贯通。① `GET /library/skills` 新增筛选/排序/分页支持；② 新增 `POST /library/skills/upload`（ZIP 上传至仓库），复用 `transfer.py` 内已有校验逻辑；③ 前端完成 `LibraryView.vue`（卡片网格 + 详情弹层 + 安装/Fork）+ `LibraryUploadDialog.vue`（批量拖拽上传）；④ `/library` 入口已加入顶部导航栏和侧栏。
 - 2026-06-08（续）：精简 `user_library_skills` 表，删除 `source` 字段，改用 `community_skill_id` 推断来源。新增模板匹配 API（`GET /library/skills/match-template`）和 Fork API（`POST /library/skills/{id}/fork`）。更新 Collect API 支持 `template_id` 参数。删除数据结构中的 `source` 字段。
@@ -829,7 +829,7 @@ FastAPI 和后端当前可能返回两类错误体：
 
 ### GET `/sessions/{sid}/message-block-index`
 
-意义：获取当前用户某个会话的完整轻量 turn-block 索引，不返回完整消息正文。前端用该索引计算完整历史滚动高度，并决定初始虚拟窗口。
+意义：获取当前用户某个会话的完整轻量 turn-block 索引，不返回完整消息正文。前端用该索引计算完整历史滚动高度、决定初始虚拟窗口，并作为右侧节点链导航的 block 顺序数据源。
 
 认证：需要 `Authorization: Bearer <access_token>`。
 
@@ -895,7 +895,7 @@ FastAPI 和后端当前可能返回两类错误体：
 
 ### POST `/sessions/{sid}/message-blocks`
 
-意义：按 block ID 批量获取完整展示消息正文。前端只对当前虚拟窗口及附近缺正文的 block 调用该接口。
+意义：按 block ID 批量获取完整展示消息正文。前端只对当前虚拟窗口及附近缺正文的 block 调用该接口；右侧节点链 hover 到未缓存正文的 block 时也复用该接口加载用户消息预览。
 
 认证：需要 `Authorization: Bearer <access_token>`。
 

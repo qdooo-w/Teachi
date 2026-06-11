@@ -56,6 +56,7 @@ frontend/
    │  ├─ SkillChips.vue            已选技能的 chip 行（发送时随消息带走）
    │  ├─ SkillManagerDialog.vue    用户级 / 项目级技能管理对话框（结构化表单 + 原始兜底）
    │  ├─ SkillPicker.vue           @ 触发的技能下拉选择器，支持搜索与键盘导航
+   │  ├─ ScrollNodeChain.vue       ChatView 右侧 turn-block 节点链导航（保留原生滚动条）
    │  ├─ ChatSkillSidebar.vue      聊天页内联技能侧边栏（用户级 + 项目级技能列表）
    │  └─ SkillEditorPanel.vue      技能内联编辑面板（文件树 + 结构化表单 / Markdown 编辑）
    └─ markdown/
@@ -268,6 +269,7 @@ Mermaid 渲染失败降级为可见 of error 卡片而不是白屏。
 - **正文按需加载**：滚动窗口中的区块缺正文时，前端调用 `POST /sessions/{sid}/message-blocks` 批量取正文。只有当前虚拟窗口内的消息会挂载 `MessageContent`，因此 Markdown / LaTeX / Mermaid 的解析成本被限制在可视区附近。
 - **digest 增量同步**：发送、重放、版本切换、删除或后台刷新时，非初始化路径调用 `POST /sessions/{sid}/message-block-delta`，携带本地已知 `block_id + digest`。后端返回 `upsert` / `removed` / `block_ids`，前端只清理 digest 变化或已删除区块的正文缓存和高度缓存。
 - **固定窗口虚拟化**：`VIRTUAL_BLOCK_LIMIT = 10`，`VIRTUAL_BLOCK_OVERSCAN_PX = 720`；窗口通常挂载 10 个 turn block，向下扩展时最多额外挂载约 4 个。滚动条高度由 `estimated_height` 和 `ResizeObserver` 实测高度共同决定，顶部 / 底部 spacer 代表未挂载历史。
+- **右侧节点链导航**：`ScrollNodeChain.vue` 复用 `messageBlocks` 顺序和 `blockMetrics` 高度，把所有 turn block 节点放在同一个内部轨道中，外层 viewport 只裁剪出右侧可见节点段；原生滚动条保留。中心聚焦节点用暗紫色 `#4c1d95`，点击节点会滚到对应 turn block，hover 时显示该 block 的首条 user 消息；若正文未缓存，会触发 `ensureBlockContents([block.id])` 按需加载。
 - **高度修正限制**：图片 Blob URL、Markdown 二阶段渲染、LaTeX / Mermaid 完成渲染和版本工具栏出现后，实测高度可能替换估算高度；前端会更新高度缓存并在贴底状态下保持底部，但向上浏览时仍可能出现轻微滚动位置修正。
 - 解析逻辑在 `api.ts#parseMessage`：
   - `kind === 'user'` + `parsed.kind === 'request'` → 取 `user-prompt` 部分

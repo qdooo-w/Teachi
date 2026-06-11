@@ -8,6 +8,7 @@ import EditPromptDialog from '../components/EditPromptDialog.vue'
 import MediaPreviewDialog from '../components/MediaPreviewDialog.vue'
 import WindowManager from '../components/WindowManager.vue'
 import SkillEditorPanel from '../components/SkillEditorPanel.vue'
+import ScrollNodeChain from '../components/ScrollNodeChain.vue'
 import {
   deleteTurn,
   getMessageBlocks,
@@ -125,12 +126,19 @@ interface MessageBlock {
   messages: DisplayMessage[]
 }
 
+interface ScrollNodeItem {
+  id: string
+  label: string
+}
+
 const blockHeights = ref<Record<string, number>>({})
 const virtualStart = ref(0)
 const virtualEnd = ref(0)
+const scrollNodeVirtualIndex = ref(0)
 const virtualBlockElements = new Map<string, HTMLElement>()
 let virtualResizeObserver: ResizeObserver | null = null
 let virtualScrollRaf: number | null = null
+let scrollNodeRaf: number | null = null
 let saveHeightCacheTimer: number | null = null
 
 // ── 版本（重放）状态 ─────────────────────────────────────────────────────────
@@ -174,6 +182,17 @@ const virtualBlocks = computed<MessageBlock[]>(() => (
 
 const visibleMessages = computed<DisplayMessage[]>(() => (
   virtualBlocks.value.flatMap((block) => block.messages)
+))
+
+function normalizeNodeLabel(content: string): string {
+  return content.replace(/\s+/g, ' ').trim().slice(0, 120)
+}
+
+const scrollNodeItems = computed<ScrollNodeItem[]>(() => (
+  messageBlocks.value.map((block) => {
+    const userMessage = blockContentCache.value[block.id]?.find((message) => message.role === 'user')
+    return { id: block.id, label: userMessage ? normalizeNodeLabel(userMessage.content) : '' }
+  })
 ))
 
 const topSpacerHeight = computed(() => {
@@ -261,6 +280,7 @@ function resetMessageViewState(): void {
   blockHeights.value = {}
   versionsByAnchor.value = {}
   displayedPosByAnchor.value = {}
+  scrollNodeVirtualIndex.value = 0
   virtualStart.value = 0
   virtualEnd.value = 0
   clearAttachmentUrls()
@@ -275,6 +295,7 @@ function setVirtualWindowToBottom(): void {
   }
   virtualEnd.value = total
   virtualStart.value = Math.max(0, total - VIRTUAL_BLOCK_LIMIT)
+  scheduleScrollNodeIndexUpdate()
 }
 
 function updateVirtualWindowFromScroll(): void {
@@ -317,6 +338,7 @@ function updateVirtualWindowFromScroll(): void {
 
   virtualStart.value = start
   virtualEnd.value = end
+  scheduleScrollNodeIndexUpdate()
 }
 
 function scheduleVirtualWindowUpdate(): void {
@@ -325,6 +347,43 @@ function scheduleVirtualWindowUpdate(): void {
     virtualScrollRaf = null
     updateVirtualWindowFromScroll()
   })
+}
+
+function calculateScrollNodeVirtualIndex(): number {
+  const blocks = messageBlocks.value
+  const container = chatContainer.value
+  if (!container || blocks.length <= 1) return 0
+
+  const { offsets, total } = blockMetrics.value
+  if (total <= 0) return 0
+
+  const viewportCenter = Math.max(
+    0,
+    container.scrollTop - CHAT_TOP_PADDING_PX + container.clientHeight / 2,
+  )
+  if (viewportCenter >= total) return blocks.length - 1
+
+  for (let i = 0; i < blocks.length; i += 1) {
+    const top = offsets[i] ?? 0
+    const height = blockUnitHeight(blocks[i], i, blocks.length)
+    const bottom = top + height
+    if (viewportCenter <= bottom) {
+      const ratio = height > 0 ? Math.max(0, Math.min(1, (viewportCenter - top) / height)) : 0
+      return Math.max(0, Math.min(blocks.length - 1, i + ratio))
+    }
+  }
+
+  return blocks.length - 1
+}
+
+function updateScrollNodeVirtualIndex(): void {
+  scrollNodeRaf = null
+  scrollNodeVirtualIndex.value = calculateScrollNodeVirtualIndex()
+}
+
+function scheduleScrollNodeIndexUpdate(): void {
+  if (scrollNodeRaf !== null) return
+  scrollNodeRaf = window.requestAnimationFrame(updateScrollNodeVirtualIndex)
 }
 
 function ensureVirtualResizeObserver(): ResizeObserver {
@@ -362,6 +421,7 @@ function measureVirtualBlock(blockId: string, el: HTMLElement): void {
 
   blockHeights.value = { ...blockHeights.value, [blockId]: measured }
   scheduleVirtualWindowUpdate()
+  scheduleScrollNodeIndexUpdate()
   scheduleChatCacheSave()
   if (stickToBottom.value) {
     scrollToBottom()
@@ -857,6 +917,7 @@ function scrollToBottom(force = false): void {
       const container = chatContainer.value
       if (!container) return
       container.scrollTop = Math.max(0, container.scrollHeight - container.clientHeight)
+      scheduleScrollNodeIndexUpdate()
     })
   })
 }
@@ -870,6 +931,7 @@ function isChatAtBottom(): boolean {
 function handleChatScroll(): void {
   stickToBottom.value = isChatAtBottom()
   scheduleVirtualWindowUpdate()
+  scheduleScrollNodeIndexUpdate()
 }
 
 function handleWheel(): void {
@@ -984,6 +1046,27 @@ async function ensureBlockContents(blockIds: string[]): Promise<void> {
 
 async function ensureVisibleBlockContents(blocks: MessageBlock[] = virtualBlocks.value): Promise<void> {
   await ensureBlockContents(blocks.map((block) => block.id))
+}
+
+function handleScrollNodeHover(index: number): void {
+  const block = messageBlocks.value[index]
+  if (!block) return
+  void ensureBlockContents([block.id])
+}
+
+function scrollToMessageBlock(index: number): void {
+  const container = chatContainer.value
+  const block = messageBlocks.value[index]
+  if (!container || !block) return
+
+  const targetTop = CHAT_TOP_PADDING_PX + (blockMetrics.value.offsets[index] ?? 0)
+  stickToBottom.value = index >= messageBlocks.value.length - 1
+  container.scrollTo({
+    top: Math.max(0, targetTop),
+    behavior: 'smooth',
+  })
+  scheduleVirtualWindowUpdate()
+  scheduleScrollNodeIndexUpdate()
 }
 
 async function loadMessages(init = false): Promise<void> {
@@ -1748,6 +1831,10 @@ onBeforeUnmount(() => {
     window.cancelAnimationFrame(virtualScrollRaf)
     virtualScrollRaf = null
   }
+  if (scrollNodeRaf !== null) {
+    window.cancelAnimationFrame(scrollNodeRaf)
+    scrollNodeRaf = null
+  }
   virtualResizeObserver?.disconnect()
   virtualResizeObserver = null
   virtualBlockElements.clear()
@@ -1979,6 +2066,14 @@ watch(
         <div v-if="bottomSpacerHeight > 0" :style="{ height: `${bottomSpacerHeight}px` }" aria-hidden="true" />
       </div>
     </div>
+
+    <ScrollNodeChain
+      v-if="scrollNodeItems.length > 1"
+      :nodes="scrollNodeItems"
+      :virtual-index="scrollNodeVirtualIndex"
+      @hover="handleScrollNodeHover"
+      @seek="scrollToMessageBlock"
+    />
 
     <!-- 浮动 composer：绝对贴底并叠在消息层最上方（z-20）；外层透明且不拦截事件，
          消息可在其下方/周围透出，仅内部 composer 区域接收点击 -->
