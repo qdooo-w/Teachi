@@ -1995,112 +1995,8 @@ class DatabaseFacade:
             return None
         return dict(row)
 
-    @staticmethod
-    def _migrate_legacy_community_skill_bodies(cursor: sqlite3.Cursor) -> None:
-        """Move old DB-stored SKILL.md text into archived_skill/{id}/SKILL.md."""
-        cursor.execute("PRAGMA table_info(community_skills)")
-        columns = {row["name"] for row in cursor.fetchall()}
-        if "body_md" not in columns or "archive_path" not in columns:
-            return
-
-        from backend.config import BASE_DIR
-
-        archive_root = (BASE_DIR / "archived_skill").resolve()
-        archive_root.mkdir(parents=True, exist_ok=True)
-        cursor.execute(
-            """
-            SELECT id, body_md, size_bytes
-            FROM community_skills
-            WHERE body_md != '' AND (archive_path IS NULL OR archive_path = '')
-            """
-        )
-        rows = cursor.fetchall()
-        for row in rows:
-            skill_id = str(row["id"])
-            archive_dir = (archive_root / skill_id).resolve()
-            if archive_dir != archive_root and archive_root not in archive_dir.parents:
-                continue
-            archive_dir.mkdir(parents=True, exist_ok=True)
-            skill_file = archive_dir / "SKILL.md"
-            skill_file.write_text(str(row["body_md"]), encoding="utf-8")
-            size_bytes = skill_file.stat().st_size
-            cursor.execute(
-                """
-                UPDATE community_skills
-                SET archive_path = ?, body_md = '', size_bytes = ?
-                WHERE id = ?
-                """,
-                (f"archived_skill/{skill_id}", size_bytes, skill_id),
-            )
-
-    @staticmethod
-    def _migrate_to_v2_pre(cursor: sqlite3.Cursor) -> None:
-        cursor.execute("PRAGMA table_info(users)")
-        user_cols = {r["name"] for r in cursor.fetchall()}
-        if user_cols:
-            if "role" not in user_cols:
-                cursor.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
-            if "self_description" not in user_cols:
-                cursor.execute("ALTER TABLE users ADD COLUMN self_description TEXT")
-            if "major" not in user_cols:
-                cursor.execute("ALTER TABLE users ADD COLUMN major TEXT")
-            if "head_file" not in user_cols:
-                cursor.execute("ALTER TABLE users ADD COLUMN head_file TEXT")
-        
-        cursor.execute("PRAGMA table_info(community_skills)")
-        cs_cols = {r["name"] for r in cursor.fetchall()}
-        if cs_cols and "admin_uuids" not in cs_cols:
-            cursor.execute("DROP INDEX IF EXISTS idx_community_skills_created_at")
-            cursor.execute("DROP INDEX IF EXISTS idx_community_skills_downloads")
-            cursor.execute("DROP INDEX IF EXISTS idx_community_skills_owner")
-            cursor.execute("DROP INDEX IF EXISTS idx_community_skills_name")
-            cursor.execute("ALTER TABLE community_skills RENAME TO community_skills_old")
-
-    @staticmethod
-    def _migrate_to_v2_post(cursor: sqlite3.Cursor) -> None:
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='community_skills_old'")
-        if not cursor.fetchone():
-            return
-            
-        import json
-        import uuid
-        cursor.execute("SELECT * FROM community_skills_old")
-        for row in cursor.fetchall():
-            skill_id = row["id"]
-            owner_uuid = row["owner_uuid"]
-            admin_uuids = json.dumps([owner_uuid])
-            
-            cursor.execute(
-                """
-                INSERT INTO community_skills 
-                (id, owner_uuid, name, display_name, description, admin_uuids, likes, downloads, latest_version, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    skill_id, owner_uuid, row["name"], row.get("display_name"), row["description"],
-                    admin_uuids, 0, row.get("downloads", 0), "1.0.0", row["created_at"], row["updated_at"]
-                )
-            )
-            
-            version_id = str(uuid.uuid4())
-            cursor.execute(
-                """
-                INSERT INTO community_skill_versions
-                (id, skill_id, version, readme_md, changelog, tags, archive_path, size_bytes, downloads, source, status, submitted_by, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    version_id, skill_id, "1.0.0", "", "Auto-migrated version", "[]",
-                    row.get("archive_path", ""), row.get("size_bytes", 0), row.get("downloads", 0),
-                    None, "APPROVED", owner_uuid, row["created_at"]
-                )
-            )
-        
-        cursor.execute("DROP TABLE community_skills_old")
-
     def setup_database(self) -> None:
         with self.db_cursor() as cursor:
-            self._migrate_to_v2_pre(cursor)
             schema = """
             CREATE TABLE IF NOT EXISTS users (
                 uuid TEXT PRIMARY KEY,
@@ -2348,7 +2244,6 @@ class DatabaseFacade:
             );
             """
             cursor.executescript(schema)
-            self._migrate_to_v2_post(cursor)
             # 幂等迁移：将现有 admin_uuids JSON 同步到 community_skill_admins 子表
             cursor.execute(
                 """
