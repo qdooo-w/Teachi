@@ -549,3 +549,10 @@ input {
     overflow-y: auto !important;
   }
 }
+
+/* ---------- Chat Performance Optimization ---------- */
+.chat-message-wrapper {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 120px;
+}
+

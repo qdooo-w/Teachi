@@ -612,8 +612,8 @@ async function loadMoreMessages(): Promise<void> {
   if (!container) return
 
   loadingMore.value = true
-  const previousScrollHeight = container.scrollHeight
-  const previousScrollTop = container.scrollTop
+  // const previousScrollHeight = container.scrollHeight
+  // const previousScrollTop = container.scrollTop
 
   try {
     const nextOffset = rawMessageOffset.value
@@ -632,10 +632,10 @@ async function loadMoreMessages(): Promise<void> {
       messageCache.value = [...newMsgs, ...messageCache.value]
       rawMessageOffset.value += page.rawCount
 
-      // 保持滚动视口相对位置
-      await nextTick()
-      const heightDifference = container.scrollHeight - previousScrollHeight
-      container.scrollTop = previousScrollTop + heightDifference
+      // 保持滚动视口相对位置（由浏览器原生 scroll anchoring 处理，避免与 content-visibility 冲突）
+      // await nextTick()
+      // const heightDifference = container.scrollHeight - previousScrollHeight
+      // container.scrollTop = previousScrollTop + heightDifference
     } else if (page.rawCount > 0) {
       // 获取到了 raw 消息但是全部被过滤掉（如 tool_call），累加 offset 并自动加载下一页
       rawMessageOffset.value += page.rawCount
@@ -1422,7 +1422,7 @@ watch(
     <div ref="chatContainer" class="absolute inset-0 overflow-y-auto px-4 pt-16 pb-5 md:px-6" @scroll.passive="handleChatScroll" @wheel.passive="handleWheel" @load.capture="handleImageLoad">
       <!-- 动态预留空间，使最后一条消息可滚动至浮动 composer 上方而不被永久遮挡 -->
       <div class="mx-auto flex max-w-3xl flex-col gap-5" :style="{ paddingBottom: `${composerHeight}px` }">
-        <div v-for="message in renderedMessages" :key="message.id" class="flex w-full flex-col">
+        <div v-for="message in renderedMessages" :key="message.id" class="flex w-full flex-col chat-message-wrapper">
           <div v-if="message.role === 'user'" class="group flex justify-end">
             <div class="flex max-w-[85%] flex-col items-end gap-1.5">
               <div v-if="getMessageImages(message).length > 0" class="flex flex-col gap-1.5 items-end">

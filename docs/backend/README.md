@@ -25,34 +25,43 @@
 
 ## 核心组件
 
-### 1. 路由层（5 个 Router）
+### 1. 路由层（9 个 Router）
 
-| Router | 文件 | 职责 |
-|---|---|---|
-| Auth | `auth.py` | 注册、登录、刷新 token、登出 |
-| Data | `data.py` (~1315 行) | 项目/会话/消息 CRUD、会话附件管理、文件管理、ZIP 上传 |
-| Loop | `loop.py` | AI 聊天循环入口，SSE 流式响应 |
-| Community | `community.py` | 社区技能市场（列表/发布/安装/删除） |
-| Settings | `settings.py` | 设置中心（模型配置 CRUD、测试连接、账户设置、用户偏好设置） |
+| Router | 挂载前缀 | 文件 | 职责 |
+|---|---|---|---|
+| Auth | `/auth` | `auth.py` | 注册、登录、刷新 token、登出、获取当前用户信息 |
+| Data | (无前缀) | `data.py` | 项目/会话/消息 CRUD、项目/用户文件与目录管理、附件元数据管理 |
+| Loop | `/loop` | `loop.py` | AI 聊天循环入口，支持 send/regenerate/stop SSE 流式响应 |
+| Community | `/community` | `community/routes.py` | 社区技能市场（列表/详情/安装/点赞/评论等） |
+| Library | `/library` | `community/library.py` | 个人技能仓库管理（收集/发布表单/删除/更新元数据/文件编辑等） |
+| Owner | `/owner` | `community/admin.py` | 技能所有者审核管理路由 |
+| Admin | `/admin` | `community/admin.py` | 系统管理员全局审核管理路由 |
+| Transfer | (无前缀) | `transfer.py` | ZIP 技能包解析校验与物理文件获取/上传路由 |
+| Settings | `/settings` | `settings.py` | 设置中心（模型配置 CRUD、测试连接、账户设置、用户偏好设置） |
 
-### 2. 数据库门面（`db.py` ~1568 行）
+### 2. 数据库门面（`db.py`）
 
-`DatabaseFacade` 持有 10 个子门面，共享连接工厂：
+`DatabaseFacade` 持有 12 个子门面，共享连接工厂：
 
 ```
-db.users        → UsersFacade
-db.projects     → ProjectsFacade
-db.sessions     → SessionsFacade
-db.messages     → MessagesFacade（含版本管理）
-db.access       → AccessFacade（跨域所有权校验）
-db.nonces       → NoncesFacade（防重放）
+db.users         → UsersFacade
+db.projects      → ProjectsFacade
+db.sessions      → SessionsFacade
+db.messages      → MessagesFacade（含版本管理）
+db.access        → AccessFacade（跨域所有权校验）
+db.nonces        → NoncesFacade（防重放）
 db.model_configs → ModelConfigsFacade
-db.community    → CommunitySkillsFacade
-db.attachments  → AttachmentsFacade
-db.preferences  → UserPreferencesFacade
+db.preferences   → UserPreferencesFacade
+db.community     → CommunitySkillsFacade
+db.library       → UserLibrarySkillsFacade
+db.reviews       → ReviewLogsFacade
+db.attachments   → AttachmentsFacade
 ```
 
-**9 张表**：`users`、`projects`、`sessions`、`messages`、`nonces`、`community_skills`、`user_model_configs`、`attachments`、`user_preferences`
+**17 张表**：
+- **核心表**：`users`、`projects`、`sessions`、`messages`、`attachments`、`user_model_configs`、`user_preferences`、`nonces`
+- **社区与审核表**：`community_skills`、`community_skill_versions`、`community_skill_comments`、`community_comment_likes`、`community_comment_reports`、`community_skill_contributors`、`community_skill_admins`、`skill_review_logs`
+- **个人仓库表**：`user_library_skills`
 
 **连接配置**：外键开启、WAL 模式、synchronous OFF、`sqlite3.Row` 行工厂
 
@@ -168,11 +177,17 @@ VALIDATE → LOAD_HISTORY → BUILD_MESSAGES → BUILD_MODEL → CALL_MODEL → 
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/community/skills` | 列出社区技能（搜索、分页、排序） |
-| GET | `/community/skills/{skill_id}` | 技能详情 |
-| POST | `/community/skills` | 发布技能（从本地用户技能目录） |
-| POST | `/community/skills/{skill_id}/install` | 安装社区技能 |
-| DELETE | `/community/skills/{skill_id}` | 删除社区技能（仅作者） |
+| GET | `/community/skills` | 列出社区技能（搜索、标签过滤、分页、排序） |
+| GET | `/community/skills/{skill_id}` | 社区技能详情（包含下载/点赞数、作者、是否点赞、最新版本等） |
+| GET | `/community/skills/{skill_id}/versions` | 列出某技能的所有审核通过版本 |
+| POST | `/community/skills/{skill_id}/install` | 安装社区技能（支持安装至用户运行层、项目运行层或个人仓库） |
+| POST | `/community/skills/{skill_id}/like` | 对社区技能点赞 / 取消点赞 |
+| GET | `/community/skills/{skill_id}/comments` | 获取社区技能评论列表 |
+| POST | `/community/skills/{skill_id}/comments` | 发表评论或回复 |
+| DELETE | `/community/comments/{comment_id}` | 删除评论（作者或管理员权限） |
+| POST | `/community/comments/{comment_id}/like` | 点赞评论 |
+| POST | `/community/comments/{comment_id}/report` | 举报评论 |
+| GET | `/community/leaderboard` | 获取热门技能下载排行榜 |
 
 ### Settings（`/settings`）
 
