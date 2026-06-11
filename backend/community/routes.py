@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import uuid
 import json
+import shutil
 from pathlib import Path
 from typing import Any, Literal
 
@@ -174,6 +175,8 @@ def get_community_skill(
     contributors = db.community.get_contributors(skill_id)
 
     res = _to_summary(record).model_dump()
+    if latest_version and "tags" in latest_version:
+        res["tags"] = latest_version["tags"]
     res["liked_by_me"] = liked_by_me
     res["contributors"] = contributors
     res["latest_version"] = latest_version
@@ -187,6 +190,52 @@ def list_skill_versions(
 ):
     db = _resolve_db(db)
     return db.community.list_versions(skill_id)
+
+
+@router.get("/skills/{skill_id}/versions/{version_id}/files")
+def list_community_version_files(
+    skill_id: str,
+    version_id: str,
+    path: str = Query("."),
+    _user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
+):
+    """列出社区指定版本技能的文件。"""
+    db = _resolve_db(db)
+    version = db.community.get_version(version_id)
+    if not version or version["skill_id"] != skill_id:
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "Version not found"})
+    
+    archive_dir = _resolve_archive_path(version["archive_path"])
+    archive_fs = FileBase(archive_dir)
+    try:
+        entries = archive_fs.search_dir(f"skill/{path}")
+        return {"path": path, "entries": entries}
+    except FileError as e:
+        raise HTTPException(status_code=400, detail={"code": "FILE_ERROR", "message": str(e)})
+
+
+@router.get("/skills/{skill_id}/versions/{version_id}/files/content")
+def read_community_version_file(
+    skill_id: str,
+    version_id: str,
+    path: str = Query(...),
+    _user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
+):
+    """读取社区指定版本技能的文件内容。"""
+    db = _resolve_db(db)
+    version = db.community.get_version(version_id)
+    if not version or version["skill_id"] != skill_id:
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "Version not found"})
+    
+    archive_dir = _resolve_archive_path(version["archive_path"])
+    archive_fs = FileBase(archive_dir)
+    try:
+        content = archive_fs.read_file(f"skill/{path}")
+        return {"path": path, "content": content}
+    except FileError as e:
+        raise HTTPException(status_code=400, detail={"code": "FILE_ERROR", "message": str(e)})
 
 @router.post("/skills/{skill_id}/install", response_model=InstallResponse, dependencies=[Depends(verify_nonce)])
 def install_community_skill(
@@ -285,6 +334,8 @@ def install_community_skill(
 
     db.community.increment_downloads(skill_id, version_id=payload.version_id)
     refreshed = db.community.get_skill(skill_id)
+    if not refreshed:
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "Skill not found"})
     return InstallResponse(name=name, skill_id=skill_id, downloads=int(refreshed["downloads"]))
 
 @router.post("/skills/{skill_id}/like")

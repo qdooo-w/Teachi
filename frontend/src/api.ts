@@ -1051,6 +1051,30 @@ export async function listCommunityVersions(skillId: string): Promise<CommunityS
   )
 }
 
+/** 列出社区技能指定版本的文件 */
+export async function listCommunitySkillFiles(
+  skillId: string,
+  versionId: string,
+  path: string = '.',
+): Promise<{ path: string; entries: LibraryFileEntry[] }> {
+  const params = new URLSearchParams({ path })
+  return request<{ path: string; entries: LibraryFileEntry[] }>(
+    `/community/skills/${encodeURIComponent(skillId)}/versions/${encodeURIComponent(versionId)}/files?${params}`,
+  )
+}
+
+/** 读取社区技能指定版本的文件内容 */
+export async function readCommunitySkillFileContent(
+  skillId: string,
+  versionId: string,
+  path: string,
+): Promise<{ path: string; content: string }> {
+  const params = new URLSearchParams({ path })
+  return request<{ path: string; content: string }>(
+    `/community/skills/${encodeURIComponent(skillId)}/versions/${encodeURIComponent(versionId)}/files/content?${params}`,
+  )
+}
+
 // ── 社区排行榜 ────────────────────────────────────────────────────────────────
 
 export async function getCommunityLeaderboard(limit = 10): Promise<CommunitySkillSummary[]> {

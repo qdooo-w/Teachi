@@ -2302,16 +2302,16 @@ watch(activeTabId, async (newId) => {
             </button>
           </div>
           <!-- 内容 -->
-          <div class="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+          <div class="min-h-0 flex-1 flex flex-col overflow-hidden px-5 py-4">
             <!-- 加载态 -->
             <div v-if="detailLoading" class="flex h-full items-center justify-center text-sm text-[#9ca3af]">
               加载中...
             </div>
 
             <template v-else-if="detailSkill">
-              <div class="flex flex-col lg:flex-row gap-4">
+              <div class="flex-1 flex flex-col lg:flex-row gap-4 min-h-0 overflow-hidden">
                 <!-- 左侧/主体：描述与 README -->
-                <div class="flex-1 min-w-0 w-full flex flex-col gap-4">
+                <div class="flex-1 min-w-0 overflow-y-auto flex flex-col gap-4 pr-1.5">
                   <!-- 顶部主要信息（平铺，无容器罩着） -->
                   <div class="flex flex-col gap-3.5 pt-3 pb-5 border-b border-[#e5e7eb]">
                     <div>
@@ -2374,7 +2374,7 @@ watch(activeTabId, async (newId) => {
                 </div>
 
                 <!-- 右侧：属性详情与操作 -->
-                <div class="w-full lg:w-[320px] flex-shrink-0 flex flex-col gap-4">
+                <div class="w-full lg:w-[320px] flex-shrink-0 overflow-y-auto flex flex-col gap-4 pr-1.5">
 
                   <!-- 操作区 -->
                   <div class="bg-white rounded-xl border border-[#e5e7eb] p-5 flex flex-col gap-3">
