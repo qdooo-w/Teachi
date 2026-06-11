@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import uuid
 import json
+import shutil
 from pathlib import Path
 from typing import Any, Literal
 
@@ -333,6 +334,8 @@ def install_community_skill(
 
     db.community.increment_downloads(skill_id, version_id=payload.version_id)
     refreshed = db.community.get_skill(skill_id)
+    if not refreshed:
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "Skill not found"})
     return InstallResponse(name=name, skill_id=skill_id, downloads=int(refreshed["downloads"]))
 
 @router.post("/skills/{skill_id}/like")
