@@ -443,6 +443,44 @@ def list_session_messages(
     )
 
 
+@router.get("/sessions/{sid}/messages/all", response_model=MessageListResponse)
+def list_all_session_messages(
+    sid: str,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
+) -> MessageListResponse:
+    """查询会话的全部活跃消息，用于前端缓存与虚拟滚动。"""
+    user_uuid = current_user.get("uuid")
+    if not isinstance(user_uuid, str):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "AUTH_TOKEN_INVALID", "message": "Invalid token"},
+        )
+
+    session = db.sessions.get_for_user(sid=sid, user_uuid=user_uuid)
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "RESOURCE_NOT_FOUND", "message": "Session not found"},
+        )
+
+    messages = db.messages.list_active_by_session_for_user(sid=sid, user_uuid=user_uuid)
+    return MessageListResponse(
+        messages=[
+            MessageItem(
+                msg_id=m["msg_id"],
+                kind=m["kind"],
+                raw_json=m["raw_json"],
+                timestamp=float(m["timestamp"]),
+                created_at=float(m["created_at"]),
+                anchor_msg_id=m.get("anchor_msg_id"),
+                version=int(m.get("version", 0) or 0),
+            )
+            for m in messages
+        ]
+    )
+
+
 class ToolRegistryResponse(BaseModel):
     """工具注册表查询响应"""
 

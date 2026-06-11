@@ -432,6 +432,18 @@ export async function listDisplayMessagePage(
   }
 }
 
+export async function listAllDisplayMessages(sid: string): Promise<DisplayMessagePage> {
+  const response = await request<MessageListResponse>(
+    `/sessions/${encodeURIComponent(sid)}/messages/all`,
+  )
+  return {
+    rawCount: response.messages.length,
+    messages: response.messages
+      .map(parseMessage)
+      .filter((message): message is DisplayMessage => message !== null),
+  }
+}
+
 export interface MessageVersionItem {
   msg_id: string
   kind: string

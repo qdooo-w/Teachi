@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type ComponentPublicInstance } from 'vue'
 import { useRoute, useRouter, onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router'
 import MessageContent from '../components/MessageContent.vue'
 import SkillPicker from '../components/SkillPicker.vue'
@@ -11,7 +11,7 @@ import SkillEditorPanel from '../components/SkillEditorPanel.vue'
 import {
   deleteTurn,
   getErrorMessage,
-  listDisplayMessagePage,
+  listAllDisplayMessages,
   listMessageVersions,
   listSessions,
   regenerateChatMessage,
@@ -80,11 +80,6 @@ const toolStatus = ref('')
 const draft = ref('')
 // 消息缓存与渲染
 const messageCache = ref<DisplayMessage[]>([])
-const renderedMessages = computed<DisplayMessage[]>(() => messageCache.value)
-const PAGE_LIMIT = 20
-const hasMore = ref(true)
-const loadingMore = ref(false)
-const rawMessageOffset = ref(0)
 const chatContainer = ref<HTMLElement | null>(null)
 const currentAbort = ref<AbortController | null>(null)
 const stickToBottom = ref(true)
@@ -96,6 +91,39 @@ const copiedId = ref<string | null>(null)
 let copyResetTimer: number | null = null
 // 当前正在生成的那条 user 输入（不含 skill 前缀），用于 stop 后回填到输入框
 const inflightUserPrompt = ref<string>('')
+const sessionAttachments = ref<AttachmentItem[]>([])
+const attachmentUrls = ref<Record<string, string>>({})
+
+const CHAT_CACHE_SCHEMA = 2
+const CHAT_CACHE_PREFIX = 'chat_cache_'
+const BLOCK_GAP_PX = 20
+const CHAT_TOP_PADDING_PX = 64
+const VIRTUAL_BLOCK_LIMIT = 10
+const VIRTUAL_BLOCK_OVERSCAN_PX = 720
+const MIN_BLOCK_HEIGHT_PX = 92
+const MAX_ESTIMATED_BLOCK_HEIGHT_PX = 760
+
+interface ChatCachePayload {
+  schema?: number
+  messages: DisplayMessage[]
+  attachments: AttachmentItem[]
+  blockHeights?: Record<string, number>
+  versionsByAnchor?: Record<string, MessageVersionItem[]>
+  timestamp: number
+}
+
+interface MessageBlock {
+  id: string
+  messages: DisplayMessage[]
+}
+
+const blockHeights = ref<Record<string, number>>({})
+const virtualStart = ref(0)
+const virtualEnd = ref(0)
+const virtualBlockElements = new Map<string, HTMLElement>()
+let virtualResizeObserver: ResizeObserver | null = null
+let virtualScrollRaf: number | null = null
+let saveHeightCacheTimer: number | null = null
 
 // ── 版本（重放）状态 ─────────────────────────────────────────────────────────
 // 每个 anchor 的全部版本快照，用于角标显示与版本切换
@@ -104,6 +132,274 @@ const versionsByAnchor = ref<Record<string, MessageVersionItem[]>>({})
 // 由于后端用 swap 表示"切换"——切换后 version=0 仍然是活跃——这里用客户端指针
 // 来维持用户的视觉位置。loadMessages 时若 anchor 已知则保留位置，未知则置 1。
 const displayedPosByAnchor = ref<Record<string, number>>({})
+
+function createBlockId(messages: DisplayMessage[]): string {
+  const anchors = new Set(
+    messages
+      .map((message) => message.anchor_msg_id)
+      .filter((anchor): anchor is string => Boolean(anchor)),
+  )
+  if (anchors.size === 1) return `anchor-${Array.from(anchors)[0]}`
+  const first = messages[0]?.id ?? 'empty'
+  const last = messages[messages.length - 1]?.id ?? first
+  return `sequence-${first}-${last}`
+}
+
+function groupMessagesIntoBlocks(messages: DisplayMessage[]): MessageBlock[] {
+  const blocks: MessageBlock[] = []
+  let current: DisplayMessage[] = []
+
+  for (const message of messages) {
+    const currentHasAssistant = current.some((item) => item.role === 'assistant')
+    if (current.length > 0 && message.role === 'user' && currentHasAssistant) {
+      blocks.push({ id: createBlockId(current), messages: current })
+      current = []
+    }
+    current.push(message)
+  }
+
+  if (current.length > 0) {
+    blocks.push({ id: createBlockId(current), messages: current })
+  }
+  return blocks
+}
+
+const messageBlocks = computed<MessageBlock[]>(() => groupMessagesIntoBlocks(messageCache.value))
+
+function estimateMessageHeight(message: DisplayMessage): number {
+  const lines = Math.max(1, message.content.split('\n').length)
+  const contentRows = Math.ceil(message.content.length / (message.role === 'user' ? 42 : 72))
+  const attachmentRows =
+    message.role === 'user' && message.anchor_msg_id
+      ? sessionAttachments.value.filter((att) => att.anchor_msg_id === message.anchor_msg_id).length
+      : (message.localAttachments?.length ?? 0)
+  const attachmentHeight = attachmentRows > 0 ? Math.min(attachmentRows, 3) * 92 : 0
+
+  if (message.role === 'user') {
+    return Math.max(46, Math.min(260, 28 + Math.max(lines, contentRows) * 22 + attachmentHeight))
+  }
+  return Math.max(96, Math.min(620, 58 + Math.max(lines, contentRows) * 24))
+}
+
+function estimateBlockHeight(block: MessageBlock): number {
+  const messageHeight = block.messages.reduce((sum, message) => sum + estimateMessageHeight(message), 0)
+  const innerGaps = Math.max(0, block.messages.length - 1) * BLOCK_GAP_PX
+  return Math.max(
+    MIN_BLOCK_HEIGHT_PX,
+    Math.min(MAX_ESTIMATED_BLOCK_HEIGHT_PX, messageHeight + innerGaps),
+  )
+}
+
+function blockContentHeight(block: MessageBlock): number {
+  return blockHeights.value[block.id] ?? estimateBlockHeight(block)
+}
+
+function blockUnitHeight(block: MessageBlock, index: number, total: number): number {
+  return blockContentHeight(block) + (index < total - 1 ? BLOCK_GAP_PX : 0)
+}
+
+const blockMetrics = computed(() => {
+  const blocks = messageBlocks.value
+  const offsets: number[] = []
+  let total = 0
+  for (let i = 0; i < blocks.length; i++) {
+    offsets.push(total)
+    total += blockUnitHeight(blocks[i], i, blocks.length)
+  }
+  return { offsets, total }
+})
+
+const virtualBlocks = computed<MessageBlock[]>(() => (
+  messageBlocks.value.slice(virtualStart.value, virtualEnd.value)
+))
+
+const visibleMessages = computed<DisplayMessage[]>(() => (
+  virtualBlocks.value.flatMap((block) => block.messages)
+))
+
+const topSpacerHeight = computed(() => {
+  if (messageBlocks.value.length === 0) return 0
+  return blockMetrics.value.offsets[virtualStart.value] ?? 0
+})
+
+const bottomSpacerHeight = computed(() => {
+  if (messageBlocks.value.length === 0) return 0
+  const end = Math.min(virtualEnd.value, messageBlocks.value.length)
+  if (end >= messageBlocks.value.length) return 0
+  return Math.max(0, blockMetrics.value.total - (blockMetrics.value.offsets[end] ?? blockMetrics.value.total))
+})
+
+function chatCacheKey(sessionId: string): string {
+  return `${CHAT_CACHE_PREFIX}${sessionId}`
+}
+
+function readChatCache(sessionId: string): ChatCachePayload | null {
+  try {
+    const raw = localStorage.getItem(chatCacheKey(sessionId))
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as ChatCachePayload
+    if (!parsed || !Array.isArray(parsed.messages) || !Array.isArray(parsed.attachments)) {
+      return null
+    }
+    return parsed
+  } catch (error) {
+    console.warn('Failed to restore chat cache:', error)
+    return null
+  }
+}
+
+function writeChatCache(sessionId: string): void {
+  try {
+    const payload: ChatCachePayload = {
+      schema: CHAT_CACHE_SCHEMA,
+      messages: messageCache.value,
+      attachments: sessionAttachments.value,
+      blockHeights: blockHeights.value,
+      versionsByAnchor: versionsByAnchor.value,
+      timestamp: Date.now(),
+    }
+    localStorage.setItem(chatCacheKey(sessionId), JSON.stringify(payload))
+  } catch (error) {
+    console.warn('Failed to save chat cache:', error)
+  }
+}
+
+function applyChatCache(sessionId: string): boolean {
+  const cached = readChatCache(sessionId)
+  if (!cached) return false
+
+  messageCache.value = cached.messages
+  sessionAttachments.value = cached.attachments
+  blockHeights.value = cached.blockHeights ?? {}
+  versionsByAnchor.value = cached.versionsByAnchor ?? versionsByAnchor.value
+  setVirtualWindowToBottom()
+  void refreshVisibleMessageAssets()
+  scrollToBottom(true)
+  return true
+}
+
+function scheduleChatCacheSave(): void {
+  const sessionId = currentSession.value?.sid
+  if (!sessionId) return
+  if (saveHeightCacheTimer) window.clearTimeout(saveHeightCacheTimer)
+  saveHeightCacheTimer = window.setTimeout(() => {
+    saveHeightCacheTimer = null
+    writeChatCache(sessionId)
+  }, 250)
+}
+
+function resetMessageViewState(): void {
+  messageCache.value = []
+  sessionAttachments.value = []
+  blockHeights.value = {}
+  versionsByAnchor.value = {}
+  displayedPosByAnchor.value = {}
+  virtualStart.value = 0
+  virtualEnd.value = 0
+  clearAttachmentUrls()
+}
+
+function setVirtualWindowToBottom(): void {
+  const total = messageBlocks.value.length
+  if (total === 0) {
+    virtualStart.value = 0
+    virtualEnd.value = 0
+    return
+  }
+  virtualEnd.value = total
+  virtualStart.value = Math.max(0, total - VIRTUAL_BLOCK_LIMIT)
+}
+
+function updateVirtualWindowFromScroll(): void {
+  const blocks = messageBlocks.value
+  const container = chatContainer.value
+  if (!container || blocks.length === 0) {
+    virtualStart.value = 0
+    virtualEnd.value = blocks.length
+    return
+  }
+
+  const { offsets, total } = blockMetrics.value
+  const viewportTop = Math.max(0, container.scrollTop - CHAT_TOP_PADDING_PX)
+  const viewportBottom = viewportTop + container.clientHeight
+  const targetTop = Math.max(0, viewportTop - VIRTUAL_BLOCK_OVERSCAN_PX)
+  let start = 0
+
+  for (let i = 0; i < blocks.length; i++) {
+    const blockBottom = offsets[i] + blockUnitHeight(blocks[i], i, blocks.length)
+    if (blockBottom >= targetTop) {
+      start = Math.max(0, i - 1)
+      break
+    }
+  }
+
+  let end = Math.min(blocks.length, start + VIRTUAL_BLOCK_LIMIT)
+  const targetBottom = Math.min(total, viewportBottom + VIRTUAL_BLOCK_OVERSCAN_PX)
+  while (
+    end < blocks.length &&
+    (offsets[end] ?? total) < targetBottom &&
+    end - start < VIRTUAL_BLOCK_LIMIT + 4
+  ) {
+    end += 1
+  }
+
+  if (end >= blocks.length) {
+    end = blocks.length
+    start = Math.max(0, end - VIRTUAL_BLOCK_LIMIT)
+  }
+
+  virtualStart.value = start
+  virtualEnd.value = end
+}
+
+function scheduleVirtualWindowUpdate(): void {
+  if (virtualScrollRaf !== null) return
+  virtualScrollRaf = window.requestAnimationFrame(() => {
+    virtualScrollRaf = null
+    updateVirtualWindowFromScroll()
+  })
+}
+
+function ensureVirtualResizeObserver(): ResizeObserver {
+  if (!virtualResizeObserver) {
+    virtualResizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const target = entry.target as HTMLElement
+        const blockId = target.dataset.blockId
+        if (blockId) measureVirtualBlock(blockId, target)
+      }
+    })
+  }
+  return virtualResizeObserver
+}
+
+function setVirtualBlockElement(blockId: string, el: Element | ComponentPublicInstance | null): void {
+  const previous = virtualBlockElements.get(blockId)
+  if (previous && previous !== el) {
+    virtualResizeObserver?.unobserve(previous)
+    virtualBlockElements.delete(blockId)
+  }
+
+  if (!(el instanceof HTMLElement)) return
+  virtualBlockElements.set(blockId, el)
+  el.dataset.blockId = blockId
+  ensureVirtualResizeObserver().observe(el)
+  measureVirtualBlock(blockId, el)
+}
+
+function measureVirtualBlock(blockId: string, el: HTMLElement): void {
+  const measured = Math.ceil(el.getBoundingClientRect().height)
+  if (measured <= 0) return
+  const previous = blockHeights.value[blockId]
+  if (previous && Math.abs(previous - measured) <= 1) return
+
+  blockHeights.value = { ...blockHeights.value, [blockId]: measured }
+  scheduleVirtualWindowUpdate()
+  scheduleChatCacheSave()
+  if (stickToBottom.value) {
+    scrollToBottom()
+  }
+}
 
 // 编辑 PROMPT 弹窗
 const editDialogOpen = ref(false)
@@ -397,10 +693,10 @@ const pendingAttachments = ref<Array<{
   preview_url?: string
 }>>([])
 
-const sessionAttachments = ref<AttachmentItem[]>([])
-const attachmentUrls = ref<Record<string, string>>({})
-
-async function loadAttachmentUrls(targetAttachments?: AttachmentItem[]): Promise<void> {
+async function loadAttachmentUrls(
+  targetAttachments?: AttachmentItem[],
+  attachmentIds?: Set<string>,
+): Promise<void> {
   if (!currentSession.value) return
   const sidVal = currentSession.value.sid
   const activeImageIds = new Set<string>()
@@ -408,6 +704,7 @@ async function loadAttachmentUrls(targetAttachments?: AttachmentItem[]): Promise
 
   const promises = atts
     .filter((att) => att.mime_type.startsWith('image/'))
+    .filter((att) => !attachmentIds || attachmentIds.has(att.attachment_id))
     .map(async (att) => {
       activeImageIds.add(att.attachment_id)
       if (!attachmentUrls.value[att.attachment_id]) {
@@ -422,11 +719,13 @@ async function loadAttachmentUrls(targetAttachments?: AttachmentItem[]): Promise
 
   await Promise.all(promises)
 
-  // Clean up unused object URLs
-  for (const id of Object.keys(attachmentUrls.value)) {
-    if (!activeImageIds.has(id)) {
-      URL.revokeObjectURL(attachmentUrls.value[id])
-      delete attachmentUrls.value[id]
+  if (!attachmentIds) {
+    // Clean up unused object URLs when doing a full attachment refresh.
+    for (const id of Object.keys(attachmentUrls.value)) {
+      if (!activeImageIds.has(id)) {
+        URL.revokeObjectURL(attachmentUrls.value[id])
+        delete attachmentUrls.value[id]
+      }
     }
   }
 }
@@ -469,6 +768,26 @@ function getMessageFiles(message: DisplayMessage): AttachmentItem[] {
   return sessionAttachments.value.filter(
     (att) => att.anchor_msg_id === message.anchor_msg_id && !att.mime_type.startsWith('image/')
   )
+}
+
+function visibleImageAttachmentIds(messages: DisplayMessage[] = visibleMessages.value): Set<string> {
+  const ids = new Set<string>()
+  for (const message of messages) {
+    if (message.role !== 'user' || !message.anchor_msg_id) continue
+    for (const att of sessionAttachments.value) {
+      if (att.anchor_msg_id === message.anchor_msg_id && att.mime_type.startsWith('image/')) {
+        ids.add(att.attachment_id)
+      }
+    }
+  }
+  return ids
+}
+
+async function refreshVisibleMessageAssets(messages: DisplayMessage[] = visibleMessages.value): Promise<void> {
+  await Promise.all([
+    refreshVersionMap(messages),
+    loadAttachmentUrls(undefined, visibleImageAttachmentIds(messages)),
+  ])
 }
 
 function getFileType(filename: string, mimeType: string): string {
@@ -564,11 +883,14 @@ async function removePendingAttachment(att: typeof pendingAttachments.value[0]):
 // ── 工具函数 ──────────────────────────────────────────────────────────────────
 function scrollToBottom(force = false): void {
   if (force) stickToBottom.value = true
+  if (!stickToBottom.value) return
+  setVirtualWindowToBottom()
   nextTick(() => {
-    const container = chatContainer.value
-    if (!container) return
-    if (!stickToBottom.value) return
-    container.scrollTop = container.scrollHeight
+    window.requestAnimationFrame(() => {
+      const container = chatContainer.value
+      if (!container) return
+      container.scrollTop = Math.max(0, container.scrollHeight - container.clientHeight)
+    })
   })
 }
 
@@ -580,72 +902,16 @@ function isChatAtBottom(): boolean {
 
 function handleChatScroll(): void {
   stickToBottom.value = isChatAtBottom()
-
-  const container = chatContainer.value
-  if (!container) return
-
-  // 触顶加载更多：直接触发实时加载过往消息，阈值调整为 120px 以防用户滚动过快
-  if (container.scrollTop <= 120) {
-    void loadMoreMessages()
-  }
+  scheduleVirtualWindowUpdate()
 }
 
-function handleWheel(e: WheelEvent): void {
-  const container = chatContainer.value
-  if (!container) return
-  // 如果用户向上滚轮，且已经接近顶部，则立即触发实时加载
-  if (container.scrollTop <= 120 && e.deltaY < 0) {
-    void loadMoreMessages()
-  }
+function handleWheel(): void {
+  scheduleVirtualWindowUpdate()
 }
 
 function handleImageLoad(): void {
   if (stickToBottom.value) {
     scrollToBottom()
-  }
-}
-
-async function loadMoreMessages(): Promise<void> {
-  if (loadingMore.value || !hasMore.value || streaming.value || !currentSession.value) return
-
-  const container = chatContainer.value
-  if (!container) return
-
-  loadingMore.value = true
-  // const previousScrollHeight = container.scrollHeight
-  // const previousScrollTop = container.scrollTop
-
-  try {
-    const nextOffset = rawMessageOffset.value
-    const page = await listDisplayMessagePage(currentSession.value.sid, PAGE_LIMIT, nextOffset)
-    const newMsgs = page.messages
-    
-    if (page.rawCount < PAGE_LIMIT) {
-      hasMore.value = false
-    }
-
-    if (newMsgs.length > 0) {
-      // 在更新缓存前预加载版本信息，避免渲染后等待期间的闪烁跳动
-      await refreshVersionMap(newMsgs)
-
-      // 头部拼接
-      messageCache.value = [...newMsgs, ...messageCache.value]
-      rawMessageOffset.value += page.rawCount
-
-      // 保持滚动视口相对位置（由浏览器原生 scroll anchoring 处理，避免与 content-visibility 冲突）
-      // await nextTick()
-      // const heightDifference = container.scrollHeight - previousScrollHeight
-      // container.scrollTop = previousScrollTop + heightDifference
-    } else if (page.rawCount > 0) {
-      // 获取到了 raw 消息但是全部被过滤掉（如 tool_call），累加 offset 并自动加载下一页
-      rawMessageOffset.value += page.rawCount
-      loadingMore.value = false
-      return loadMoreMessages()
-    }
-  } catch (error) {
-    console.error('Failed to load more messages:', error)
-  } finally {
-    loadingMore.value = false
   }
 }
 
@@ -656,52 +922,25 @@ function handleVisualViewportResize(): void {
 async function loadMessages(init = false): Promise<void> {
   if (!currentSession.value) return
 
-  if (init) {
-    hasMore.value = true
-  }
-
-  const fetchLimit = init ? PAGE_LIMIT : Math.max(rawMessageOffset.value, PAGE_LIMIT)
   const [page, atts] = await Promise.all([
-    listDisplayMessagePage(currentSession.value.sid, fetchLimit, 0),
+    listAllDisplayMessages(currentSession.value.sid),
     listAttachments(currentSession.value.sid),
   ])
 
   const msgs = page.messages
 
-  if (init && page.rawCount < fetchLimit) {
-    hasMore.value = false
-  }
-
-  rawMessageOffset.value = page.rawCount
-
-  // 关键：在更新响应式数据前，先预加载消息的所有版本信息和图片的 Blob URL。
-  // 这样做能在单次 Tick 内把完整的 DOM（包括正确的图片地址与版本下拉框）渲染出来，
-  // 彻底避免先渲染出不完整 DOM 占位，导致滚动高度变化而产生的“卡顿跳动”感。
-  await Promise.all([
-    refreshVersionMap(msgs),
-    loadAttachmentUrls(atts),
-  ])
-
   messageCache.value = msgs
   sessionAttachments.value = atts
 
-  try {
-    const cacheKey = `chat_cache_${currentSession.value.sid}`
-    localStorage.setItem(
-      cacheKey,
-      JSON.stringify({
-        messages: msgs,
-        attachments: atts,
-        timestamp: Date.now(),
-      })
-    )
-  } catch (e) {
-    console.warn('Failed to save chat cache:', e)
+  if (init || stickToBottom.value) {
+    setVirtualWindowToBottom()
+  } else {
+    updateVirtualWindowFromScroll()
   }
 
-  // 不强制贴底：仅当用户当前停留在底部（stickToBottom）时才跟随到底部。
-  // 首次打开会话时 stickToBottom 默认为 true，故首屏仍落在底部；
-  // 之后重新拉取（版本切换 / 重放 / 删除回合等）若用户正在上方阅读则不打断。
+  await refreshVisibleMessageAssets()
+  writeChatCache(currentSession.value.sid)
+
   if (init) {
     scrollToBottom(true)
   } else {
@@ -709,16 +948,22 @@ async function loadMessages(init = false): Promise<void> {
   }
 }
 
-async function refreshVersionMap(targetMessages?: DisplayMessage[]): Promise<void> {
+async function refreshVersionMap(
+  targetMessages?: DisplayMessage[],
+  forceAnchors: Set<string> = new Set(),
+): Promise<void> {
   const msgs = targetMessages || messageCache.value
   // 收集 messages 中出现的所有 anchor，逐个拉取版本快照
   const anchors = new Set<string>()
   for (const m of msgs) {
     if (m.anchor_msg_id) anchors.add(m.anchor_msg_id)
   }
+  const anchorsToFetch = Array.from(anchors).filter(
+    (anchor) => forceAnchors.has(anchor) || !versionsByAnchor.value[anchor],
+  )
   const next: Record<string, MessageVersionItem[]> = {}
   await Promise.all(
-    Array.from(anchors).map(async (anchor) => {
+    anchorsToFetch.map(async (anchor) => {
       try {
         const versions = await listMessageVersions(anchor)
         next[anchor] = versions
@@ -734,6 +979,7 @@ async function refreshVersionMap(targetMessages?: DisplayMessage[]): Promise<voi
       displayedPosByAnchor.value[anchor] = 1
     }
   }
+  if (Object.keys(next).length > 0) scheduleChatCacheSave()
 }
 
 function anchorVersionCount(anchor?: string | null): number {
@@ -748,6 +994,20 @@ function anchorDisplayedPos(anchor?: string | null): number {
   if (!anchor) return 1
   return displayedPosByAnchor.value[anchor] ?? 1
 }
+
+function invalidateAnchorVersions(anchor: string): void {
+  const next = { ...versionsByAnchor.value }
+  delete next[anchor]
+  versionsByAnchor.value = next
+}
+
+watch(
+  visibleMessages,
+  (messages) => {
+    void refreshVisibleMessageAssets(messages)
+  },
+  { flush: 'post' },
+)
 
 async function regenerateMessage(message: DisplayMessage, newPrompt = ''): Promise<void> {
   if (streaming.value || !currentSession.value || !currentProject.value) return
@@ -810,14 +1070,17 @@ async function regenerateMessage(message: DisplayMessage, newPrompt = ''): Promi
 
     if (done.error) {
       errorMessage.value = done.error_code ? `${done.error_code}: ${done.error}` : done.error
+      invalidateAnchorVersions(anchor)
       await loadMessages(false)
       return
     }
 
+    invalidateAnchorVersions(anchor)
     await loadMessages(false)
   } catch (error) {
     if (targetAssistant) targetAssistant.pending = false
     if (!isAbortError(error)) errorMessage.value = getErrorMessage(error)
+    invalidateAnchorVersions(anchor)
     await loadMessages(false)
   } finally {
     streaming.value = false
@@ -858,7 +1121,10 @@ async function openDeleteTurnDialog(message: DisplayMessage): Promise<void> {
   if (!confirmed) return
   try {
     await deleteTurn(anchor)
-    delete displayedPosByAnchor.value[anchor]
+    invalidateAnchorVersions(anchor)
+    const nextPos = { ...displayedPosByAnchor.value }
+    delete nextPos[anchor]
+    displayedPosByAnchor.value = nextPos
     await loadMessages(true)
   } catch (error) {
     errorMessage.value = getErrorMessage(error)
@@ -1223,6 +1489,7 @@ function onDrawerLeave(el: Element, done: () => void): void {
 // ── 挂载 / 销毁 ──────────────────────────────────────────────────────────────
 async function validateAndLoad(): Promise<void> {
   messagesLoaded.value = false
+  resetMessageViewState()
   // 阶段 1：确保项目列表可用，校验 pid 归属（失败 → 退回总览）
   try {
     if (projects.value.length === 0) await loadProjects()
@@ -1277,24 +1544,8 @@ async function validateAndLoad(): Promise<void> {
     activePreviews.value = []
   }
 
-  // 尝试从本地缓存恢复历史数据，快速显示首屏，避免白屏卡顿
-  try {
-    const cacheKey = `chat_cache_${sid.value}`
-    const cachedData = localStorage.getItem(cacheKey)
-    if (cachedData) {
-      const parsed = JSON.parse(cachedData)
-      if (parsed && Array.isArray(parsed.messages) && Array.isArray(parsed.attachments)) {
-        messageCache.value = parsed.messages
-        sessionAttachments.value = parsed.attachments
-        // 异步加载缓存图片的 Blob URL，使用户能够瞬间看到图片而无卡顿
-        void loadAttachmentUrls()
-        // 瞬间定位到底部，避免首屏第一条消息跳动
-        scrollToBottom(true)
-      }
-    }
-  } catch (e) {
-    console.warn('Failed to restore chat cache:', e)
-  }
+  // 先用本地完整缓存同步恢复首屏，再静默从后端刷新。
+  applyChatCache(match.sid)
 
   // 阶段 3：加载消息、项目技能与用户技能。失败不离开视图，只在顶部显示错误，用户可手动重试。
   try {
@@ -1352,6 +1603,18 @@ onMounted(() => {
 onBeforeUnmount(() => {
   currentAbort.value?.abort()
   if (copyResetTimer) window.clearTimeout(copyResetTimer)
+  if (saveHeightCacheTimer) {
+    window.clearTimeout(saveHeightCacheTimer)
+    saveHeightCacheTimer = null
+    if (currentSession.value?.sid) writeChatCache(currentSession.value.sid)
+  }
+  if (virtualScrollRaf !== null) {
+    window.cancelAnimationFrame(virtualScrollRaf)
+    virtualScrollRaf = null
+  }
+  virtualResizeObserver?.disconnect()
+  virtualResizeObserver = null
+  virtualBlockElements.clear()
   for (const att of pendingAttachments.value) {
     if (att.preview_url) {
       URL.revokeObjectURL(att.preview_url)
@@ -1421,8 +1684,16 @@ watch(
     <!-- 消息滚动区铺满整个区域，消息可滚动到浮动 composer 之下（composer 叠在其上层） -->
     <div ref="chatContainer" class="absolute inset-0 overflow-y-auto px-4 pt-16 pb-5 md:px-6" @scroll.passive="handleChatScroll" @wheel.passive="handleWheel" @load.capture="handleImageLoad">
       <!-- 动态预留空间，使最后一条消息可滚动至浮动 composer 上方而不被永久遮挡 -->
-      <div class="mx-auto flex max-w-3xl flex-col gap-5" :style="{ paddingBottom: `${composerHeight}px` }">
-        <div v-for="message in renderedMessages" :key="message.id" class="flex w-full flex-col chat-message-wrapper">
+      <div class="mx-auto max-w-3xl" :style="{ paddingBottom: `${composerHeight}px` }">
+        <div v-if="topSpacerHeight > 0" :style="{ height: `${topSpacerHeight}px` }" aria-hidden="true" />
+        <div
+          v-for="(block, blockIndex) in virtualBlocks"
+          :key="block.id"
+          :ref="(el) => setVirtualBlockElement(block.id, el)"
+          class="flex w-full flex-col gap-5 chat-turn-block"
+          :style="{ marginBottom: virtualStart + blockIndex < messageBlocks.length - 1 ? `${BLOCK_GAP_PX}px` : '0px' }"
+        >
+          <div v-for="message in block.messages" :key="message.id" class="flex w-full flex-col">
           <div v-if="message.role === 'user'" class="group flex justify-end">
             <div class="flex max-w-[85%] flex-col items-end gap-1.5">
               <div v-if="getMessageImages(message).length > 0" class="flex flex-col gap-1.5 items-end">
@@ -1560,7 +1831,9 @@ watch(
               </template>
             </div>
           </div>
+          </div>
         </div>
+        <div v-if="bottomSpacerHeight > 0" :style="{ height: `${bottomSpacerHeight}px` }" aria-hidden="true" />
       </div>
     </div>
 
