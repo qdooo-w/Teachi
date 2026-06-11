@@ -147,7 +147,10 @@ VALIDATE → LOAD_HISTORY → BUILD_MESSAGES → BUILD_MODEL → CALL_MODEL → 
 | POST | `/projects/{pid}/sessions` | 创建会话 |
 | PATCH | `/sessions/{sid}` | 重命名会话 |
 | DELETE | `/sessions/{sid}` | 删除会话（级联） |
-| GET | `/sessions/{sid}/messages` | 列出会话消息 |
+| GET | `/sessions/{sid}/messages` | 分页列出会话活跃消息 |
+| GET | `/sessions/{sid}/message-block-index` | 获取轻量消息区块索引 |
+| POST | `/sessions/{sid}/message-block-delta` | 按 digest 增量同步消息区块索引 |
+| POST | `/sessions/{sid}/message-blocks` | 按区块 ID 批量获取消息正文 |
 | GET | `/tools/registry` | 列出已注册 AI 工具 |
 | GET | `/messages/{msg_id}/versions` | 获取消息所有版本 |
 | POST | `/messages/{msg_id}/switch-version` | 切换版本组 |
@@ -255,6 +258,14 @@ VALIDATE → LOAD_HISTORY → BUILD_MESSAGES → BUILD_MODEL → CALL_MODEL → 
 
 - `anchor_msg_id` + `version` 模型（从旧 `parent_msg_id + is_latest` 迁移而来）
 - 支持同一轮对话的多版本切换（regenerate 场景）
+
+### 消息区块展示协议
+
+- 长会话聊天页使用 `message-block-index` / `message-block-delta` / `message-blocks` 三段式协议，而不是直接全量拉取消息正文。
+- 后端按展示语义生成 turn block：一条或多条连续 `user` 消息 + 随后的 `assistant` 回复；`tool_call` / `tool_result` 等非展示消息不会进入前端区块。
+- 轻量索引只返回 `block_id`、`digest`、角色、锚点、附件计数、文本长度和估算高度。前端用它构造完整历史滚动条，并只对可见 block 按需获取正文。
+- `message-block-delta` 根据客户端已知 `block_id + digest` 返回 `upsert` 和 `removed`，用于发送、重放、版本切换和删除回合后的增量同步。
+- 前端右侧 `ScrollNodeChain` 节点链复用同一套 block 顺序、估算/实测高度和正文按需加载协议；后端无需额外提供滚动条或节点链专用接口，hover 预览缺正文时仍通过 `message-blocks` 获取。
 
 ### 技能系统与生命周期
 

@@ -207,9 +207,14 @@ function cleanupExpiredTabs(): void {
 
 // ── 右侧侧边栏及多选/拖拽状态 ────────────────────────────────────────────
 const sidebarOpen = ref(localStorage.getItem('library-sidebar-open') !== 'false')
+const isMultiSelectActive = ref(false)
 
 watch(sidebarOpen, (val) => {
   localStorage.setItem('library-sidebar-open', String(val))
+  if (!val) {
+    isMultiSelectActive.value = false
+    selectedSkillIds.value = []
+  }
 })
 const userExpanded = ref(true)
 const projectExpanded = ref(true)
@@ -217,10 +222,32 @@ const projectExpanded = ref(true)
 const selectedSkillIds = ref<string[]>([])
 const selectedProjectIds = ref<string[]>([])
 
-// 多选时自动展开侧边栏
+// 多选时自动展开侧边栏并激活多选状态
 watch(selectedSkillIds, (ids) => {
-  if (ids.length > 0) sidebarOpen.value = true
+  if (ids.length > 0) {
+    isMultiSelectActive.value = true
+    sidebarOpen.value = true
+  }
 })
+
+function toggleMultiSelect(): void {
+  isMultiSelectActive.value = !isMultiSelectActive.value
+  if (isMultiSelectActive.value) {
+    sidebarOpen.value = true
+  } else {
+    sidebarOpen.value = false
+    selectedSkillIds.value = []
+  }
+}
+
+function toggleSkillSelection(id: string): void {
+  const idx = selectedSkillIds.value.indexOf(id)
+  if (idx > -1) {
+    selectedSkillIds.value.splice(idx, 1)
+  } else {
+    selectedSkillIds.value.push(id)
+  }
+}
 
 const projectSkillsMap = ref<Record<string, any[]>>({} )
 const expandedProjectPids = ref<Record<string, boolean>>({})
@@ -1518,6 +1545,23 @@ watch(activeTabId, async (newId) => {
 
             <div class="flex-1" />
 
+            <!-- 多选安装按钮 -->
+            <div class="bg-[#f3f4f6] rounded-lg p-0.5 flex items-center flex-shrink-0 mr-2">
+              <button
+                type="button"
+                class="flex items-center gap-0.5 px-1.5 h-5 !text-[10px] font-hans rounded-md font-medium transition-all duration-200"
+                :class="isMultiSelectActive
+                  ? 'bg-white text-[#1f2937] shadow-sm font-semibold'
+                  : 'text-[#6b7280] hover:text-[#1f2937]'"
+                @click="toggleMultiSelect"
+              >
+                <svg class="h-2.5 w-2.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+                </svg>
+                <span>多选安装</span>
+              </button>
+            </div>
+
             <!-- 多选时：已选数量 + 删除按钮 -->
             <template v-if="selectedSkillIds.length > 0">
               <span class="text-xs text-[#6b7280] font-hans">已选 {{ selectedSkillIds.length }} 个</span>
@@ -1564,23 +1608,42 @@ watch(activeTabId, async (newId) => {
                 draggable="true"
                 @dragstart="onDragStart($event, s)"
                 class="flex w-full flex-col gap-3 rounded-xl bg-white p-5 text-left shadow-sm transition hover:bg-[#f9fafb] hover:shadow-md active:scale-[0.99] relative group cursor-grab"
+                :class="[
+                  isMultiSelectActive && selectedSkillIds.includes(s.id)
+                    ? 'ring-2 ring-[#1f2937]/10 bg-gray-50/50'
+                    : ''
+                ]"
                 type="button"
-                @click="openSkillTab(s)"
+                @click="isMultiSelectActive ? toggleSkillSelection(s.id) : openSkillTab(s)"
               >
+                <!-- 多选角标 (右上方) -->
+                <div
+                  v-if="isMultiSelectActive"
+                  class="absolute top-2.5 right-2.5 z-10 h-5 w-5 rounded-md border flex items-center justify-center transition-all duration-200"
+                  :class="selectedSkillIds.includes(s.id)
+                    ? 'border-[#1f2937] bg-[#1f2937] text-white shadow-sm scale-105'
+                    : 'border-gray-300 bg-white hover:border-gray-400'"
+                  @click.stop="toggleSkillSelection(s.id)"
+                >
+                  <svg
+                    v-if="selectedSkillIds.includes(s.id)"
+                    class="h-3 w-3"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="3"
+                    viewBox="0 0 24 24"
+                  >
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                  </svg>
+                </div>
+
                 <!-- 标题行 -->
                 <div class="flex items-start justify-between gap-2">
                   <div class="flex items-center gap-2 min-w-0">
-                    <!-- 批量选择 Checkbox -->
-                    <input
-                      type="checkbox"
-                      :value="s.id"
-                      v-model="selectedSkillIds"
-                      @click.stop
-                      class="h-[18px] w-[18px] flex-shrink-0 rounded text-[#1f2937] focus:ring-[#1f2937]/20 border-gray-300 cursor-pointer"
-                    />
                     <span class="truncate text-sm font-semibold text-[#1f2937]">{{ skillTitle(s) }}</span>
                   </div>
                   <span
+                    v-if="!isMultiSelectActive"
                     class="flex flex-shrink-0 items-center rounded-full px-2 py-0.5 text-[11px] whitespace-nowrap"
                     :class="s.source === 'community' ? 'bg-blue-50 text-blue-600' : 'bg-[#f3f4f6] text-[#6b7280]'"
                   >

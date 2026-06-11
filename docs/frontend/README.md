@@ -56,6 +56,7 @@ frontend/
    │  ├─ SkillChips.vue            已选技能的 chip 行（发送时随消息带走）
    │  ├─ SkillManagerDialog.vue    用户级 / 项目级技能管理对话框（结构化表单 + 原始兜底）
    │  ├─ SkillPicker.vue           @ 触发的技能下拉选择器，支持搜索与键盘导航
+   │  ├─ ScrollNodeChain.vue       ChatView 右侧 turn-block 节点链导航（保留原生滚动条）
    │  ├─ ChatSkillSidebar.vue      聊天页内联技能侧边栏（用户级 + 项目级技能列表）
    │  └─ SkillEditorPanel.vue      技能内联编辑面板（文件树 + 结构化表单 / Markdown 编辑）
    └─ markdown/
@@ -262,9 +263,14 @@ Mermaid 渲染失败降级为可见 of error 卡片而不是白屏。
 
 ### 8. 消息历史与动态加载
 
-- **SWR (Stale-While-Revalidate) 本地缓存**：进入会话时优先从 `localStorage` 中加载缓存好的最近消息并乐观秒开渲染、直接强制滚到底部，解决首屏卡顿白屏和消息跳底。随后后台异步拉取真实 API 并在返回后完成静默覆盖更新并写入缓存。
-- **按需倒序懒加载**：API 接口变更为分页查询 `/sessions/{sid}/messages?limit=20&offset=0`，前端默认仅拉取最新的 20 条，往上滚动到顶部（`scrollTop <= 15px`）且有历史数据时，触发 `loadMoreMessages()` 向上懒加载前一页历史，追加到消息头部。
-- **视口防抖动**：追加新加载的历史消息渲染后，利用 `nextTick` 自动计算新增内容高度，自动调回相对 `scrollTop` 滚动位置，确保用户视口画面不发生任何位移跳动或闪烁。
+- **本地区块缓存**：进入会话时优先读取 `localStorage` 的 `chat_cache_<sid>`，恢复 `blockIndex`、已加载区块正文、附件、已测高度和版本快照；缓存 schema 为 `CHAT_CACHE_SCHEMA = 3`，旧 schema 会自然失效。
+- **轻量索引首载**：初始化调用 `GET /sessions/{sid}/message-block-index`，只拿 `block_id`、`digest`、角色、锚点、附件计数和 `estimated_height` 等索引数据，不拉取全量 Markdown 正文。前端据此立即构造完整历史的滚动高度，并通过 `setVirtualWindowToBottom()` + `scrollToBottom(true)` 固定首屏在最新消息底部。
+- **Turn-block 分组**：后端只把可展示的 `user` / `assistant` 消息纳入索引，工具调用和工具返回不进聊天 DOM；一个区块表示「一条或多条连续 user 消息 + 随后的 assistant 回复」，区块 ID 优先使用 `anchor_msg_id`。
+- **正文按需加载**：滚动窗口中的区块缺正文时，前端调用 `POST /sessions/{sid}/message-blocks` 批量取正文。只有当前虚拟窗口内的消息会挂载 `MessageContent`，因此 Markdown / LaTeX / Mermaid 的解析成本被限制在可视区附近。
+- **digest 增量同步**：发送、重放、版本切换、删除或后台刷新时，非初始化路径调用 `POST /sessions/{sid}/message-block-delta`，携带本地已知 `block_id + digest`。后端返回 `upsert` / `removed` / `block_ids`，前端只清理 digest 变化或已删除区块的正文缓存和高度缓存。
+- **固定窗口虚拟化**：`VIRTUAL_BLOCK_LIMIT = 10`，`VIRTUAL_BLOCK_OVERSCAN_PX = 720`；窗口通常挂载 10 个 turn block，向下扩展时最多额外挂载约 4 个。滚动条高度由 `estimated_height` 和 `ResizeObserver` 实测高度共同决定，顶部 / 底部 spacer 代表未挂载历史。
+- **右侧节点链导航**：`ScrollNodeChain.vue` 复用 `messageBlocks` 顺序和 `blockMetrics` 高度，把所有 turn block 节点放在同一个内部轨道中，外层 viewport 只裁剪出右侧可见节点段；原生滚动条保留。中心聚焦节点用暗紫色 `#4c1d95`，点击节点会滚到对应 turn block，hover 时显示该 block 的首条 user 消息；若正文未缓存，会触发 `ensureBlockContents([block.id])` 按需加载。
+- **高度修正限制**：图片 Blob URL、Markdown 二阶段渲染、LaTeX / Mermaid 完成渲染和版本工具栏出现后，实测高度可能替换估算高度；前端会更新高度缓存并在贴底状态下保持底部，但向上浏览时仍可能出现轻微滚动位置修正。
 - 解析逻辑在 `api.ts#parseMessage`：
   - `kind === 'user'` + `parsed.kind === 'request'` → 取 `user-prompt` 部分
   - `kind === 'assistant' | 'agent_response'` + `parsed.kind === 'response'` → 取 `text` 部分
@@ -290,7 +296,7 @@ Mermaid 渲染失败降级为可见 of error 卡片而不是白屏。
 
 - `regenerateChatMessage(sid, pid, anchor_msg_id, '', ...)` 第四参数为空 → 后端用 anchor 原 PROMPT
 - 客户端把当前活跃 assistant 气泡内容清空、置 pending，SSE delta 直接覆盖填回去
-- 完成后 `loadMessages()` 拉权威数据，重放出的新消息按 anchor 排在原回合位置
+- 完成后 `loadMessages(false)` 通过 block delta 拉权威索引并按需刷新正文，重放出的新消息按 anchor 排在原回合位置
 
 **编辑 PROMPT 后重放**
 
@@ -302,7 +308,7 @@ Mermaid 渲染失败降级为可见 of error 卡片而不是白屏。
 
 - 仅当某 anchor 有多个版本时才显示左右箭头与 `当前位/总数`
 - 客户端用 `displayedPosByAnchor: Record<anchor, pos>` 维护视觉位置（1=最新，N=最早）；切换时调 `switchMessageVersion(target_msg_id)`，后端做整组 swap（user / tool / assistant 同步对调，避免错位）
-- 切换后 `loadMessages()` + 保留 displayedPos
+- 切换后 `loadMessages(false)` 做 block delta 同步，并保留 displayedPos
 - 跨页刷新会重置位置为 1（这是后端 swap 模型的固有限制——swap 后 `version=0` 永远是当前活跃）
 
 **删除回合**
