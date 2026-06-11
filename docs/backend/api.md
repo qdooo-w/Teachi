@@ -4,6 +4,7 @@
 
 ## 近期变更
 
+- 2026-06-11：新增消息区块展示协议，用于长会话前端虚拟滚动。① `GET /sessions/{sid}/message-block-index` 返回完整轻量 turn-block 索引，不包含完整 `raw_json` 正文；② `POST /sessions/{sid}/message-block-delta` 基于客户端已知 `block_id + digest` 返回变更区块和删除区块；③ `POST /sessions/{sid}/message-blocks` 按 block id 批量返回完整消息正文。聊天页主流程改为“轻量索引 + digest 增量 + 可见区块正文按需加载”。
 - 2026-06-10：恢复 `user_library_skills.source` 字段（`runtime` / `zip` / `community` / `fork`），所有入库路径显式写入来源。Fork API 改为支持可选请求体覆盖元数据，version 默认继承而非重置。
 - 2026-06-09：仓库模块前后端贯通。① `GET /library/skills` 新增筛选/排序/分页支持；② 新增 `POST /library/skills/upload`（ZIP 上传至仓库），复用 `transfer.py` 内已有校验逻辑；③ 前端完成 `LibraryView.vue`（卡片网格 + 详情弹层 + 安装/Fork）+ `LibraryUploadDialog.vue`（批量拖拽上传）；④ `/library` 入口已加入顶部导航栏和侧栏。
 - 2026-06-08（续）：精简 `user_library_skills` 表，删除 `source` 字段，改用 `community_skill_id` 推断来源。新增模板匹配 API（`GET /library/skills/match-template`）和 Fork API（`POST /library/skills/{id}/fork`）。更新 Collect API 支持 `template_id` 参数。删除数据结构中的 `source` 字段。
@@ -127,6 +128,51 @@ FastAPI 和后端当前可能返回两类错误体：
 | `created_at` | float | 记录创建时间 |
 | `anchor_msg_id` | string \| null | 回合（turn）锚点 msg_id。同一回合内 `user` / `tool_call` / `tool_result` / `assistant` / `agent_response` 共享此值。第一条 `user` 消息的 `anchor_msg_id` 等于自身 `msg_id`（self-reference）|
 | `version` | int | `0` 表示当前活跃版本；`>0` 表示历史版本（数字越大越早）。前端默认按 (anchor_msg_id, version=0) 编排活跃链 |
+
+### MessageBlockIndexItem
+
+轻量消息区块索引项。用于前端构造完整历史滚动高度和判断正文缓存是否失效，不包含完整消息正文。
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `block_id` | string | 区块 ID。单一回合优先为 `anchor-{anchor_msg_id}`；没有稳定单一 anchor 时为 `sequence-{first_msg_id}-{last_msg_id}` |
+| `digest` | string | 区块内容摘要。正文、版本、时间戳、消息 ID、附件数量或图片附件数量变化都会改变 digest |
+| `message_ids` | string[] | 区块内可展示消息 ID |
+| `anchor_msg_id` | string \| null | 区块只对应一个回合时的 anchor；跨 anchor 或无法确定时为 null |
+| `roles` | string[] | 区块内展示角色，当前只包含 `user`、`assistant` |
+| `timestamp` | float | 区块首条展示消息时间 |
+| `content_length` | int | 区块内展示文本长度总和，用于估高 |
+| `attachment_count` | int | 绑定到该 anchor 的附件数量 |
+| `image_attachment_count` | int | 绑定到该 anchor 的图片附件数量 |
+| `estimated_height` | int | 后端估算区块高度，前端会用真实 DOM 高度逐步修正 |
+
+### MessageBlockIndexResponse
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `revision` | string | 当前完整区块索引摘要 |
+| `total_blocks` | int | 区块总数 |
+| `estimated_height` | int | 所有区块估算高度总和，不包含前端区块间距和 composer 预留空间 |
+| `block_ids` | string[] | 当前区块顺序 |
+| `blocks` | `MessageBlockIndexItem[]` | 完整轻量区块索引 |
+
+### MessageBlockDeltaResponse
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `revision` | string | 当前完整区块索引摘要 |
+| `total_blocks` | int | 区块总数 |
+| `estimated_height` | int | 所有区块估算高度总和 |
+| `block_ids` | string[] | 当前区块顺序 |
+| `upsert` | `MessageBlockIndexItem[]` | 客户端没有或 digest 已变化的区块索引 |
+| `removed` | string[] | 客户端已知但当前不存在的 block ID |
+
+### MessageBlockContentItem
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `block_id` | string | 区块 ID |
+| `messages` | `MessageItem[]` | 区块内完整展示消息正文，仍以 Pydantic AI `raw_json` 形式返回 |
 
 ### CommunitySkillSummary
 
@@ -748,7 +794,42 @@ FastAPI 和后端当前可能返回两类错误体：
 
 ### GET `/sessions/{sid}/messages`
 
-意义：获取当前用户某个会话下已经保存的消息列表。
+意义：分页获取当前用户某个会话下的活跃消息。当前聊天页主展示流程使用下面的 message block 协议，本接口主要保留给兼容调用、调试和简单列表读取。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `sid` | string | 是 | 会话 ID |
+
+查询参数：
+
+| 名称 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `limit` | int | 否 | 20 | 单页数量，最小 1 |
+| `offset` | int | 否 | 0 | 从最新活跃消息倒序分页的偏移量，最小 0 |
+
+请求体：无。
+
+成功返回：`200 OK`
+
+返回体：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `messages` | `MessageItem[]` | 当前页活跃消息（仅 `version=0`）。数据库先按回合时间从最新往旧取 `limit/offset`，返回前再翻回升序，确保页面内仍按历史顺序排列 |
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 404 | `{ code: "RESOURCE_NOT_FOUND", message: "Session not found" }` | 会话不存在或不属于当前用户 |
+
+### GET `/sessions/{sid}/message-block-index`
+
+意义：获取当前用户某个会话的完整轻量 turn-block 索引，不返回完整消息正文。前端用该索引计算完整历史滚动高度，并决定初始虚拟窗口。
 
 认证：需要 `Authorization: Bearer <access_token>`。
 
@@ -762,17 +843,89 @@ FastAPI 和后端当前可能返回两类错误体：
 
 成功返回：`200 OK`
 
-返回体：
+返回体：`MessageBlockIndexResponse`。
 
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `messages` | `MessageItem[]` | 消息列表，按 `timestamp` 升序排列；返回该会话下所有消息（包含全部 `version`），前端按 `(anchor_msg_id, version=0)` 取出活跃链；按 `anchor_msg_id` 分组可拿到各回合的全部版本 |
+区块构建规则：
+
+- 只纳入前端会展示的消息：`user` 请求中的 `user-prompt`，以及 `assistant` / `agent_response` 响应中的 `text`。
+- `tool_call`、`tool_result` 等非展示消息不会进入 block。
+- 一个 block 表示「一条或多条连续 user 消息 + 随后的 assistant 回复」。遇到新的 user 且当前 block 已包含 assistant 时，会开启新 block。
+- 只使用当前活跃版本（`version=0`），排序按回合发起时间和回合内消息时间升序。
 
 错误：
 
 | 状态码 | detail | 说明 |
 |---|---|---|
 | 404 | `{ code: "RESOURCE_NOT_FOUND", message: "Session not found" }` | 会话不存在或不属于当前用户 |
+
+### POST `/sessions/{sid}/message-block-delta`
+
+意义：客户端发送本地已知 block digest，后端返回变化的轻量索引、已删除 block 和当前完整 block 顺序。用于发送、重放、版本切换、删除回合后的增量刷新。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `sid` | string | 是 | 会话 ID |
+
+请求体：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `known_blocks` | `{ block_id: string, digest: string }[]` | 否 | 客户端当前缓存的区块摘要，最多 10000 项 |
+
+成功返回：`200 OK`
+
+返回体：`MessageBlockDeltaResponse`。
+
+同步语义：
+
+- `upsert` 包含客户端未知或 digest 不一致的 block。
+- `removed` 包含客户端已知但当前索引不存在的 block。
+- `block_ids` 是后端当前权威顺序；客户端应按它重建本地 `blockIndex` 顺序。
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 404 | `{ code: "RESOURCE_NOT_FOUND", message: "Session not found" }` | 会话不存在或不属于当前用户 |
+| 422 | 参数校验错误 | `known_blocks` 超过长度限制或字段类型不合法 |
+
+### POST `/sessions/{sid}/message-blocks`
+
+意义：按 block ID 批量获取完整展示消息正文。前端只对当前虚拟窗口及附近缺正文的 block 调用该接口。
+
+认证：需要 `Authorization: Bearer <access_token>`。
+
+路径参数：
+
+| 名称 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `sid` | string | 是 | 会话 ID |
+
+请求体：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `block_ids` | string[] | 是 | 要读取的 block ID，1-50 项 |
+
+成功返回：`200 OK`
+
+返回体：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `revision` | string | 当前完整区块索引摘要 |
+| `blocks` | `MessageBlockContentItem[]` | 命中的 block 正文。请求中不存在或当前不属于该会话的 block ID 会被跳过 |
+
+错误：
+
+| 状态码 | detail | 说明 |
+|---|---|---|
+| 404 | `{ code: "RESOURCE_NOT_FOUND", message: "Session not found" }` | 会话不存在或不属于当前用户 |
+| 422 | 参数校验错误 | `block_ids` 为空、超过 50 项或字段类型不合法 |
 
 ### GET `/messages/{msg_id}/versions`
 

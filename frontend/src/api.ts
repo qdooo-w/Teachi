@@ -432,16 +432,78 @@ export async function listDisplayMessagePage(
   }
 }
 
-export async function listAllDisplayMessages(sid: string): Promise<DisplayMessagePage> {
-  const response = await request<MessageListResponse>(
-    `/sessions/${encodeURIComponent(sid)}/messages/all`,
+export interface MessageBlockIndexItem {
+  block_id: string
+  digest: string
+  message_ids: string[]
+  anchor_msg_id: string | null
+  roles: Array<'user' | 'assistant'>
+  timestamp: number
+  content_length: number
+  attachment_count: number
+  image_attachment_count: number
+  estimated_height: number
+}
+
+export interface MessageBlockIndexResponse {
+  revision: string
+  total_blocks: number
+  estimated_height: number
+  block_ids: string[]
+  blocks: MessageBlockIndexItem[]
+}
+
+export interface MessageBlockDeltaResponse {
+  revision: string
+  total_blocks: number
+  estimated_height: number
+  block_ids: string[]
+  upsert: MessageBlockIndexItem[]
+  removed: string[]
+}
+
+export interface DisplayMessageBlock {
+  block_id: string
+  messages: DisplayMessage[]
+}
+
+export async function listMessageBlockIndex(sid: string): Promise<MessageBlockIndexResponse> {
+  return request<MessageBlockIndexResponse>(
+    `/sessions/${encodeURIComponent(sid)}/message-block-index`,
   )
-  return {
-    rawCount: response.messages.length,
-    messages: response.messages
+}
+
+export async function syncMessageBlockDelta(
+  sid: string,
+  knownBlocks: Array<{ block_id: string; digest: string }>,
+): Promise<MessageBlockDeltaResponse> {
+  return request<MessageBlockDeltaResponse>(
+    `/sessions/${encodeURIComponent(sid)}/message-block-delta`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ known_blocks: knownBlocks }),
+    },
+  )
+}
+
+export async function getMessageBlocks(
+  sid: string,
+  blockIds: string[],
+): Promise<DisplayMessageBlock[]> {
+  if (blockIds.length === 0) return []
+  const response = await request<{ revision: string; blocks: Array<{ block_id: string; messages: MessageItem[] }> }>(
+    `/sessions/${encodeURIComponent(sid)}/message-blocks`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ block_ids: blockIds }),
+    },
+  )
+  return response.blocks.map((block) => ({
+    block_id: block.block_id,
+    messages: block.messages
       .map(parseMessage)
       .filter((message): message is DisplayMessage => message !== null),
-  }
+  }))
 }
 
 export interface MessageVersionItem {

@@ -10,15 +10,19 @@ import WindowManager from '../components/WindowManager.vue'
 import SkillEditorPanel from '../components/SkillEditorPanel.vue'
 import {
   deleteTurn,
+  getMessageBlocks,
   getErrorMessage,
-  listAllDisplayMessages,
   listMessageVersions,
+  listMessageBlockIndex,
   listSessions,
   regenerateChatMessage,
   sendChatMessage,
   stopChatGeneration,
+  syncMessageBlockDelta,
   switchMessageVersion,
+  type DisplayMessageBlock,
   type DisplayMessage,
+  type MessageBlockIndexItem,
   type MessageVersionItem,
   type ProjectItem,
   type SessionItem,
@@ -79,7 +83,10 @@ const streaming = ref(false)
 const toolStatus = ref('')
 const draft = ref('')
 // 消息缓存与渲染
-const messageCache = ref<DisplayMessage[]>([])
+const blockIndex = ref<MessageBlockIndexItem[]>([])
+const blockContentCache = ref<Record<string, DisplayMessage[]>>({})
+const messageRevision = ref('')
+const pendingBlockContentLoads = new Set<string>()
 const chatContainer = ref<HTMLElement | null>(null)
 const currentAbort = ref<AbortController | null>(null)
 const stickToBottom = ref(true)
@@ -94,18 +101,18 @@ const inflightUserPrompt = ref<string>('')
 const sessionAttachments = ref<AttachmentItem[]>([])
 const attachmentUrls = ref<Record<string, string>>({})
 
-const CHAT_CACHE_SCHEMA = 2
+const CHAT_CACHE_SCHEMA = 3
 const CHAT_CACHE_PREFIX = 'chat_cache_'
 const BLOCK_GAP_PX = 20
 const CHAT_TOP_PADDING_PX = 64
 const VIRTUAL_BLOCK_LIMIT = 10
 const VIRTUAL_BLOCK_OVERSCAN_PX = 720
-const MIN_BLOCK_HEIGHT_PX = 92
-const MAX_ESTIMATED_BLOCK_HEIGHT_PX = 760
 
 interface ChatCachePayload {
   schema?: number
-  messages: DisplayMessage[]
+  revision?: string
+  blockIndex?: MessageBlockIndexItem[]
+  blockContentCache?: Record<string, DisplayMessage[]>
   attachments: AttachmentItem[]
   blockHeights?: Record<string, number>
   versionsByAnchor?: Record<string, MessageVersionItem[]>
@@ -114,6 +121,7 @@ interface ChatCachePayload {
 
 interface MessageBlock {
   id: string
+  index: MessageBlockIndexItem
   messages: DisplayMessage[]
 }
 
@@ -133,65 +141,16 @@ const versionsByAnchor = ref<Record<string, MessageVersionItem[]>>({})
 // 来维持用户的视觉位置。loadMessages 时若 anchor 已知则保留位置，未知则置 1。
 const displayedPosByAnchor = ref<Record<string, number>>({})
 
-function createBlockId(messages: DisplayMessage[]): string {
-  const anchors = new Set(
-    messages
-      .map((message) => message.anchor_msg_id)
-      .filter((anchor): anchor is string => Boolean(anchor)),
-  )
-  if (anchors.size === 1) return `anchor-${Array.from(anchors)[0]}`
-  const first = messages[0]?.id ?? 'empty'
-  const last = messages[messages.length - 1]?.id ?? first
-  return `sequence-${first}-${last}`
-}
-
-function groupMessagesIntoBlocks(messages: DisplayMessage[]): MessageBlock[] {
-  const blocks: MessageBlock[] = []
-  let current: DisplayMessage[] = []
-
-  for (const message of messages) {
-    const currentHasAssistant = current.some((item) => item.role === 'assistant')
-    if (current.length > 0 && message.role === 'user' && currentHasAssistant) {
-      blocks.push({ id: createBlockId(current), messages: current })
-      current = []
-    }
-    current.push(message)
-  }
-
-  if (current.length > 0) {
-    blocks.push({ id: createBlockId(current), messages: current })
-  }
-  return blocks
-}
-
-const messageBlocks = computed<MessageBlock[]>(() => groupMessagesIntoBlocks(messageCache.value))
-
-function estimateMessageHeight(message: DisplayMessage): number {
-  const lines = Math.max(1, message.content.split('\n').length)
-  const contentRows = Math.ceil(message.content.length / (message.role === 'user' ? 42 : 72))
-  const attachmentRows =
-    message.role === 'user' && message.anchor_msg_id
-      ? sessionAttachments.value.filter((att) => att.anchor_msg_id === message.anchor_msg_id).length
-      : (message.localAttachments?.length ?? 0)
-  const attachmentHeight = attachmentRows > 0 ? Math.min(attachmentRows, 3) * 92 : 0
-
-  if (message.role === 'user') {
-    return Math.max(46, Math.min(260, 28 + Math.max(lines, contentRows) * 22 + attachmentHeight))
-  }
-  return Math.max(96, Math.min(620, 58 + Math.max(lines, contentRows) * 24))
-}
-
-function estimateBlockHeight(block: MessageBlock): number {
-  const messageHeight = block.messages.reduce((sum, message) => sum + estimateMessageHeight(message), 0)
-  const innerGaps = Math.max(0, block.messages.length - 1) * BLOCK_GAP_PX
-  return Math.max(
-    MIN_BLOCK_HEIGHT_PX,
-    Math.min(MAX_ESTIMATED_BLOCK_HEIGHT_PX, messageHeight + innerGaps),
-  )
-}
+const messageBlocks = computed<MessageBlock[]>(() => (
+  blockIndex.value.map((index) => ({
+    id: index.block_id,
+    index,
+    messages: blockContentCache.value[index.block_id] ?? [],
+  }))
+))
 
 function blockContentHeight(block: MessageBlock): number {
-  return blockHeights.value[block.id] ?? estimateBlockHeight(block)
+  return blockHeights.value[block.id] ?? block.index.estimated_height
 }
 
 function blockUnitHeight(block: MessageBlock, index: number, total: number): number {
@@ -238,7 +197,7 @@ function readChatCache(sessionId: string): ChatCachePayload | null {
     const raw = localStorage.getItem(chatCacheKey(sessionId))
     if (!raw) return null
     const parsed = JSON.parse(raw) as ChatCachePayload
-    if (!parsed || !Array.isArray(parsed.messages) || !Array.isArray(parsed.attachments)) {
+    if (!parsed || !Array.isArray(parsed.blockIndex) || !Array.isArray(parsed.attachments)) {
       return null
     }
     return parsed
@@ -252,7 +211,9 @@ function writeChatCache(sessionId: string): void {
   try {
     const payload: ChatCachePayload = {
       schema: CHAT_CACHE_SCHEMA,
-      messages: messageCache.value,
+      revision: messageRevision.value,
+      blockIndex: blockIndex.value,
+      blockContentCache: blockContentCache.value,
       attachments: sessionAttachments.value,
       blockHeights: blockHeights.value,
       versionsByAnchor: versionsByAnchor.value,
@@ -268,11 +229,14 @@ function applyChatCache(sessionId: string): boolean {
   const cached = readChatCache(sessionId)
   if (!cached) return false
 
-  messageCache.value = cached.messages
+  messageRevision.value = cached.revision ?? ''
+  blockIndex.value = cached.blockIndex ?? []
+  blockContentCache.value = cached.blockContentCache ?? {}
   sessionAttachments.value = cached.attachments
   blockHeights.value = cached.blockHeights ?? {}
   versionsByAnchor.value = cached.versionsByAnchor ?? versionsByAnchor.value
   setVirtualWindowToBottom()
+  void ensureVisibleBlockContents()
   void refreshVisibleMessageAssets()
   scrollToBottom(true)
   return true
@@ -289,7 +253,10 @@ function scheduleChatCacheSave(): void {
 }
 
 function resetMessageViewState(): void {
-  messageCache.value = []
+  blockIndex.value = []
+  blockContentCache.value = {}
+  messageRevision.value = ''
+  pendingBlockContentLoads.clear()
   sessionAttachments.value = []
   blockHeights.value = {}
   versionsByAnchor.value = {}
@@ -919,17 +886,121 @@ function handleVisualViewportResize(): void {
   scrollToBottom()
 }
 
+function knownBlockDigests(): Array<{ block_id: string; digest: string }> {
+  return blockIndex.value.map((block) => ({
+    block_id: block.block_id,
+    digest: block.digest,
+  }))
+}
+
+function applyFullBlockIndex(response: {
+  revision: string
+  blocks: MessageBlockIndexItem[]
+}): void {
+  const previousDigests = new Map(blockIndex.value.map((block) => [block.block_id, block.digest]))
+  const nextDigests = new Map(response.blocks.map((block) => [block.block_id, block.digest]))
+  messageRevision.value = response.revision
+  blockIndex.value = response.blocks
+  const activeIds = new Set(response.blocks.map((block) => block.block_id))
+  const nextCache: Record<string, DisplayMessage[]> = {}
+  for (const [blockId, messages] of Object.entries(blockContentCache.value)) {
+    if (activeIds.has(blockId) && previousDigests.get(blockId) === nextDigests.get(blockId)) {
+      nextCache[blockId] = messages
+    }
+  }
+  blockContentCache.value = nextCache
+  const nextHeights: Record<string, number> = {}
+  for (const [blockId, height] of Object.entries(blockHeights.value)) {
+    if (activeIds.has(blockId) && previousDigests.get(blockId) === nextDigests.get(blockId)) {
+      nextHeights[blockId] = height
+    }
+  }
+  blockHeights.value = nextHeights
+}
+
+function applyBlockDelta(response: {
+  revision: string
+  block_ids: string[]
+  upsert: MessageBlockIndexItem[]
+  removed: string[]
+}): void {
+  messageRevision.value = response.revision
+  const byId = new Map(blockIndex.value.map((block) => [block.block_id, block]))
+  for (const removed of response.removed) {
+    byId.delete(removed)
+  }
+  for (const block of response.upsert) {
+    byId.set(block.block_id, block)
+  }
+  blockIndex.value = response.block_ids
+    .map((blockId) => byId.get(blockId))
+    .filter((block): block is MessageBlockIndexItem => Boolean(block))
+
+  if (response.removed.length > 0 || response.upsert.length > 0) {
+    const activeIds = new Set(blockIndex.value.map((block) => block.block_id))
+    const changedIds = new Set(response.upsert.map((block) => block.block_id))
+    const nextCache: Record<string, DisplayMessage[]> = {}
+    for (const [blockId, messages] of Object.entries(blockContentCache.value)) {
+      if (activeIds.has(blockId) && !changedIds.has(blockId)) {
+        nextCache[blockId] = messages
+      }
+    }
+    blockContentCache.value = nextCache
+    const nextHeights: Record<string, number> = {}
+    for (const [blockId, height] of Object.entries(blockHeights.value)) {
+      if (activeIds.has(blockId) && !changedIds.has(blockId)) {
+        nextHeights[blockId] = height
+      }
+    }
+    blockHeights.value = nextHeights
+  }
+}
+
+function storeMessageBlocks(blocks: DisplayMessageBlock[]): void {
+  if (blocks.length === 0) return
+  const next = { ...blockContentCache.value }
+  for (const block of blocks) {
+    next[block.block_id] = block.messages
+  }
+  blockContentCache.value = next
+}
+
+async function ensureBlockContents(blockIds: string[]): Promise<void> {
+  if (!currentSession.value) return
+  const missing = blockIds.filter(
+    (blockId) => !blockContentCache.value[blockId] && !pendingBlockContentLoads.has(blockId),
+  )
+  if (missing.length === 0) return
+  for (const blockId of missing) pendingBlockContentLoads.add(blockId)
+  try {
+    const blocks = await getMessageBlocks(currentSession.value.sid, missing)
+    storeMessageBlocks(blocks)
+  } catch (error) {
+    console.error('Failed to load message blocks:', error)
+  } finally {
+    for (const blockId of missing) pendingBlockContentLoads.delete(blockId)
+  }
+}
+
+async function ensureVisibleBlockContents(blocks: MessageBlock[] = virtualBlocks.value): Promise<void> {
+  await ensureBlockContents(blocks.map((block) => block.id))
+}
+
 async function loadMessages(init = false): Promise<void> {
   if (!currentSession.value) return
 
-  const [page, atts] = await Promise.all([
-    listAllDisplayMessages(currentSession.value.sid),
+  const [indexResponse, atts] = await Promise.all([
+    init || blockIndex.value.length === 0
+      ? listMessageBlockIndex(currentSession.value.sid)
+      : syncMessageBlockDelta(currentSession.value.sid, knownBlockDigests()),
     listAttachments(currentSession.value.sid),
   ])
 
-  const msgs = page.messages
-
-  messageCache.value = msgs
+  if ('upsert' in indexResponse) {
+    applyBlockDelta(indexResponse)
+  } else {
+    applyFullBlockIndex(indexResponse)
+  }
   sessionAttachments.value = atts
 
   if (init || stickToBottom.value) {
@@ -938,6 +1009,7 @@ async function loadMessages(init = false): Promise<void> {
     updateVirtualWindowFromScroll()
   }
 
+  await ensureVisibleBlockContents()
   await refreshVisibleMessageAssets()
   writeChatCache(currentSession.value.sid)
 
@@ -952,7 +1024,7 @@ async function refreshVersionMap(
   targetMessages?: DisplayMessage[],
   forceAnchors: Set<string> = new Set(),
 ): Promise<void> {
-  const msgs = targetMessages || messageCache.value
+  const msgs = targetMessages || visibleMessages.value
   // 收集 messages 中出现的所有 anchor，逐个拉取版本快照
   const anchors = new Set<string>()
   for (const m of msgs) {
@@ -1001,6 +1073,73 @@ function invalidateAnchorVersions(anchor: string): void {
   versionsByAnchor.value = next
 }
 
+function findCachedMessage(
+  predicate: (message: DisplayMessage) => boolean,
+): { blockId: string; message: DisplayMessage } | null {
+  for (const [blockId, messages] of Object.entries(blockContentCache.value)) {
+    const message = messages.find(predicate)
+    if (message) return { blockId, message }
+  }
+  return null
+}
+
+function updateCachedMessage(id: string, patch: Partial<DisplayMessage>): void {
+  const located = findCachedMessage((message) => message.id === id)
+  if (!located) return
+  const current = blockContentCache.value[located.blockId] ?? []
+  blockContentCache.value = {
+    ...blockContentCache.value,
+    [located.blockId]: current.map((message) => (
+      message.id === id ? { ...message, ...patch } : message
+    )),
+  }
+}
+
+function appendCachedMessageContent(id: string, delta: string): void {
+  const located = findCachedMessage((message) => message.id === id)
+  if (!located) return
+  updateCachedMessage(id, { content: located.message.content + delta })
+}
+
+function cachedMessageContent(id: string): string {
+  return findCachedMessage((message) => message.id === id)?.message.content ?? ''
+}
+
+function addLocalMessageBlock(blockId: string, messages: DisplayMessage[]): void {
+  const contentLength = messages.reduce((sum, message) => sum + message.content.length, 0)
+  const estimatedHeight = Math.max(92, Math.min(760, 140 + Math.ceil(contentLength / 72) * 22))
+  blockIndex.value = [
+    ...blockIndex.value,
+    {
+      block_id: blockId,
+      digest: `local-${blockId}`,
+      message_ids: messages.map((message) => message.id),
+      anchor_msg_id: null,
+      roles: messages.map((message) => message.role),
+      timestamp: messages[0]?.timestamp ?? Date.now() / 1000,
+      content_length: contentLength,
+      attachment_count: messages.reduce((sum, message) => sum + (message.localAttachments?.length ?? 0), 0),
+      image_attachment_count: messages.reduce(
+        (sum, message) => sum + (message.localAttachments?.filter((att) => att.mime_type.startsWith('image/')).length ?? 0),
+        0,
+      ),
+      estimated_height: estimatedHeight,
+    },
+  ]
+  blockContentCache.value = {
+    ...blockContentCache.value,
+    [blockId]: messages,
+  }
+}
+
+watch(
+  virtualBlocks,
+  (blocks) => {
+    void ensureVisibleBlockContents(blocks)
+  },
+  { flush: 'post' },
+)
+
 watch(
   visibleMessages,
   (messages) => {
@@ -1021,18 +1160,17 @@ async function regenerateMessage(message: DisplayMessage, newPrompt = ''): Promi
   toolStatus.value = ''
 
   // 找到当前活跃的 user 与 assistant：改 PROMPT 时把 user 气泡先乐观更新成新内容
-  const targetUser = messageCache.value.find(
+  const targetUser = findCachedMessage(
     (m) => m.anchor_msg_id === anchor && m.role === 'user',
-  )
-  const targetAssistant = messageCache.value.find(
+  )?.message
+  const targetAssistant = findCachedMessage(
     (m) => m.anchor_msg_id === anchor && m.role === 'assistant',
-  )
+  )?.message
   if (newPrompt && targetUser) {
-    targetUser.content = newPrompt
+    updateCachedMessage(targetUser.id, { content: newPrompt })
   }
   if (targetAssistant) {
-    targetAssistant.content = ''
-    targetAssistant.pending = true
+    updateCachedMessage(targetAssistant.id, { content: '', pending: true })
   }
 
   streaming.value = true
@@ -1050,7 +1188,7 @@ async function regenerateMessage(message: DisplayMessage, newPrompt = ''): Promi
       {
         onTextDelta(delta) {
           if (targetAssistant) {
-            targetAssistant.content += delta
+            appendCachedMessageContent(targetAssistant.id, delta)
             scrollToBottom()
           }
         },
@@ -1066,7 +1204,7 @@ async function regenerateMessage(message: DisplayMessage, newPrompt = ''): Promi
       abortController.signal,
     )
 
-    if (targetAssistant) targetAssistant.pending = false
+    if (targetAssistant) updateCachedMessage(targetAssistant.id, { pending: false })
 
     if (done.error) {
       errorMessage.value = done.error_code ? `${done.error_code}: ${done.error}` : done.error
@@ -1078,7 +1216,7 @@ async function regenerateMessage(message: DisplayMessage, newPrompt = ''): Promi
     invalidateAnchorVersions(anchor)
     await loadMessages(false)
   } catch (error) {
-    if (targetAssistant) targetAssistant.pending = false
+    if (targetAssistant) updateCachedMessage(targetAssistant.id, { pending: false })
     if (!isAbortError(error)) errorMessage.value = getErrorMessage(error)
     invalidateAnchorVersions(anchor)
     await loadMessages(false)
@@ -1101,9 +1239,9 @@ function openEditPromptDialog(message: DisplayMessage): void {
 async function handleEditPromptSubmit(text: string): Promise<void> {
   const anchor = editDialogAnchor.value
   if (!anchor) return
-  const target = messageCache.value.find(
+  const target = findCachedMessage(
     (m) => m.anchor_msg_id === anchor && m.role === 'user',
-  )
+  )?.message
   editDialogOpen.value = false
   editDialogAnchor.value = null
   editDialogInitial.value = ''
@@ -1172,8 +1310,7 @@ function isAbortError(error: unknown): boolean {
 }
 
 function updateMessage(id: string, patch: Partial<DisplayMessage>): void {
-  const message = messageCache.value.find((item) => item.id === id)
-  if (message) Object.assign(message, patch)
+  updateCachedMessage(id, patch)
 }
 
 async function sendMessage(): Promise<void> {
@@ -1215,6 +1352,7 @@ async function sendMessage(): Promise<void> {
     timestamp: now,
     pending: true,
   }
+  const localBlockId = `local-block-${Date.now()}`
 
   const attachmentIds = pendingAttachments.value
     .map((att) => att.attachment_id)
@@ -1229,7 +1367,7 @@ async function sendMessage(): Promise<void> {
   pendingAttachments.value = []
   errorMessage.value = ''
   toolStatus.value = ''
-  messageCache.value.push(userMessage, assistantMessage)
+  addLocalMessageBlock(localBlockId, [userMessage, assistantMessage])
   streaming.value = true
   inflightUserPrompt.value = rawContent
 
@@ -1244,8 +1382,7 @@ async function sendMessage(): Promise<void> {
       content,
       {
         onTextDelta(delta) {
-          const target = messageCache.value.find((message) => message.id === assistantId)
-          if (target) target.content += delta
+          appendCachedMessageContent(assistantId, delta)
           scrollToBottom()
         },
         onToolEvent(event) {
@@ -1265,8 +1402,7 @@ async function sendMessage(): Promise<void> {
 
     if (done.error) {
       updateMessage(assistantId, {
-        content:
-          messageCache.value.find((message) => message.id === assistantId)?.content || '生成失败。',
+        content: cachedMessageContent(assistantId) || '生成失败。',
       })
       errorMessage.value = done.error_code ? `${done.error_code}: ${done.error}` : done.error
       await loadMessages(false)
@@ -1279,8 +1415,8 @@ async function sendMessage(): Promise<void> {
     updateMessage(assistantId, {
       pending: false,
       content: isAbortError(error)
-        ? messageCache.value.find((message) => message.id === assistantId)?.content || '已停止生成。'
-        : messageCache.value.find((message) => message.id === assistantId)?.content || '生成失败。',
+        ? cachedMessageContent(assistantId) || '已停止生成。'
+        : cachedMessageContent(assistantId) || '生成失败。',
     })
     if (!isAbortError(error)) errorMessage.value = getErrorMessage(error)
     await loadMessages(false)
@@ -1693,6 +1829,12 @@ watch(
           class="flex w-full flex-col gap-5 chat-turn-block"
           :style="{ marginBottom: virtualStart + blockIndex < messageBlocks.length - 1 ? `${BLOCK_GAP_PX}px` : '0px' }"
         >
+          <div
+            v-if="block.messages.length === 0"
+            :style="{ minHeight: `${blockContentHeight(block)}px` }"
+            aria-hidden="true"
+          />
+          <template v-else>
           <div v-for="message in block.messages" :key="message.id" class="flex w-full flex-col">
           <div v-if="message.role === 'user'" class="group flex justify-end">
             <div class="flex max-w-[85%] flex-col items-end gap-1.5">
@@ -1832,6 +1974,7 @@ watch(
             </div>
           </div>
           </div>
+          </template>
         </div>
         <div v-if="bottomSpacerHeight > 0" :style="{ height: `${bottomSpacerHeight}px` }" aria-hidden="true" />
       </div>

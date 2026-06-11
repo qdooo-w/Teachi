@@ -1,59 +1,84 @@
 # 前端界面加载与渲染性能优化文档
 
-本文档记录了对前端聊天页面首屏加载性能、交互体验以及 LaTeX 公式重渲染卡顿的深度优化方案。
+本文档记录聊天页面首屏加载、长历史滚动、Markdown / LaTeX / Mermaid 渲染成本和异常同步的优化方案。
 
 ---
 
 ## 1. 核心优化项说明
 
 ### 1.1 移除冗余占位框
+
 * **问题描述**：当会话无历史消息时，界面会弹出一个 dashed 边框提示“还没有消息”，在对话建立后又会被迅速挤掉，影响视觉一致性。
-* **修改方案**：彻底移除 `ChatView.vue` 中的 “还没有消息” 的提示 DOM。
+* **修改方案**：移除 `ChatView.vue` 中的“还没有消息”提示 DOM，空会话直接显示输入区。
 
-### 1.2 引入 SWR (Stale-While-Revalidate) 本地缓存机制
-* **问题描述**：每次用户进入聊天页面或切换会话，页面均会经历“网络请求白屏等待 -> 第一条消息渲染 -> 后续消息渲染 -> 滚动到底部”的卡顿过程。
-* **修改方案**：
-  1. **同步乐观渲染**：进入 `validateAndLoad` 阶段时，优先同步读取 `localStorage` 中对应 `sid` 的消息与附件缓存，若存在则直接渲染，并立即执行强制贴底滚动 `scrollToBottom(true)`。
-  2. **异步静默拉取**：在首屏已经呈现缓存的基础上，后台静默拉取 API（`loadMessages`），获取最新数据并刷新 `messages.value`，最终回写缓存。
-* **收益**：首屏加载时间从 500ms+ 网络等待降至 0ms 瞬间呈现，解决了切换会话时的白屏与卡顿。
+### 1.2 引入 message block 本地缓存
 
-### 1.3 瞬间贴底防抖动优化
-* **问题描述**：因为渲染包含公式和图片的列表是逐步高度扩增的，在没有初始高度的情况下执行 `scrollToBottom` 会导致页面在第一条消息和最后一条消息之间剧烈跳动。
-* **修改方案**：通过 SWR 恢复缓存，Vue 能够在初始周期内一次性计算出准确的容器高度，结合 `scrollToBottom(true)` 实现了无感瞬间贴底。
+* **问题描述**：长会话如果恢复完整消息正文，会把大量 Markdown、公式、代码块和 Mermaid 内容一次性带回内存并进入渲染队列；只缓存最近分页又无法让滚动条准确表达完整历史。
+* **修改方案**：
+  1. `localStorage` 按 `chat_cache_<sid>` 存储 `blockIndex`、已取过的 block 正文、附件、实测高度、版本快照和 `revision`。
+  2. 缓存 schema 为 `CHAT_CACHE_SCHEMA = 3`，旧格式自动忽略。
+  3. 后台刷新不再全量拉正文，而是用 block digest 增量同步；digest 变化或删除的 block 会同步清理正文缓存和高度缓存。
+* **收益**：切换会话可先恢复轻量索引和已缓存正文，避免白屏；同时不会为了首屏展示读取整段历史正文。
 
-### 1.4 LaTeX 公式节流 (Throttle) 渲染优化
-* **问题描述**：大模型流式（Streaming）打字输出时，每次有新的字符追加，`watch(() => props.content)` 就会被触发。这导致整个段落里的所有公式、Mermaid 图和代码块在流式生成期间被全量重新解析并销毁重建数百次。页面出现明显的公式闪烁与 CPU 线程卡死。
+### 1.3 首屏贴底与完整历史滚动条
+
+* **问题描述**：聊天页面应始终从最新消息底部打开，但长历史又不能一次性挂载所有消息，否则首屏会被昂贵渲染拖慢。
 * **修改方案**：
-  1. **流式状态下节流渲染**：在 `MessageContent.vue` 中实现轻量级 `throttle` 函数，将流式接收字符时的渲染与强化频率节流至 `150ms` 一次。
-  2. **结束状态下强制渲染**：一旦大模型生成结束（`props.streaming` 变为 `false`），或者非流式状态（如首屏加载历史消息），立刻执行一次同步无延迟的 `renderNow()` 和 `enhance()`，确保公式和复制按钮等交互 100% 渲染完整且无残缺。
-* **收益**：大模型流式渲染公式时的 DOM 重构次数减少 90% 以上，解决了公式渲染的严重闪烁，保证了打字输出的极度丝滑。
-### 1.5 出错与取消（Abort）时的重试机制与状态同步优化
-* **问题描述**：当流式输出出错（接口报错）或被用户取消（STOP）时，后端通过紧急兜底机制成功落库了当前回合的新消息。但前端因为进入了 `catch` 块或 `done.error` 判断分支，没有调用 `loadMessages()`，导致内存里的临时消息缺失 `anchor_msg_id`。这就使得界面上的“重新生成”和“编辑后重放”按钮不可用，用户必须手动刷新页面才能重试消息。
+  1. 初始化调用 `GET /sessions/{sid}/message-block-index` 获取完整轻量索引和 `estimated_height`，不包含完整正文。
+  2. 前端用索引估算每个 turn block 的高度，计算 `topSpacerHeight` / `bottomSpacerHeight`，让滚动条代表完整历史。
+  3. `setVirtualWindowToBottom()` 将虚拟窗口定位到最后 `VIRTUAL_BLOCK_LIMIT` 个 block，随后 `scrollToBottom(true)` 强制贴底。
+  4. `ResizeObserver` 在真实 DOM 渲染后记录实测高度，并写回高度缓存。
+* **收益**：首屏稳定显示最新消息；滚动条从一开始就反映整个会话长度，而不是只代表已加载分页。
+
+### 1.4 LaTeX 公式节流渲染
+
+* **问题描述**：流式输出期间，每个字符增量都会触发 Markdown / LaTeX / Mermaid 重解析，导致公式闪烁和主线程卡顿。
 * **修改方案**：
-  在 `sendMessage` 与 `regenerateMessage` 的 `catch` 块及 `done.error` 判断分支中，均添加了 `await loadMessages()` 同步逻辑，使真实分配的 `anchor_msg_id` 自动拉取到前端。
-* **收益**：发生错误或取消时，前端自动同步数据库状态，使用户**无需刷新页面**，即可在出错气泡下方直接点击“重新生成”或在用户气泡上点击“编辑后重放”进行重试。
-### 1.6 动态滚动分页加载（懒加载）历史消息
-* **问题描述**：原有的消息加载机制为一次性全量请求并渲染整个会话的所有消息。若聊天回合较多，网络拉取慢，且大量数学公式组件（MessageContent）同时排版渲染，会导致浏览器卡死，加载极慢。
+  1. `MessageContent.vue` 在 `streaming === true` 时用轻量 `throttle` 将内容增强频率限制到 `150ms` 一次。
+  2. 流结束或非流式历史消息渲染时，立即执行同步无延迟的最终渲染，保证公式、复制按钮和 Mermaid 交互完整。
+* **收益**：流式阶段的 DOM 重构次数显著下降，公式渲染更稳定。
+
+### 1.5 出错与取消时的重试状态同步
+
+* **问题描述**：流式报错或 STOP 取消时，后端可能已经落库了当前回合；如果前端只保留临时消息，就缺少真实 `anchor_msg_id`，重放和编辑后重放按钮会失效。
+* **修改方案**：`sendMessage` 与 `regenerateMessage` 的正常完成、`done.error` 和 `catch` 出口均调用 `loadMessages(false)`。该函数通过 `message-block-delta` 刷新权威索引，再按需加载可见 block 正文。
+* **收益**：异常或取消后无需刷新页面，用户仍能直接重试当前回合。
+
+### 1.6 Turn-block 虚拟化渲染
+
+* **问题描述**：按消息分页能降低网络负载，但滚动条只代表已加载消息；全量加载又会让长会话的 Markdown / LaTeX / Mermaid 同时进入渲染，浏览器容易卡死。
 * **修改方案**：
-  1. **按需分页获取**：默认每次只向后端拉取最新的 20 条消息（`PAGE_LIMIT = 20`）。
-  2. **向上滚动加载**：在 `handleChatScroll` 中监听滚动。当用户将滚动条拉至最顶部附近（`scrollTop <= 15px`）且还有更多数据（`hasMore === true`）时，自动触发 `loadMoreMessages()`，向上加载前 20 条历史消息并追加至消息列表头部。
-  3. **视口滚动防抖动**：在追加新消息数据渲染后，使用 `nextTick` 自动计算新增加的内容高度差，并同步将滚动条向下调整等量高度差，实现完全平滑无感的滚动加载。
-* **收益**：首屏接口负载大幅降低；渲染的 DOM 公式数量降至 20 个以内，页面交互性能极大提升。
+  1. 后端按展示语义生成 turn block：一条或多条连续 `user` 消息 + 随后的 `assistant` 回复；工具调用和工具返回不展示。
+  2. 前端固定虚拟窗口：`VIRTUAL_BLOCK_LIMIT = 10`，`VIRTUAL_BLOCK_OVERSCAN_PX = 720`；向下扩展时最多额外挂载约 4 个 block。
+  3. 可见 block 缺正文时调用 `POST /sessions/{sid}/message-blocks` 批量加载；不可见 block 只保留索引和 spacer。
+  4. `handleChatScroll()` 只更新虚拟窗口位置，不触发“加载上一页”式的数据拼接。
+* **收益**：滚动条保持完整历史语义，同时把实际 DOM 和昂贵 Markdown 渲染限制在可视区附近。
+
+### 1.7 已知限制
+
+* `estimated_height` 是后端估算值，真实高度会在图片 Blob URL、Markdown 二阶段渲染、LaTeX / Mermaid 完成渲染、版本工具栏出现后由 `ResizeObserver` 修正。
+* 贴底状态下前端会继续保持底部；向上浏览历史时，如果某个 block 从估高切到实测高度，滚动位置可能出现轻微修正。
 
 ---
 
 ## 2. 代码实现位置参考
 
-* [ChatView.vue](file:///home/seeck/Projects/Teachi/frontend/src/views/ChatView.vue)
-  * `PAGE_LIMIT` / `hasMore` / `loadingMore` / `currentOffset`：维护分页加载状态。
-  * `loadMessages(init)`：支持可选参数 `init` 重置分页状态并加载最初的一页；非 `init` 模式下智能拉取当前已加载出来的全量条数，以在发消息后无感更新。
-  * `loadMoreMessages()`：倒序向上获取历史消息，并动态恢复滚动位置，确保视口无闪烁无跳跃。
-  * `handleChatScroll()`：监听容器滚动，在滚动到顶部 15px 附近时触发向上分页。
-  * `validateAndLoad()`：优先读取本地缓存并乐观贴底渲染，初始化加载调用 `loadMessages(true)`。
-  * `sendMessage()` / `regenerateMessage()`：在正常完成、流报错、catch 异常的所有出口均调用 `loadMessages(false)` 保持已载入历史不折叠，且支持无刷新直接重试。
-  * `handleDeleteTurnConfirm()`：删除回合后重置加载第一页（`loadMessages(true)`）。
-  * 模板区：移除了 `messages.length === 0` 的占位框。
-* [MessageContent.vue](file:///home/seeck/Projects/Teachi/frontend/src/components/MessageContent.vue)
-  * `throttle()`：轻量防抖节流函数
-  * `watch(content)`：在 streaming 期间调用 `throttledRenderAndEnhance()` 进行 150ms 节流渲染
-  * `watch(streaming)`：流结束后同步无延迟渲染以收底
+* [`ChatView.vue`](../../frontend/src/views/ChatView.vue)
+  * `CHAT_CACHE_SCHEMA` / `CHAT_CACHE_PREFIX`：本地缓存版本和 key 前缀。
+  * `blockIndex` / `blockContentCache` / `blockHeights`：轻量索引、正文缓存、实测高度缓存。
+  * `messageBlocks` / `blockMetrics` / `topSpacerHeight` / `bottomSpacerHeight` / `virtualBlocks`：完整历史滚动高度与虚拟窗口计算。
+  * `setVirtualWindowToBottom()` / `updateVirtualWindowFromScroll()`：初始化贴底和滚动时窗口移动。
+  * `applyChatCache()` / `writeChatCache()`：缓存恢复和写入。
+  * `applyFullBlockIndex()` / `applyBlockDelta()`：全量索引和 digest 增量同步，负责失效正文与高度缓存。
+  * `ensureVisibleBlockContents()` / `ensureBlockContents()`：只为可见 block 拉取正文。
+  * `measureVirtualBlock()`：通过 `ResizeObserver` 记录真实 block 高度。
+  * `loadMessages(init)`：初始化走 block index，后续刷新走 block delta，并同步附件。
+* [`api.ts`](../../frontend/src/api.ts)
+  * `MessageBlockIndexItem` / `MessageBlockIndexResponse` / `MessageBlockDeltaResponse` / `DisplayMessageBlock`：前端 block 协议类型。
+  * `listMessageBlockIndex()`：调用 `GET /sessions/{sid}/message-block-index`。
+  * `syncMessageBlockDelta()`：调用 `POST /sessions/{sid}/message-block-delta`。
+  * `getMessageBlocks()`：调用 `POST /sessions/{sid}/message-blocks` 并复用 `parseMessage()` 转成展示消息。
+* [`MessageContent.vue`](../../frontend/src/components/MessageContent.vue)
+  * `throttle()`：流式阶段的轻量节流函数。
+  * `watch(content)`：streaming 期间按 150ms 节流渲染。
+  * `watch(streaming)`：流结束后同步收底。

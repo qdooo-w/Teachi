@@ -11,6 +11,7 @@ data.py - 数据传输与查询路由模块
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import shutil
 import uuid
@@ -122,6 +123,240 @@ class MessageListResponse(BaseModel):
     """会话消息列表响应"""
 
     messages: list[MessageItem]
+
+
+class MessageBlockIndexItem(BaseModel):
+    """轻量消息区块索引，用于前端虚拟滚动。"""
+
+    block_id: str
+    digest: str
+    message_ids: list[str]
+    anchor_msg_id: str | None = None
+    roles: list[str]
+    timestamp: float
+    content_length: int
+    attachment_count: int
+    image_attachment_count: int
+    estimated_height: int
+
+
+class MessageBlockIndexResponse(BaseModel):
+    """完整轻量区块索引响应。"""
+
+    revision: str
+    total_blocks: int
+    estimated_height: int
+    block_ids: list[str]
+    blocks: list[MessageBlockIndexItem]
+
+
+class KnownMessageBlock(BaseModel):
+    """客户端已知区块摘要。"""
+
+    block_id: str
+    digest: str
+
+
+class MessageBlockDeltaRequest(BaseModel):
+    """基于客户端已知 digest 的轻量索引增量同步请求。"""
+
+    known_blocks: list[KnownMessageBlock] = Field(default_factory=list, max_length=10000)
+
+
+class MessageBlockDeltaResponse(BaseModel):
+    """轻量区块索引增量响应。"""
+
+    revision: str
+    total_blocks: int
+    estimated_height: int
+    block_ids: list[str]
+    upsert: list[MessageBlockIndexItem]
+    removed: list[str]
+
+
+class MessageBlockContentRequest(BaseModel):
+    """按区块 ID 批量获取完整消息正文。"""
+
+    block_ids: list[str] = Field(..., min_length=1, max_length=50)
+
+
+class MessageBlockContentItem(BaseModel):
+    """一个区块内的完整消息。"""
+
+    block_id: str
+    messages: list[MessageItem]
+
+
+class MessageBlockContentResponse(BaseModel):
+    """按区块返回的完整消息正文响应。"""
+
+    revision: str
+    blocks: list[MessageBlockContentItem]
+
+
+def _message_item_from_row(row: dict[str, Any]) -> MessageItem:
+    return MessageItem(
+        msg_id=row["msg_id"],
+        kind=row["kind"],
+        raw_json=row["raw_json"],
+        timestamp=float(row["timestamp"]),
+        created_at=float(row["created_at"]),
+        anchor_msg_id=row.get("anchor_msg_id"),
+        version=int(row.get("version", 0) or 0),
+    )
+
+
+def _stringify_part_content(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if value is None:
+        return ""
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _display_message_meta(row: dict[str, Any]) -> tuple[str, int] | None:
+    try:
+        parsed = json.loads(row["raw_json"])
+    except (TypeError, json.JSONDecodeError):
+        return None
+
+    parts = parsed.get("parts")
+    if not isinstance(parts, list):
+        return None
+
+    if row["kind"] == "user" and parsed.get("kind") == "request":
+        content = "\n".join(
+            _stringify_part_content(part.get("content"))
+            for part in parts
+            if isinstance(part, dict) and part.get("part_kind") == "user-prompt"
+        ).strip()
+        return ("user", len(content)) if content else None
+
+    if row["kind"] in {"assistant", "agent_response"} and parsed.get("kind") == "response":
+        content = "\n".join(
+            _stringify_part_content(part.get("content"))
+            for part in parts
+            if isinstance(part, dict) and part.get("part_kind") == "text"
+        ).strip()
+        return ("assistant", len(content)) if content else None
+
+    return None
+
+
+def _message_block_id(rows: list[dict[str, Any]]) -> str:
+    anchors = {
+        row.get("anchor_msg_id")
+        for row in rows
+        if isinstance(row.get("anchor_msg_id"), str) and row.get("anchor_msg_id")
+    }
+    if len(anchors) == 1:
+        return f"anchor-{next(iter(anchors))}"
+    first = rows[0]["msg_id"] if rows else "empty"
+    last = rows[-1]["msg_id"] if rows else first
+    return f"sequence-{first}-{last}"
+
+
+def _estimate_block_height(roles: list[str], content_length: int, attachment_count: int) -> int:
+    user_count = roles.count("user")
+    assistant_count = roles.count("assistant")
+    base = user_count * 54 + assistant_count * 112
+    text_rows = max(1, (content_length + 71) // 72)
+    attachment_height = min(attachment_count, 3) * 92
+    return max(92, min(760, base + text_rows * 22 + attachment_height))
+
+
+def _build_display_message_blocks(
+    messages: list[dict[str, Any]],
+) -> list[tuple[str, list[dict[str, Any]], list[str], int]]:
+    blocks: list[tuple[str, list[dict[str, Any]], list[str], int]] = []
+    current_rows: list[dict[str, Any]] = []
+    current_roles: list[str] = []
+    current_content_length = 0
+
+    for message in messages:
+        meta = _display_message_meta(message)
+        if meta is None:
+            continue
+        role, content_length = meta
+        if current_rows and role == "user" and "assistant" in current_roles:
+            blocks.append((_message_block_id(current_rows), current_rows, current_roles, current_content_length))
+            current_rows = []
+            current_roles = []
+            current_content_length = 0
+        current_rows.append(message)
+        current_roles.append(role)
+        current_content_length += content_length
+
+    if current_rows:
+        blocks.append((_message_block_id(current_rows), current_rows, current_roles, current_content_length))
+
+    return blocks
+
+
+def _build_message_block_payload(
+    *,
+    db: DatabaseFacade,
+    sid: str,
+    user_uuid: str,
+) -> tuple[list[MessageBlockIndexItem], dict[str, list[dict[str, Any]]], str, int]:
+    messages = db.messages.list_active_by_session_for_user(sid=sid, user_uuid=user_uuid)
+    attachments = db.attachments.list_by_session(sid=sid, user_uuid=user_uuid)
+    attachments_by_anchor: dict[str, list[dict[str, Any]]] = {}
+    for attachment in attachments:
+        anchor = attachment.get("anchor_msg_id")
+        if isinstance(anchor, str) and anchor:
+            attachments_by_anchor.setdefault(anchor, []).append(attachment)
+
+    indexes: list[MessageBlockIndexItem] = []
+    block_rows: dict[str, list[dict[str, Any]]] = {}
+    total_estimated_height = 0
+
+    for block_id, rows, roles, content_length in _build_display_message_blocks(messages):
+        anchors = [
+            row.get("anchor_msg_id")
+            for row in rows
+            if isinstance(row.get("anchor_msg_id"), str) and row.get("anchor_msg_id")
+        ]
+        anchor_msg_id = anchors[0] if len(set(anchors)) == 1 else None
+        block_attachments = attachments_by_anchor.get(anchor_msg_id or "", [])
+        attachment_count = len(block_attachments)
+        image_attachment_count = sum(
+            1 for item in block_attachments if str(item.get("mime_type", "")).startswith("image/")
+        )
+        digest_source = "|".join(
+            [
+                block_id,
+                *[
+                    f"{row['msg_id']}:{row['kind']}:{row.get('anchor_msg_id') or ''}:"
+                    f"{row.get('version', 0)}:{row['timestamp']}:{hashlib.sha256(str(row['raw_json']).encode('utf-8')).hexdigest()}"
+                    for row in rows
+                ],
+                f"att:{attachment_count}:{image_attachment_count}",
+            ]
+        )
+        digest = hashlib.sha256(digest_source.encode("utf-8")).hexdigest()
+        estimated_height = _estimate_block_height(roles, content_length, attachment_count)
+        total_estimated_height += estimated_height
+        indexes.append(
+            MessageBlockIndexItem(
+                block_id=block_id,
+                digest=digest,
+                message_ids=[row["msg_id"] for row in rows],
+                anchor_msg_id=anchor_msg_id,
+                roles=roles,
+                timestamp=float(rows[0]["timestamp"]),
+                content_length=content_length,
+                attachment_count=attachment_count,
+                image_attachment_count=image_attachment_count,
+                estimated_height=estimated_height,
+            )
+        )
+        block_rows[block_id] = rows
+
+    revision = hashlib.sha256(
+        "|".join(f"{item.block_id}:{item.digest}" for item in indexes).encode("utf-8")
+    ).hexdigest()
+    return indexes, block_rows, revision, total_estimated_height
 
 
 @router.get("/users/search")
@@ -443,41 +678,114 @@ def list_session_messages(
     )
 
 
-@router.get("/sessions/{sid}/messages/all", response_model=MessageListResponse)
-def list_all_session_messages(
+@router.get("/sessions/{sid}/message-block-index", response_model=MessageBlockIndexResponse)
+def list_session_message_block_index(
     sid: str,
     current_user: dict[str, Any] = Depends(get_current_user),
     db: DatabaseFacade = Depends(get_db),
-) -> MessageListResponse:
-    """查询会话的全部活跃消息，用于前端缓存与虚拟滚动。"""
+) -> MessageBlockIndexResponse:
+    """查询完整轻量消息区块索引，不包含完整正文。"""
     user_uuid = current_user.get("uuid")
     if not isinstance(user_uuid, str):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"code": "AUTH_TOKEN_INVALID", "message": "Invalid token"},
         )
-
-    session = db.sessions.get_for_user(sid=sid, user_uuid=user_uuid)
-    if session is None:
+    if db.sessions.get_for_user(sid=sid, user_uuid=user_uuid) is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"code": "RESOURCE_NOT_FOUND", "message": "Session not found"},
         )
 
-    messages = db.messages.list_active_by_session_for_user(sid=sid, user_uuid=user_uuid)
-    return MessageListResponse(
-        messages=[
-            MessageItem(
-                msg_id=m["msg_id"],
-                kind=m["kind"],
-                raw_json=m["raw_json"],
-                timestamp=float(m["timestamp"]),
-                created_at=float(m["created_at"]),
-                anchor_msg_id=m.get("anchor_msg_id"),
-                version=int(m.get("version", 0) or 0),
+    blocks, _, revision, estimated_height = _build_message_block_payload(
+        db=db,
+        sid=sid,
+        user_uuid=user_uuid,
+    )
+    return MessageBlockIndexResponse(
+        revision=revision,
+        total_blocks=len(blocks),
+        estimated_height=estimated_height,
+        block_ids=[block.block_id for block in blocks],
+        blocks=blocks,
+    )
+
+
+@router.post("/sessions/{sid}/message-block-delta", response_model=MessageBlockDeltaResponse)
+def sync_session_message_block_delta(
+    sid: str,
+    payload: MessageBlockDeltaRequest,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
+) -> MessageBlockDeltaResponse:
+    """按客户端已知 digest 返回轻量区块索引增量。"""
+    user_uuid = current_user.get("uuid")
+    if not isinstance(user_uuid, str):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "AUTH_TOKEN_INVALID", "message": "Invalid token"},
+        )
+    if db.sessions.get_for_user(sid=sid, user_uuid=user_uuid) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "RESOURCE_NOT_FOUND", "message": "Session not found"},
+        )
+
+    blocks, _, revision, estimated_height = _build_message_block_payload(
+        db=db,
+        sid=sid,
+        user_uuid=user_uuid,
+    )
+    known = {item.block_id: item.digest for item in payload.known_blocks}
+    current_ids = {block.block_id for block in blocks}
+    upsert = [block for block in blocks if known.get(block.block_id) != block.digest]
+    removed = [block_id for block_id in known if block_id not in current_ids]
+    return MessageBlockDeltaResponse(
+        revision=revision,
+        total_blocks=len(blocks),
+        estimated_height=estimated_height,
+        block_ids=[block.block_id for block in blocks],
+        upsert=upsert,
+        removed=removed,
+    )
+
+
+@router.post("/sessions/{sid}/message-blocks", response_model=MessageBlockContentResponse)
+def get_session_message_blocks(
+    sid: str,
+    payload: MessageBlockContentRequest,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    db: DatabaseFacade = Depends(get_db),
+) -> MessageBlockContentResponse:
+    """按区块 ID 获取完整展示消息正文。"""
+    user_uuid = current_user.get("uuid")
+    if not isinstance(user_uuid, str):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "AUTH_TOKEN_INVALID", "message": "Invalid token"},
+        )
+    if db.sessions.get_for_user(sid=sid, user_uuid=user_uuid) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "RESOURCE_NOT_FOUND", "message": "Session not found"},
+        )
+
+    _, block_rows, revision, _ = _build_message_block_payload(
+        db=db,
+        sid=sid,
+        user_uuid=user_uuid,
+    )
+    requested = set(payload.block_ids)
+    return MessageBlockContentResponse(
+        revision=revision,
+        blocks=[
+            MessageBlockContentItem(
+                block_id=block_id,
+                messages=[_message_item_from_row(row) for row in rows],
             )
-            for m in messages
-        ]
+            for block_id, rows in block_rows.items()
+            if block_id in requested
+        ],
     )
 
 
