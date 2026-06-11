@@ -189,6 +189,38 @@ VALIDATE → LOAD_HISTORY → BUILD_MESSAGES → BUILD_MODEL → CALL_MODEL → 
 | POST | `/community/comments/{comment_id}/report` | 举报评论 |
 | GET | `/community/leaderboard` | 获取热门技能下载排行榜 |
 
+### Library（`/library`）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/library/skills` | 列出个人仓库技能（分页、检索、排序） |
+| GET | `/library/skills/parse-runtime` | 解析运行层技能以辅助填充表单 |
+| GET | `/library/skills/match-template` | 查找最佳匹配的模板技能 |
+| POST | `/library/skills/collect` | 从运行层收集技能到个人仓库（支持模板预填） |
+| POST | `/library/skills/upload` | 上传 ZIP 技能包到个人仓库（自动校验与解析） |
+| GET | `/library/skills/{library_id}` | 获取仓库技能详情 |
+| GET | `/library/skills/{library_id}/template` | 获取作为模板的技能数据 |
+| GET | `/library/skills/{library_id}/publish-form` | 获取发布表单初始数据（推荐版本号等） |
+| POST | `/library/skills/{library_id}/publish` | 将个人仓库中的技能发布到社区审核 |
+| POST | `/library/skills/{library_id}/fork` | Fork 个人仓库已有技能为新技能 |
+| POST | `/library/skills/{library_id}/install` | 将仓库中的技能安装到用户或项目运行层 |
+| GET | `/library/skills/{library_id}/files` | 列出该仓库技能的所有文件和目录 |
+| GET | `/library/skills/{library_id}/files/content` | 获取仓库技能内指定文件内容 |
+| PUT | `/library/skills/{library_id}/files` | 写入仓库技能内指定文件（支持 SKILL.md/README/配置等） |
+| PUT | `/library/skills/{library_id}/meta` | 更新个人仓库技能元数据（显示名、描述、标签、README等） |
+| DELETE | `/library/skills` | 批量或单选删除个人仓库技能 |
+
+### Admin & Owner Review（`/admin` & `/owner`）
+
+| 方法 | 路径 | 权限 | 说明 |
+|---|---|---|---|
+| GET | `/owner/skills/pending` | 技能 Owner | 获取待处理的版本审核请求 |
+| POST | `/owner/skills/versions/{version_id}/review` | 技能 Owner | 审核通过或拒绝特定版本 |
+| GET | `/admin/skills/pending` | 系统 Admin | 获取待系统审核的版本请求 |
+| POST | `/admin/skills/versions/{version_id}/review` | 系统 Admin | 系统管理员终审或下架特定版本 |
+| GET | `/admin/community/reports` | 系统 Admin | 获取所有被举报的评论列表 |
+| POST | `/admin/community/reports/{report_id}/resolve` | 系统 Admin | 处理解决评论举报 |
+
 ### Settings（`/settings`）
 
 | 方法 | 路径 | 说明 |
@@ -224,11 +256,15 @@ VALIDATE → LOAD_HISTORY → BUILD_MESSAGES → BUILD_MODEL → CALL_MODEL → 
 - `anchor_msg_id` + `version` 模型（从旧 `parent_msg_id + is_latest` 迁移而来）
 - 支持同一轮对话的多版本切换（regenerate 场景）
 
-### 技能系统
+### 技能系统与生命周期
 
-- 三作用域：global（只读）、project、user
-- `SKILL.md` frontmatter（YAML）+ `references/`、`assets/` 子目录
-- 社区市场支持 ZIP 上传/发布/安装，含完整安全校验（符号链接拒绝、路径穿越检查、大小限制 5MB）
+- **运行层作用域**：三作用域——global（只读）、project、user。文件以 `SKILL.md`（YAML frontmatter）为入口，并可包含 `references/`、`assets/` 子目录。
+- **个人仓库（Library）**：
+  - 作为技能导入的控制台与中介层，元数据（描述、标签、版本等）存储于 `user_library_skills` 数据库，而物理文件放置于 `data/{user_uuid}/library/{library_id}/` 下。
+  - 支持四种来源类型：`runtime`（从本地运行层收集，支持模板继承和最佳同名匹配）、`zip`（ZIP 上传解析导入）、`community`（从社区市场安装特定版本）、`fork`（从个人仓库已有技能派生）。
+  - 支持仓库文件编辑（GET/PUT）与元数据热更新。
+- **发布与审核流**：个人技能可向社区发起发布，版本号由系统基于前一版本自动末位累加。发布后状态为 `PENDING_OWNER`，由 Owner 审核（`APPROVED` / `REJECTED`）和 Admin 终审上架/下架。
+- **安全校验**：ZIP 上传/导入均包含严格的安全机制校验（拒绝软链接、防目录穿越、单文件与总包大小限制等）。
 
 ### 错误处理
 

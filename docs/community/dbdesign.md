@@ -820,6 +820,7 @@ CREATE TABLE IF NOT EXISTS user_library_skills (
     tags TEXT NOT NULL DEFAULT '[]',
     version TEXT NOT NULL,
     changelog TEXT DEFAULT '',
+    source TEXT NOT NULL DEFAULT 'runtime',
     community_skill_id TEXT,  -- 有值=来自社区，空=来自运行层收集
     local_path TEXT NOT NULL,
     size_bytes INTEGER NOT NULL DEFAULT 0,

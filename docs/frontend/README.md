@@ -42,10 +42,12 @@ frontend/
    │  ├─ OverviewView.vue   `/`：科目卡片总览 + 新建科目
    │  ├─ SubjectView.vue    `/projects/:pid`：该科目会话列表 + 首条消息创建会话
    │  ├─ ChatView.vue       `/projects/:pid/sessions/:sid`：消息流 + composer + SSE 主循环 + skill picker
-   │  └─ CommunityView.vue  `/community`：社区技能列表、ZIP 上传、详情、安装与作者删除
+   │  ├─ CommunityView.vue  `/community`：社区技能列表、ZIP 上传、详情、安装与作者删除
+   │  └─ LibraryView.vue    `/library`：我的技能仓库，含导入控制台、队列配置、标签页管理器与表单编辑
    ├─ components/
    │  ├─ ConfirmDialog.vue         二次确认对话框（危险操作，含删除回合）
    │  ├─ EditPromptDialog.vue      编辑后重放：textarea + Ctrl/⌘+Enter 提交 / Esc 取消
+   │  ├─ LibraryUploadDialog.vue  技能仓库 ZIP 上传模态框（支持拖拽与多文件）
    │  ├─ MediaPreviewDialog.vue    图片/文件预览模态框（缩放、重置视图）
    │  ├─ MessageContent.vue        Markdown 消息渲染与代码块复制、Mermaid 延迟渲染
    │  ├─ RenameInline.vue          行内重命名输入（回车提交 / Esc 取消）
@@ -85,7 +87,8 @@ main.ts
                                        + listSessions + sendChatMessage/stopChatGeneration
                                        + SkillPicker/Chips + SkillEditorPanel(内联编辑)
                                        + MediaPreviewDialog
-        └─ views/CommunityView.vue   ── useCommunity + 社区 skill 列表 / ZIP 上传 / 详情 / 安装 / 作者删除
+        ├─ views/CommunityView.vue   ── useCommunity + 社区 skill 列表 / ZIP 上传 / 详情 / 安装 / 作者删除
+        └─ views/LibraryView.vue     ── 技能仓库主视图（导入控制台、队列、待配置标签页、元数据表单编辑、发布/Fork等）
 ```
 
 - `api.ts` 是所有后端通信的唯一出口，封装 `fetch` + 401 自动刷新、JWT 本地存储、SSE 帧解析、通用文件 API
@@ -102,6 +105,7 @@ main.ts
 | `/projects/:pid` | `SubjectView` | 动态（科目名） | 该项目会话列表；视图独占 |
 | `/projects/:pid/sessions/:sid` | `ChatView` | 动态（科目 / 会话） | 消息 / 草稿 / SSE 全部随视图卸载释放 |
 | `/community` | `CommunityView` | `社区` | 社区技能列表、ZIP 上传、详情、安装；视图独占 |
+| `/library` | `LibraryView` | `我的仓库` | 个人仓库列表、导入控制台、待配置表单；视图独占 |
 | `/:pathMatch(.*)*` | — | — | 404 重定向到 `/` |
 
 - `ChatView` 用 `:key="${pid}:${sid}"` 强制按会话重建，避免切换 sid 时状态串联
@@ -324,6 +328,24 @@ Mermaid 渲染失败降级为可见 of error 卡片而不是白屏。
 - **非图片附件卡片展示**：在已发送的消息中，非图片文件（如 PDF、TXT、JSON、CSV、HTML 等）以独立的卡片形式美观展示，卡片包含文件类型图标、文件名和文件大小等基本信息。
 - **图片附件预览模态框**：无论是在聊天消息气泡中的已发送图片，还是在 Chat Composer 输入框上方待发送的文件列表中，点击图片即可打开高保真预览模态框，支持查看大图及便捷关闭。
 - **多模态与工具链配合**：AI 代理会在会话开始或需要时自动调用 `list_attachment` 获取会话内所有已上传文件列表，并可通过 `view_attachment` 读取文件具体内容。若主模型不支持视觉多模态，系统会自动调用已启用的视觉模型或环境默认视觉模型对图片进行内容理解与叙述缓存。
+
+### 13. 我的技能仓库（Library）与导入控制台
+
+`/library` 路由下的 `LibraryView.vue` 实现了统一的个人技能仓库管理和导入控制台功能：
+
+- **全局标签页系统与状态流转**：主页面复用 Tab 管理多个视图状态：
+  - `main`：展示仓库中个人所有已保存技能的卡片列表，支持搜索和排序。卡片支持点击查看详情，提供安装到运行层、Fork 为新技能以进行二次开发等选项。
+  - `skill`：展示已保存的单个技能详情，支持对 README 进行 Markdown 编辑或通过内联文件树直接编辑技能目录下的物理文件。
+  - `import-console`（常驻标签页）：批量技能导入管理中心。
+  - `pending-import`（待配置页签）：在标签页左侧渲染**紫色闪烁小圆点 `●`**，提示为未正式入库的临时状态。
+- **导入控制台（Import Console）功能**：
+  - **ZIP 拖拽多文件并发上传**：用户可以通过拖放 ZIP 文件包或点击打开 `LibraryUploadDialog.vue` 进行并发上传解析。
+  - **运行层技能收集 Combobox**：提供支持拼音/英文/中文检索的 Combobox 下拉框，列出本地运行层中尚未导入仓库的技能（通过 `GET /library/skills/unimported` 过滤）。
+  - 用户确认上传/收集解析成功后，点击**「开始配置并清空队列」**按钮，清空队列并在全局 tabs 中为每个任务打开一个 `pending-import` 标签页，并自动切换至第一个。
+- **待配置页签与表单编辑**：
+  - **智能模板匹配与加载（Template Loader）**：表单顶部支持检索并应用个人仓库中已有技能作为配置模板。如果检测到同名技能，系统会自动选中匹配，并提示可直接应用。应用后一键覆盖 displayName、description、tags 和 README。
+  - **元数据与全宽 README 编辑**：表单允许设置显示名、简短描述（1024字限制）、多选标签，并且提供可切换 Write/Preview 模式的全宽 README 编辑器。
+  - **动作操作栏**：底部固定悬浮操作栏提供**[确认保存并导入]**（调用更新 API 写入 DB 与 README 物理文件，完成入库并自动变更为正常技能 Tab）和**[放弃导入]**（二次确认后销毁 Tab）操作。
 
 ## 尚未实现 / 有意省略
 

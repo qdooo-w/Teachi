@@ -64,6 +64,7 @@
 │  │  tags ◄────────── 继承 (收集时="[]")    │    library_id = version_id                        │    │
 │  │  version ◄──────── 继承 (收集时="1.0.0")│                                                   │    │
 │  │  changelog ◄───── 继承 (收集时固定值)   │                                                   │    │
+│  │  source ◄──────── 显式记录来源          │                                                   │    │
 │  │  community_skill_id ────────────────────│──── 有值=来自社区，空=来自运行层                   │    │
 │  │  local_path                             │                                                   │    │
 │  │  size_bytes                             │                                                   │    │
