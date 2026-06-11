@@ -391,7 +391,7 @@ const detailLoading = ref(false)
 const detailFiles = ref<LibraryFileEntry[]>([])
 const detailFilesLoading = ref(false)
 const selectedFileName = ref('SKILL.md')
-const selectedFileContent = ref('')
+const selectedFileContent = ref<string | null>(null)
 const selectedFileLoading = ref(false)
 // 展开的文件夹路径集合
 const expandedDirs = ref<Set<string>>(new Set())
@@ -480,7 +480,7 @@ async function openDetail(id: string): Promise<void> {
   detailLoading.value = true
   detailFiles.value = []
   selectedFileName.value = 'SKILL.md'
-  selectedFileContent.value = ''
+  selectedFileContent.value = null
   expandedDirs.value = new Set()
   dirCache.value = new Map()
   try {
@@ -517,7 +517,7 @@ async function loadFileContent(libraryId: string, filePath: string): Promise<voi
     const res = await readLibrarySkillFileContent(libraryId, filePath)
     selectedFileContent.value = res.content
   } catch {
-    selectedFileContent.value = ''
+    selectedFileContent.value = null
   } finally {
     selectedFileLoading.value = false
   }
@@ -2312,13 +2312,38 @@ watch(activeTabId, async (newId) => {
               <div class="flex flex-col lg:flex-row gap-4">
                 <!-- 左侧/主体：描述与 README -->
                 <div class="flex-1 min-w-0 w-full flex flex-col gap-4">
-                  <div v-if="detailSkill.description">
-                    <span class="inline-block rounded-md bg-[#1f2937] px-2 py-0.5 text-[11px] font-semibold text-white mb-2">Description</span>
-                    <p class="text-sm text-[#374151] leading-relaxed">{{ detailSkill.description }}</p>
+                  <!-- 顶部主要信息（平铺，无容器罩着） -->
+                  <div class="flex flex-col gap-3.5 pt-3 pb-5 border-b border-[#e5e7eb]">
+                    <div>
+                      <h2 class="text-3xl lg:text-4xl font-extrabold text-[#1f2937] tracking-tight truncate font-serif-hans py-1 leading-normal" :title="detailSkill.display_name || detailSkill.name">
+                        {{ detailSkill.display_name || detailSkill.name }}
+                      </h2>
+                      <p v-if="detailSkill.display_name" class="text-sm font-mono text-[#4b5563] mt-2 truncate" :title="detailSkill.name">
+                        <span class="text-[#9ca3af]">SKILL-name:</span> {{ detailSkill.name }}
+                      </p>
+                    </div>
+                    <!-- 标签放在下方 -->
+                    <div class="flex flex-wrap gap-1.5">
+                      <template v-if="parseTags(detailSkill.tags).length > 0">
+                        <span
+                          v-for="tag in parseTags(detailSkill.tags)"
+                          :key="tag"
+                          class="rounded bg-[#e5e7eb] px-2.5 py-0.5 text-xs font-medium text-[#4b5563]"
+                        >{{ tag }}</span>
+                      </template>
+                      <span v-else class="text-xs text-[#9ca3af] italic">暂无标签</span>
+                    </div>
+                  </div>
+                  <div v-if="detailSkill.description" class="flex flex-col gap-2.5">
+                    <div class="flex items-center gap-3">
+                      <span class="text-sm font-bold text-[#1f2937] font-hans flex-shrink-0">简介</span>
+                      <div class="flex-1 h-px bg-[#e5e7eb]"></div>
+                    </div>
+                    <p class="text-base text-[#374151] leading-relaxed">{{ detailSkill.description }}</p>
                   </div>
                   <div v-if="detailSkill.description && detailSkill.readme_md" class="border-t border-[#e5e7eb]"></div>
                   <div v-if="detailSkill.readme_md" class="flex-1">
-                    <span class="inline-block rounded-md bg-[#1f2937] px-2 py-0.5 text-[11px] font-semibold text-white mb-2">README.md</span>
+                    <span class="inline-block rounded-md bg-[#1f2937] px-2.5 py-0.5 text-[13px] font-bold text-white mb-2 font-hans">详情(README.md)</span>
                     <div class="markdown-body" v-html="renderMarkdown(detailSkill.readme_md)"></div>
                   </div>
                   <div v-if="!detailSkill.description && !detailSkill.readme_md" class="py-12 text-center text-sm text-[#9ca3af]">
@@ -2326,10 +2351,23 @@ watch(activeTabId, async (newId) => {
                   </div>
 
                   <!-- 选中文件内容 -->
-                  <div v-if="selectedFileName" class="border-t border-[#e5e7eb] pt-4">
-                    <span class="inline-block rounded-md bg-[#1f2937] px-2 py-0.5 text-[11px] font-semibold text-white mb-2">{{ selectedFileName.split('/').pop() }}</span>
+                  <div v-if="selectedFileName" class="border-t border-[#e5e7eb] pt-6 flex flex-col gap-3">
                     <div v-if="selectedFileLoading" class="text-xs text-[#9ca3af] py-4">加载中…</div>
-                    <pre v-else-if="selectedFileContent" class="whitespace-pre-wrap font-sans text-sm text-[#374151] leading-relaxed bg-[#f9fafb] rounded-lg p-4 overflow-x-auto">{{ selectedFileContent }}</pre>
+                    
+                    <!-- 黑色外壳罩着，内部仍为白色，左上角标着文件名 -->
+                    <div v-else-if="selectedFileContent !== null" class="bg-[#1f2937] py-4 px-2 flex flex-col gap-3 shadow-md">
+                      <div class="text-xs font-mono font-bold text-white flex items-center justify-between px-1">
+                        <span>{{ selectedFileName.split('/').pop() }}</span>
+                        <span class="text-[10px] text-[#9ca3af] uppercase font-sans tracking-wider">File Content</span>
+                      </div>
+                      
+                      <!-- 内部为白色，且支持 markdown 解析 -->
+                      <div class="bg-white py-4 px-3 overflow-x-auto min-h-[150px]">
+                        <div v-if="selectedFileName.toLowerCase().endsWith('.md')" class="markdown-body text-sm text-[#374151]" v-html="renderMarkdown(selectedFileContent)"></div>
+                        <pre v-else class="whitespace-pre-wrap font-mono text-xs text-[#374151] leading-relaxed">{{ selectedFileContent }}</pre>
+                      </div>
+                    </div>
+                    
                     <div v-else class="text-xs text-[#9ca3af] py-4">无法读取文件内容</div>
                   </div>
 
@@ -2337,41 +2375,6 @@ watch(activeTabId, async (newId) => {
 
                 <!-- 右侧：属性详情与操作 -->
                 <div class="w-full lg:w-[320px] flex-shrink-0 flex flex-col gap-4">
-                  <!-- 属性详情 -->
-                  <div class="bg-white rounded-xl border border-[#e5e7eb] p-5">
-                    <h3 class="text-sm font-semibold text-[#1f2937] mb-3">技能属性</h3>
-                    <div class="grid grid-cols-[70px_1fr] gap-y-2.5 text-xs">
-                      <span class="text-[#9ca3af]">名称</span>
-                      <span class="text-[#1f2937] font-medium truncate">{{ detailSkill.name }}</span>
-                      <span class="text-[#9ca3af]">显示名</span>
-                      <span class="text-[#1f2937] truncate">{{ detailSkill.display_name || '-' }}</span>
-                      <span class="text-[#9ca3af]">版本</span>
-                      <span class="text-[#1f2937]">v{{ detailSkill.version }}</span>
-                      <span class="text-[#9ca3af]">大小</span>
-                      <span class="text-[#1f2937]">{{ formatBytes(detailSkill.size_bytes) }}</span>
-                      <span class="text-[#9ca3af]">来源</span>
-                      <span class="text-[#1f2937]">{{ sourceLabel(detailSkill) }}</span>
-                      <span class="text-[#9ca3af]">创建时间</span>
-                      <span class="text-[#1f2937]">{{ formatFullDate(detailSkill.created_at) }}</span>
-                      <span class="text-[#9ca3af]">更新时间</span>
-                      <span class="text-[#1f2937]">{{ formatFullDate(detailSkill.updated_at) }}</span>
-                      <template v-if="detailSkill.changelog">
-                        <span class="text-[#9ca3af]">变更</span>
-                        <span class="text-[#1f2937] whitespace-pre-wrap">{{ detailSkill.changelog }}</span>
-                      </template>
-                      <span class="text-[#9ca3af]">标签</span>
-                      <div class="flex flex-wrap gap-1">
-                        <template v-if="parseTags(detailSkill.tags).length > 0">
-                          <span
-                            v-for="tag in parseTags(detailSkill.tags)"
-                            :key="tag"
-                            class="rounded-sm bg-[#f3f4f6] px-1.5 py-0.5 text-[10px] text-[#6b7280]"
-                          >{{ tag }}</span>
-                        </template>
-                        <span v-else class="text-[#9ca3af]">-</span>
-                      </div>
-                    </div>
-                  </div>
 
                   <!-- 操作区 -->
                   <div class="bg-white rounded-xl border border-[#e5e7eb] p-5 flex flex-col gap-3">
@@ -2473,6 +2476,27 @@ watch(activeTabId, async (newId) => {
                           <span class="truncate">{{ node.entry.name }}</span>
                           <span class="ml-auto text-[10px] text-[#9ca3af]">{{ formatBytes(node.entry.size) }}</span>
                         </button>
+                      </template>
+                    </div>
+                  </div>
+
+                  <!-- 技能详情 -->
+                  <div class="bg-white rounded-xl border border-[#e5e7eb] p-5">
+                    <h3 class="text-sm font-semibold text-[#1f2937] mb-3">技能详情</h3>
+                    <div class="grid grid-cols-[70px_1fr] gap-y-2.5 text-xs">
+                      <span class="text-[#9ca3af]">版本</span>
+                      <span class="text-[#1f2937] font-medium">v{{ detailSkill.version }}</span>
+                      <span class="text-[#9ca3af]">大小</span>
+                      <span class="text-[#1f2937]">{{ formatBytes(detailSkill.size_bytes) }}</span>
+                      <span class="text-[#9ca3af]">来源</span>
+                      <span class="text-[#1f2937]">{{ sourceLabel(detailSkill) }}</span>
+                      <span class="text-[#9ca3af]">创建时间</span>
+                      <span class="text-[#1f2937]">{{ formatFullDate(detailSkill.created_at) }}</span>
+                      <span class="text-[#9ca3af]">更新时间</span>
+                      <span class="text-[#1f2937]">{{ formatFullDate(detailSkill.updated_at) }}</span>
+                      <template v-if="detailSkill.changelog">
+                        <span class="text-[#9ca3af]">变更</span>
+                        <span class="text-[#1f2937] whitespace-pre-wrap">{{ detailSkill.changelog }}</span>
                       </template>
                     </div>
                   </div>

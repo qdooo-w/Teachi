@@ -160,6 +160,10 @@ const { chatSidebarOpen, editingSkill, toggleSidebar: toggleChatSidebar, closeEd
 
 const projectLastActive = ref<Record<string, number>>({})
 
+const openCommunity = (): void => {
+  window.open('/community', '_blank')
+}
+
 const LOGOUT_SESSION_STATE_KEYS = ['library-tabs', 'community-tabs']
 const LOGOUT_LOCAL_STATE_KEYS = ['library-sidebar-open']
 const LOGOUT_LOCAL_STATE_PREFIXES = ['preview_windows_', 'chat_cache_']
@@ -725,13 +729,13 @@ watch(
                 : 'bg-[#f3f4f6]/80 text-[#4b5563] hover:bg-[#e5e7eb] hover:text-[#1f2937]'
             ]"
             type="button"
-            title="我的仓库"
+            title="Skill仓库"
             @click="closeSidebarOnMobile(); router.push({ name: 'library' })"
           >
             <svg class="h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-6 4h4" />
             </svg>
-            <span class="text-xs whitespace-nowrap font-hans">我的仓库</span>
+            <span class="text-xs whitespace-nowrap font-mono font-medium tracking-wide">Skill仓库</span>
           </button>
 
           <button
@@ -742,13 +746,13 @@ watch(
                 : 'bg-[#f3f4f6]/80 text-[#4b5563] hover:bg-[#e5e7eb] hover:text-[#1f2937]'
             ]"
             type="button"
-            title="技能社区"
-            @click="closeSidebarOnMobile(); router.push({ name: 'community' })"
+            title="Skill社区"
+            @click="closeSidebarOnMobile(); openCommunity()"
           >
             <svg class="h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
             </svg>
-            <span class="text-xs whitespace-nowrap font-hans">技能社区</span>
+            <span class="text-xs whitespace-nowrap font-mono font-medium tracking-wide">Skill社区</span>
           </button>
 
           <div class="no-scrollbar flex-1 overflow-y-auto">
